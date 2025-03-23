@@ -27,6 +27,10 @@ I'm following the blog post of Philipp Oppermann, then trying to enhance the OS 
 $ cargo run
 ```
 
+## Contributing
+
+If like me you want to learn more about OS development in rust, feel free to contribute to this project. You can open an issue or a pull request. I will be happy to discuss with you about this project and his implementation.
+
 ## License  
 
 This project is licensed under the MIT License - see the [LICENSE-MIT](LICENSE-MIT) file for details.
