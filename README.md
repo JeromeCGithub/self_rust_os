@@ -21,6 +21,13 @@ I'm following the blog post of Philipp Oppermann, then trying to enhance the OS 
 - [QEMU](https://www.qemu.org/)
 - [Rust](https://www.rust-lang.org/)
 
+You will need to install these dependencies :
+
+``` bash
+$ cargo install bootimage
+$ rustup component add llvm-tools-preview
+```
+
 ## How to run
 
 ```bash
