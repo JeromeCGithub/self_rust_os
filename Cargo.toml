@@ -2,6 +2,11 @@
 name = "self_rust_os"
 version = "0.1.0"
 edition = "2021"
+description = "Simple os made in Rust for learning purpose."
+license = "MIT or Apache-2.0"
+repository = "https://github.com/JeromeCGithub/self_rust_os"
+categories = ["operating-systems", "embedded", "rust-os", "os-dev", "bare-metal"]
+keywords = ["OS", "x86_64", "os-development", "no-std", "kernel-development"]
 
 [dependencies]
 bootloader = "0.9"
@@ -27,3 +32,113 @@ test-success-exit-code = 33
 [[bin]]
 name = "self_rust_os"
 path = "src/entry_point.rs"
+
+
+#################################################################################
+# These lints were selected with link (Rust v1.77 and below):
+# https://rust-lang.github.io/rust-clippy/master/index.html#?groups=complexity,correctness,perf,restriction,style,suspicious&levels=allow,none&versions=lte:77
+
+[lints.rust]
+##### Groups
+missing_docs = "warn"
+
+[lints.clippy]
+###### Groups
+# "-1" priority forces "0" (default) priority to override these groups
+# https://doc.rust-lang.org/cargo/reference/manifest.html?highlight=priority#the-lints-section
+pedantic = { level = "warn", priority = -1 }
+nursery  = { level = "warn", priority = -1 }
+cargo    = { level = "warn", priority = -1 }
+
+###### Single
+absolute_paths = "warn"
+## In no_std, we must use the "core" version of all available APIs in Rustc library
+# alloc_instead_of_core = "warn"
+allow_attributes = "warn"
+as_underscore    = "warn"
+create_dir       = "warn"
+dbg_macro        = "warn"
+deref_by_slicing = "warn"
+## We do not want to enforce the write of empty "else" statement for if expressions
+# else_if_without_else = "warn"
+empty_drop                        = "warn"
+empty_enum_variants_with_brackets = "warn"
+empty_structs_with_brackets       = "warn"
+error_impl_error                  = "warn"
+exit                              = "warn"
+expect_used                       = "warn"
+filetype_is_file                  = "warn"
+float_cmp_const                   = "warn"
+if_then_some_else_none            = "warn"
+infinite_loop                     = "warn"
+impl_trait_in_params              = "warn"
+## [`defmt::Format`] macro breaks this lint in its crate
+# indexing_slicing            = "warn"
+integer_division        = "warn"
+let_underscore_must_use = "warn"
+let_underscore_untyped  = "warn"
+lossy_float_literal     = "warn"
+map_err_ignore          = "warn"
+mem_forget              = "warn"
+missing_assert_message  = "warn"
+## We do not necessarily want to always document private items
+# missing_docs_in_private_items = "warn"
+## [`defmt::Format`] macro breaks this lint in its crate
+# missing_asserts_for_indexing = "warn"
+multiple_unsafe_ops_per_block = "warn"
+needless_raw_strings          = "warn"
+panic                         = "warn"
+partial_pub_fields            = "warn"
+pattern_type_mismatch         = "warn"
+## We prefer using private modules and re-exports items into a public module
+# pub_use                = "warn"
+pub_without_shorthand  = "warn"
+ref_patterns           = "warn"
+semicolon_inside_block = "warn"
+shadow_reuse           = "warn"
+shadow_same            = "warn"
+## We prefer separating concerns into multiple functions instead of centralizing behavior
+# single_call_fn = "warn"
+significant_drop_tightening = "warn"
+## In no_std, we must use the "core" version of all available APIs in Rustc library
+# std_instead_of_alloc = "warn"
+string_add                 = "warn"
+str_to_string              = "warn"
+string_slice               = "warn"
+string_to_string           = "warn"
+suspicious_xor_used_as_pow = "warn"
+tests_outside_test_module  = "warn"
+todo                       = "warn"
+try_err                    = "warn"
+undocumented_unsafe_blocks = "warn"
+unimplemented              = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc     = "warn"
+unnecessary_self_imports   = "warn"
+unneeded_field_pattern     = "warn"
+unreachable                = "warn"
+unseparated_literal_suffix = "warn"
+unwrap_in_result           = "warn"
+unwrap_used                = "warn"
+wildcard_enum_match_arm    = "warn"
+
+####### Clippy deny/error level lints, they always have  quick fix that should be preferred
+multiple_inherent_impl          = "deny"
+rc_buffer                       = "deny"
+rc_mutex                        = "deny"
+rest_pat_in_fully_bound_structs = "deny"
+same_name_method                = "deny"
+self_named_module_files         = "deny"
+verbose_file_reads              = "deny"
+
+####### Allowed clippy lints
+clone_on_ref_ptr         = "allow"
+module_name_repetitions  = "allow"
+similar_names            = "allow"
+separated_literal_suffix = "allow"
+future_not_send          = "allow" # (Embassy does not use several threads)
+multiple-crate-versions  = "allow"
+
+####### Clippy hints
+used-underscore-items  = "allow"
+

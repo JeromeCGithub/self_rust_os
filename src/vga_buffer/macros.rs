@@ -23,5 +23,9 @@ macro_rules! println {
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
+    #[expect(
+        clippy::unwrap_used,
+        reason = "We should be able to write inside the vga frame buffer"
+    )]
     WRITER.lock().write_fmt(args).unwrap();
 }

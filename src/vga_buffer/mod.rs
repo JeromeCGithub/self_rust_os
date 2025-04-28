@@ -1,5 +1,5 @@
-mod constants;
 mod buffer;
 mod colors;
-mod writer;
+mod constants;
 pub mod macros;
+mod writer;

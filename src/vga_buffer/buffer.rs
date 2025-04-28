@@ -1,7 +1,9 @@
 use volatile::Volatile;
 
-use super::{colors::ColorCode, constants::{BUFFER_HEIGHT, BUFFER_WIDTH}};
-
+use super::{
+    colors::ColorCode,
+    constants::{BUFFER_HEIGHT, BUFFER_WIDTH},
+};
 
 /// Represent the VGA buffer.
 pub struct Buffer {

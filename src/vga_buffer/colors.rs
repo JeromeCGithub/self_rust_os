@@ -3,7 +3,7 @@
 ////////////////////////
 
 /// Define a color for the text displayed on the screen.
-#[allow(dead_code)]
+#[expect(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Color {
@@ -25,14 +25,14 @@ pub enum Color {
     White = 15,
 }
 
-/// Repesente a ColorCode that is a combination of a foreground and a background color.
+/// Repesente a `ColorCode` that is a combination of a foreground and a background color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct ColorCode(u8);
 
 impl ColorCode {
-    /// Create a new ColorCode with a foreground and a background color.
-    pub fn new(foreground: Color, background: Color) -> ColorCode {
-        ColorCode((background as u8) << 4 | (foreground as u8))
+    /// Create a new `ColorCode` with a foreground and a background color.
+    pub const fn new(foreground: Color, background: Color) -> Self {
+        Self(((background as u8) << 4) | (foreground as u8))
     }
 }
