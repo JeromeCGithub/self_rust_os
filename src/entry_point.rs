@@ -7,6 +7,7 @@
 #![no_main]
 
 use core::panic::PanicInfo;
+mod serial;
 mod vga_buffer;
 
 ////////////////////////
@@ -30,6 +31,7 @@ pub extern "C" fn _start() -> ! {
 ////////////////////////
 
 /// This function is called on panic.
+#[cfg(not(test))]
 #[panic_handler]
 const fn panic(_info: &PanicInfo) -> ! {
     loop {}
@@ -44,7 +46,7 @@ const QEMU_EXIT_PORT: u16 = 0xf4;
 /// Define possible exit code for qemu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
-pub enum QuemuExitCode {
+pub enum QemuExitCode {
     /// Define a successfull exit status
     Success = 0x10,
     /// Define a failure exit status
@@ -54,7 +56,7 @@ pub enum QuemuExitCode {
 /// Exit qemu with a specific exit code.
 /// Connect to an IO Port to exit qemu.
 /// Configuration for the exit port is in the config.toml file.
-pub fn exit_qemu(exit_code: QuemuExitCode) {
+pub fn exit_qemu(exit_code: QemuExitCode) {
     use x86_64::instructions::port::Port;
 
     // SAFETY:
@@ -71,25 +73,49 @@ pub fn exit_qemu(exit_code: QuemuExitCode) {
 
 /// Custom test runner for `no_std` testing.
 #[cfg(test)]
-pub fn test_runner(tests: &[&dyn Fn()]) {
+pub fn test_runner(tests: &[&dyn Testable]) {
     println!("Running {} tests", tests.len());
     for test in tests {
-        test();
+        test.run();
     }
 
-    exit_qemu(QuemuExitCode::Success);
+    exit_qemu(QemuExitCode::Success);
+}
+
+#[cfg(test)]
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    serial_println!("[failed]\n");
+    serial_println!("Error: {}\n", info);
+    exit_qemu(QemuExitCode::Failure);
+    loop {}
+}
+
+/// Trait to generalize tests cases.
+/// Encapsulate the prints
+pub trait Testable {
+    /// Function that encapsulate the test run function.
+    fn run(&self);
+}
+
+impl<T> Testable for T
+where
+    T: Fn(),
+{
+    fn run(&self) {
+        use core::any::type_name;
+
+        serial_print!("{}...\t", type_name::<T>());
+        self();
+        serial_println!("[ok]");
+    }
 }
 
 /// Custom test try.
 /// # Panics
 /// May panic if the test fail
-#[expect(
-    clippy::assertions_on_constants,
-    reason = "This is the main loop of the OS."
-)]
+#[expect(clippy::assertions_on_constants)]
 #[test_case]
 fn trivial_assertion() {
-    print!("trivial assertion... ");
     assert!(true, "Make this test pass.");
-    println!("[ok]");
 }
