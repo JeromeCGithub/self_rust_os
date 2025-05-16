@@ -1,3 +1,6 @@
+//! Macros for printing to the screen.
+//! Provides a safe interface to write on the VGA text buffer with println macro.
+
 use core::fmt;
 
 use crate::vga_buffer::writer::WRITER;

@@ -1,3 +1,6 @@
+//! VGA buffer management module.
+//! It provides a safe interface to write to the VGA text buffer.
+
 mod buffer;
 mod colors;
 mod constants;
@@ -13,6 +16,9 @@ fn test_when_printing_many_lines_should_not_panic() {
     }
 }
 
+/// Test that a line a line will be printed on the screen.
+/// # Panics
+/// Fail if the line is not printed on the screen.
 #[test_case]
 fn test_when_printing_a_line_should_appear_in_vga_buffer() {
     let line = "Some line that fits on a single line";

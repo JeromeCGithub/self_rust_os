@@ -1,8 +1,11 @@
+//! Serial port interface for printing to the host machine.
+
 use lazy_static::lazy_static;
 use spin::Mutex;
 use uart_16550::SerialPort;
 
 lazy_static! {
+    /// Serial port interface for printing to the host machine.
     pub static ref SERIAL1: Mutex<SerialPort> = {
         // SAFETY:
         // Need to map a special defined serial port
