@@ -12,10 +12,13 @@ use self_rust_os::println;
 /// This function is the entry point, since the linker looks for a function
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    println!("toto");
-
     #[cfg(test)]
     test_main();
+
+    println!("RustOS booting...");
+    println!("Initializing...");
+    self_rust_os::init();
+    println!("Initialization complete.");
 
     #[expect(clippy::empty_loop, reason = "This is the main loop of the OS.")]
     loop {}
