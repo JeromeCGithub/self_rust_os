@@ -86,6 +86,7 @@ extern "x86-interrupt" fn double_fault_handler(
 
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
     // Print a dot to indicate a timer interrupt has occurred.
+    #[cfg(debug_assertions)]
     print!(".");
 
     // Notify the PICs that the interrupt has been handled.
