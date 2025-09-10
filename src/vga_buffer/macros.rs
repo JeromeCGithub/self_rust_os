@@ -3,6 +3,8 @@
 
 use core::fmt;
 
+use x86_64::instructions::interrupts;
+
 use crate::vga_buffer::writer::WRITER;
 
 ////////////////////////
@@ -30,5 +32,7 @@ pub fn _print(args: fmt::Arguments) {
         clippy::unwrap_used,
         reason = "We should be able to write inside the vga frame buffer"
     )]
-    WRITER.lock().write_fmt(args).unwrap();
+    interrupts::without_interrupts(|| {
+        WRITER.lock().write_fmt(args).unwrap();
+    });
 }

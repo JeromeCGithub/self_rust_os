@@ -13,7 +13,7 @@
 #![reexport_test_harness_main = "test_main"]
 
 use core::panic::PanicInfo;
-
+use x86_64::instructions;
 pub mod gdt;
 pub mod interrupts;
 pub mod serial;
@@ -25,6 +25,12 @@ pub mod vga_buffer;
 pub fn init() {
     gdt::init();
     interrupts::init_idt();
+
+    // SAFETY:
+    // Initialize the Programmable Interrupt Controller (PIC).
+    unsafe { interrupts::PICS.lock().initialize() }
+    // Enable interrupts.
+    instructions::interrupts::enable();
 }
 
 const QEMU_EXIT_PORT: u16 = 0xf4;
@@ -67,17 +73,20 @@ pub fn exit_qemu(exit_code: QemuExitCode) {
     }
 }
 
+/// Halt the CPU in an infinite loop.
+pub fn hlt_loop() -> ! {
+    loop {
+        instructions::hlt();
+    }
+}
+
 /// Panic handler for external (functional) tests.
 pub fn test_panic_handler(info: &PanicInfo) -> ! {
     serial_println!("[failed]\n");
     serial_println!("Error: {}\n", info);
     exit_qemu(QemuExitCode::Failure);
 
-    #[expect(
-        clippy::empty_loop,
-        reason = "Endless loop if a test panics. It should not be possible as we exit_qemu before."
-    )]
-    loop {}
+    hlt_loop();
 }
 
 /// Custom test runner for `no_std` testing.
@@ -97,7 +106,7 @@ fn panic(info: &PanicInfo) -> ! {
     serial_println!("[failed]\n");
     serial_println!("Error: {}\n", info);
     exit_qemu(QemuExitCode::Failure);
-    loop {}
+    hlt_loop();
 }
 
 /// Trait to generalize tests cases.

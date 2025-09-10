@@ -3,6 +3,7 @@
 use lazy_static::lazy_static;
 use spin::Mutex;
 use uart_16550::SerialPort;
+use x86_64::instructions::interrupts;
 
 lazy_static! {
     /// Serial port interface for printing to the host machine.
@@ -23,10 +24,12 @@ pub fn _print(args: ::core::fmt::Arguments) {
         clippy::expect_used,
         reason = "Serial port should be correctly initialized."
     )]
-    SERIAL1
-        .lock()
-        .write_fmt(args)
-        .expect("Failed to print on serial port.");
+    interrupts::without_interrupts(|| {
+        SERIAL1
+            .lock()
+            .write_fmt(args)
+            .expect("Failed to write on serial port.");
+    });
 }
 
 /// Print to host machine through serial port interface.
