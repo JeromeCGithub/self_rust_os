@@ -36,7 +36,7 @@ $ cargo run
 
 ## Contributing
 
-If like me you want to learn more about OS development in rust, feel free to contribute to this project. You can open an issue or a pull request. I will be happy to discuss with you about this project and his implementation.
+If like me you want to learn more about OS development in rust, feel free to contribute to this project. You can open an issue or a pull request. I will be happy to discuss with you about this project and its implementation.
 
 ## License  
 
