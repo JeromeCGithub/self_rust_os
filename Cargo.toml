@@ -9,13 +9,14 @@ categories = ["operating-systems", "embedded", "rust-os", "os-dev", "bare-metal"
 keywords = ["OS", "x86_64", "os-development", "no-std", "kernel-development"]
 
 [dependencies]
-bootloader = "0.9"
+bootloader = { version = "0.9", features = ["map_physical_memory"] }
 volatile = "0.2.6"
 spin = "0.5.2"
 x86_64 = "0.14.2"
 uart_16550 = "0.2.0"
 pic8259 = "0.10.0"
 pc-keyboard = "0.7.0"
+linked_list_allocator = "0.9.0"
 
 [dependencies.lazy_static]
 version = "1.0"
@@ -39,6 +40,9 @@ path = "src/entry_point.rs"
 [[test]]
 name = "stack_overflow"
 harness = false
+
+[lib]
+doctest = false
 
 #################################################################################
 # These lints were selected with link (Rust v1.77 and below):

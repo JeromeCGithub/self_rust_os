@@ -11,11 +11,19 @@
 #![feature(custom_test_frameworks)]
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
+#![cfg_attr(test, allow(missing_docs))]
+extern crate alloc;
+
+#[cfg(test)]
+use bootloader::{entry_point, BootInfo};
 
 use core::panic::PanicInfo;
 use x86_64::instructions;
+
+pub mod allocator;
 pub mod gdt;
 pub mod interrupts;
+pub mod memory;
 pub mod serial;
 pub mod vga_buffer;
 
@@ -35,18 +43,14 @@ pub fn init() {
 
 const QEMU_EXIT_PORT: u16 = 0xf4;
 
-/// Test entry point for cargo test.
 #[cfg(test)]
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() -> ! {
+entry_point!(test_kernel_main);
+
+#[cfg(test)]
+fn test_kernel_main(_boot_info: &'static BootInfo) -> ! {
     init();
     test_main();
-
-    #[expect(
-        clippy::empty_loop,
-        reason = "Infinite loop after the test main function is done."
-    )]
-    loop {}
+    hlt_loop();
 }
 
 /// Define possible exit code for qemu.
