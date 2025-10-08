@@ -9,13 +9,13 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use self_rust_os::{
     allocator, hlt_loop,
     memory::{self, BootInfoFrameAllocator},
     println,
+    task::{executor::Executor, keyboard, Task},
 };
 use x86_64::VirtAddr;
 
@@ -42,9 +42,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     allocator::init_heap(&mut mapper, &mut frame_allocator)
         .expect("Heap initialization failed. Reboot required.");
 
-    let x = Box::new(41);
-
-    println!("test {x}");
+    let mut executor = Executor::new();
+    executor.spawn(Task::new(keyboard::print_keypresses()));
+    executor.run();
 
     #[cfg(test)]
     test_main();

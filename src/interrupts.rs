@@ -11,7 +11,7 @@ use x86_64::{
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame},
 };
 
-use crate::{gdt, print, println};
+use crate::{gdt, print, println, task::keyboard};
 
 /// The offset for the Programmable Interrupt Controller (PIC) 1 (starting after interrupt table
 /// max offset).
@@ -109,7 +109,6 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
                 HandleControl::Ignore,
             ));
     }
-    let mut keyboard = KEYBOARD.lock();
     let mut port = Port::new(0x60);
 
     // Read the scancode from the keyboard port.
@@ -117,15 +116,8 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     // SAFETY:
     // We are reading from the keyboard port which is known to be safe.
     let scancode: u8 = unsafe { port.read() };
+    keyboard::add_scancode(scancode);
 
-    if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
-        if let Some(key) = keyboard.process_keyevent(key_event) {
-            match key {
-                pc_keyboard::DecodedKey::Unicode(character) => print!("{}", character),
-                pc_keyboard::DecodedKey::RawKey(raw_key) => print!("{:?}", raw_key),
-            }
-        }
-    }
     // Notify the PICs that the interrupt has been handled.
     //
     // SAFETY:
