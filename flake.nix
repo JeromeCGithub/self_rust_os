@@ -1,5 +1,5 @@
 {
-  description = "Dev-only flake for self_rust_os (reads toolchain from rust-toolchain.toml)";
+  description = "flake to use self_rust_os in qemu.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
