@@ -8,12 +8,22 @@
 //! address space with `USER_ACCESSIBLE` page flags, and a separate user-mode
 //! stack is allocated below [`USER_STACK_TOP`](super::USER_STACK_TOP).
 
+use core::sync::atomic::AtomicU64;
+
 use x86_64::{
     structures::paging::{FrameAllocator, Mapper, Page, PageTableFlags, Size4KiB},
     VirtAddr,
 };
 
 use crate::{gdt, println, serial_println, userspace};
+
+/// Saved kernel RSP before entering user mode.
+///
+/// When [`switch_to_user_mode`] executes `iretq`, the original kernel stack is
+/// abandoned. This static stores the kernel RSP so that the `sys_exit` syscall
+/// handler can restore it and effectively "return" from `switch_to_user_mode`
+/// back to [`run`].
+pub(crate) static KERNEL_RSP: AtomicU64 = AtomicU64::new(0);
 
 /// Maps the user binary into memory and switches the CPU to Ring 3 execution.
 ///
@@ -66,6 +76,10 @@ pub fn run(
     // The user stack has been mapped below USER_STACK_TOP.
     // The GDT contains valid Ring 3 code and data segments.
     // The TSS has a valid RSP0 for kernel re-entry on interrupts.
+    //
+    // This call does not return until the user process invokes `sys_exit`,
+    // at which point the syscall handler restores the kernel RSP saved by
+    // `switch_to_user_mode` and execution resumes here.
     unsafe {
         switch_to_user_mode(
             userspace::USER_CODE_START,
@@ -74,6 +88,11 @@ pub fn run(
             u64::from(user_ds.0),
         );
     }
+
+    serial_println!("[kernel] user process exited, returning to kernel_main");
+    println!("[kernel] user process exited, returning to kernel_main");
+
+    Ok(())
 }
 
 /// Maps the flat binary bytes into user-accessible pages starting at
@@ -259,15 +278,19 @@ fn map_user_stack(
 
 /// Performs the actual transition from Ring 0 to Ring 3 via `iretq`.
 ///
-/// The function pushes a synthetic interrupt return frame onto the stack and
-/// executes `iretq`, which pops the frame and switches to user mode.
+/// Before executing `iretq`, this function saves all callee-saved registers
+/// and the kernel RSP into [`KERNEL_RSP`]. When the user process calls
+/// `sys_exit`, the syscall handler restores the saved RSP, pops the
+/// callee-saved registers, and executes `ret`, causing this function to
+/// return normally to its caller.
 ///
 /// # Arguments
 ///
-/// * `entry_point` - The virtual address of the user binary entry point.
-/// * `user_stack` - The top of the user-mode stack (initial RSP in Ring 3).
-/// * `user_cs` - The user code segment selector (with RPL=3).
-/// * `user_ds` - The user data segment selector (with RPL=3).
+/// Uses the System V AMD64 calling convention (naked function):
+/// * `rdi` - The virtual address of the user binary entry point.
+/// * `rsi` - The top of the user-mode stack (initial RSP in Ring 3).
+/// * `rdx` - The user code segment selector (with RPL=3).
+/// * `rcx` - The user data segment selector (with RPL=3).
 ///
 /// # Safety
 ///
@@ -277,37 +300,71 @@ fn map_user_stack(
 /// - `user_cs` and `user_ds` are valid Ring 3 segment selectors in the GDT.
 /// - The TSS `RSP0` is set to a valid kernel stack for interrupt re-entry.
 ///
-/// This function never returns.
-#[inline(never)]
-unsafe fn switch_to_user_mode(entry_point: u64, user_stack: u64, user_cs: u64, user_ds: u64) -> ! {
-    core::arch::asm!(
-        // Load user data segment into all data segment registers.
-        "mov ds, ax",
-        "mov es, ax",
-        "mov fs, ax",
-        "mov gs, ax",
+/// This function blocks until the user process calls `sys_exit`.
+#[naked]
+unsafe extern "C" fn switch_to_user_mode(
+    _entry_point: u64,
+    _user_stack: u64,
+    _user_cs: u64,
+    _user_ds: u64,
+) {
+    // SAFETY:
+    //
+    // This naked function manually manages the entire stack layout.
+    // On entry (System V AMD64 ABI):
+    //   rdi = entry_point
+    //   rsi = user_stack
+    //   rdx = user_cs
+    //   rcx = user_ds
+    //   [rsp] = return address to caller (process::run)
+    //
+    // We save all callee-saved registers so the caller's state is preserved
+    // when sys_exit restores the kernel RSP and executes `ret`.
+    unsafe {
+        core::arch::naked_asm!(
+            // Save callee-saved registers (System V ABI).
+            "push rbx",
+            "push rbp",
+            "push r12",
+            "push r13",
+            "push r14",
+            "push r15",
 
-        // Build an iretq frame on the stack:
-        //   push SS      (user data segment)
-        //   push RSP     (user stack pointer)
-        //   push RFLAGS  (with IF set to enable interrupts)
-        //   push CS      (user code segment)
-        //   push RIP     (user entry point)
-        "push rax",       // SS = user data selector
-        "push rcx",       // RSP = user stack top
-        "pushfq",
-        "pop r11",
-        "or r11, 0x200",  // set IF (Interrupt Flag) so interrupts work in user mode
-        "push r11",       // RFLAGS
-        "push rdx",       // CS = user code selector
-        "push rsi",       // RIP = entry point
+            // Save the kernel RSP so sys_exit can restore it later.
+            // After this point, KERNEL_RSP points to the saved r15 on
+            // the original kernel stack.
+            "mov [{kernel_rsp}], rsp",
 
-        "iretq",
+            // Load user data segment (rcx) into all data segment registers.
+            "mov ax, cx",
+            "mov ds, ax",
+            "mov es, ax",
+            "mov fs, ax",
+            "mov gs, ax",
 
-        in("ax") user_ds,
-        in("rcx") user_stack,
-        in("rdx") user_cs,
-        in("rsi") entry_point,
-        options(noreturn),
-    );
+            // Build an iretq frame on the stack:
+            //   push SS      (user data segment)
+            //   push RSP     (user stack pointer)
+            //   push RFLAGS  (with IF set to enable interrupts)
+            //   push CS      (user code segment)
+            //   push RIP     (user entry point)
+            "push rax",       // SS = user data selector
+            "push rsi",       // RSP = user stack top
+            "pushfq",
+            "pop r11",
+            "or r11, 0x200",  // set IF (Interrupt Flag) so interrupts work in user mode
+            "push r11",       // RFLAGS
+            "push rdx",       // CS = user code selector
+            "push rdi",       // RIP = entry point
+
+            "iretq",
+
+            // Execution never reaches here via iretq.
+            // When sys_exit fires, the syscall handler restores RSP from
+            // KERNEL_RSP, pops r15..rbx, restores kernel segments, and
+            // executes `ret` — which returns to the caller of this function.
+
+            kernel_rsp = sym KERNEL_RSP,
+        );
+    }
 }

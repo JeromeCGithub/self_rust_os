@@ -72,8 +72,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     println!("--- User Space Demo ---");
 
     // Load and execute the embedded user binary.
-    // On success the CPU switches to Ring 3 and the user program runs until
-    // it calls `sys_exit`, at which point execution returns here via hlt_loop.
+    // The CPU switches to Ring 3 and the user program runs until it calls
+    // `sys_exit`, at which point the syscall handler restores the kernel
+    // context and process::run returns here.
     #[expect(clippy::expect_used)]
     userspace::process::run(
         USER_HELLO_BIN,
@@ -83,9 +84,6 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     )
     .expect("Failed to launch user process. Reboot required.");
 
-    // After the user process exits (via sys_exit -> hlt_loop inside the syscall
-    // handler), we fall through here only in theory. In practice, sys_exit
-    // transitions directly to hlt_loop. This code is kept as a fallback.
     println!("--- Returning to kernel async executor ---");
 
     let mut executor = Executor::new();

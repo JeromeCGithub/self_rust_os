@@ -118,14 +118,35 @@ pub(crate) extern "x86-interrupt" fn syscall_entry(_frame: InterruptStackFrame) 
             "pop rax",
             "iretq",
 
-            // Process exit path: clean up the stack and halt.
+            // Process exit path: restore kernel context saved by switch_to_user_mode.
+            //
+            // The current stack (TSS RSP0) is abandoned. We load the kernel RSP
+            // that was saved before iretq, pop the callee-saved registers that
+            // switch_to_user_mode pushed, restore kernel data segments, and ret
+            // back into process::run.
             "2:",
-            "add rsp, 15 * 8",  // drop saved GPRs
-            "add rsp, 5 * 8",   // drop interrupt frame (RIP, CS, RFLAGS, RSP, SS)
-            "jmp {halt}",
+            "mov rsp, [{kernel_rsp}]",
+
+            // Pop callee-saved registers (reverse of switch_to_user_mode pushes).
+            "pop r15",
+            "pop r14",
+            "pop r13",
+            "pop r12",
+            "pop rbp",
+            "pop rbx",
+
+            // Restore kernel data segments (long mode typically uses 0).
+            "xor ax, ax",
+            "mov ds, ax",
+            "mov es, ax",
+            "mov fs, ax",
+            "mov gs, ax",
+
+            // Return from switch_to_user_mode back to process::run.
+            "ret",
 
             dispatch = sym syscall_dispatch,
-            halt = sym crate::hlt_loop,
+            kernel_rsp = sym super::process::KERNEL_RSP,
             sentinel = const PROCESS_EXIT_SENTINEL,
         );
     }
