@@ -1,4 +1,7 @@
 //! Main for little self made rust OS.
+//!
+//! This is the kernel entry point. It initializes all subsystems (GDT, IDT, PICs,
+//! paging, heap) and then loads and executes the embedded user-mode binary.
 
 #![no_std]
 #![no_main]
@@ -12,20 +15,38 @@ extern crate alloc;
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use self_rust_os::{
-    allocator, hlt_loop,
+    allocator,
     memory::{self, BootInfoFrameAllocator},
-    println,
+    println, serial_println,
     task::{executor::Executor, keyboard, Task},
+    userspace,
 };
 use x86_64::VirtAddr;
+
+/// The embedded flat binary of the user-mode hello program.
+///
+/// This binary is built from `user_programs/hello/` and converted to a flat
+/// binary with `llvm-objcopy -O binary`. See `user_programs/hello/build.sh`
+/// for build instructions.
+static USER_HELLO_BIN: &[u8] = include_bytes!("../user_programs/hello/hello.bin");
+
+/// Auto-generated metadata about the hello binary layout (section boundaries).
+///
+/// Provides `READONLY_SIZE`: the page-aligned byte count of the read-only
+/// region (`.text` + `.rodata`) so the kernel can enforce W^X permissions.
+mod hello_meta {
+    include!("../user_programs/hello/hello_meta.rs");
+}
 
 entry_point!(kernel_main);
 
 /// This function is the entry point, since the linker looks for a function
 fn kernel_main(boot_info: &'static BootInfo) -> ! {
+    serial_println!("[kernel] RustOS booting...");
     println!("RustOS booting...");
     println!("Initializing...");
     self_rust_os::init();
+    serial_println!("[kernel] Initialization complete!");
     println!("Initialization complete !");
 
     // Bootloader guarantees that the physical memory is available at the passed offset.
@@ -42,21 +63,41 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     allocator::init_heap(&mut mapper, &mut frame_allocator)
         .expect("Heap initialization failed. Reboot required.");
 
-    let mut executor = Executor::new();
-    executor.spawn(Task::new(keyboard::print_keypresses()));
-    executor.run();
-
+    // In test mode, run the test harness and exit before entering user space
+    // or the async executor (both of which never return).
     #[cfg(test)]
     test_main();
 
-    hlt_loop();
+    serial_println!("[kernel] Heap initialized, starting user space demo...");
+    println!("--- User Space Demo ---");
+
+    // Load and execute the embedded user binary.
+    // On success the CPU switches to Ring 3 and the user program runs until
+    // it calls `sys_exit`, at which point execution returns here via hlt_loop.
+    #[expect(clippy::expect_used)]
+    userspace::process::run(
+        USER_HELLO_BIN,
+        hello_meta::READONLY_SIZE,
+        &mut mapper,
+        &mut frame_allocator,
+    )
+    .expect("Failed to launch user process. Reboot required.");
+
+    // After the user process exits (via sys_exit -> hlt_loop inside the syscall
+    // handler), we fall through here only in theory. In practice, sys_exit
+    // transitions directly to hlt_loop. This code is kept as a fallback.
+    println!("--- Returning to kernel async executor ---");
+
+    let mut executor = Executor::new();
+    executor.spawn(Task::new(keyboard::print_keypresses()));
+    executor.run();
 }
 
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     println!("Kernel {}", info);
-    hlt_loop();
+    self_rust_os::hlt_loop();
 }
 
 #[cfg(test)]

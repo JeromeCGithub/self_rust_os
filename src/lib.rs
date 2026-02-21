@@ -8,6 +8,7 @@
 #![no_std]
 #![cfg_attr(test, no_main)]
 #![feature(abi_x86_interrupt)]
+#![feature(naked_functions)]
 #![feature(custom_test_frameworks)]
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
@@ -26,6 +27,7 @@ pub mod interrupts;
 pub mod memory;
 pub mod serial;
 pub mod task;
+pub mod userspace;
 pub mod vga_buffer;
 
 /// Initialization function for the kernel.
