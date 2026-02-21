@@ -1,6 +1,6 @@
-//! Interrupt handling module
+//! Interrupt handling module.
 //! This module provides the implementation of the Interrupt Descriptor Table (IDT)
-//! and the handlers for the interrupts.
+//! and the handlers for the interrupts, including the syscall handler for user mode.
 
 use lazy_static::lazy_static;
 use pc_keyboard::{layouts, HandleControl, ScancodeSet1};
@@ -11,7 +11,7 @@ use x86_64::{
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame},
 };
 
-use crate::{gdt, print, println, task::keyboard};
+use crate::{gdt, print, println, task::keyboard, userspace};
 
 /// The offset for the Programmable Interrupt Controller (PIC) 1 (starting after interrupt table
 /// max offset).
@@ -63,6 +63,11 @@ lazy_static! {
             .set_handler_fn(timer_interrupt_handler);
         idt[InterruptIndex::Keyboard.as_usize()]
             .set_handler_fn(keyboard_interrupt_handler);
+
+        // Register the syscall handler at interrupt vector 0x80.
+        // DPL is set to Ring 3 so user-mode code can invoke it via `int 0x80`.
+        userspace::syscall::register_syscall_handler(&mut idt);
+
         idt
     };
 }
