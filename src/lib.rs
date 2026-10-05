@@ -25,6 +25,7 @@ pub mod allocator;
 pub mod ata;
 pub mod console;
 pub mod fat32;
+pub mod fs;
 pub mod gdt;
 pub mod gfx;
 pub mod interrupts;

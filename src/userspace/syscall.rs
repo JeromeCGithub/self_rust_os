@@ -31,6 +31,15 @@ pub const SYS_TICKS: u64 = 3;
 /// Syscall number for non-blocking `sys_read`: returns 0 if no input, else bytes read.
 pub const SYS_READ_NB: u64 = 4;
 
+/// Syscall number for `sys_ls`: lists root directory entries.
+pub const SYS_LS: u64 = 5;
+
+/// Syscall number for `sys_read_file`: reads a file by path.
+pub const SYS_READ_FILE: u64 = 6;
+
+/// Syscall number for `sys_write_file`: writes (creates/overwrites) a file by path.
+pub const SYS_WRITE_FILE: u64 = 7;
+
 /// Naked entry point for the `int 0x80` syscall interrupt.
 ///
 /// This function saves all general-purpose registers, extracts the syscall
@@ -194,6 +203,9 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
         SYS_READ => sys_read(arg1, arg2, arg3),
         SYS_TICKS => crate::interrupts::ticks(),
         SYS_READ_NB => sys_read_nb(arg1, arg2, arg3),
+        SYS_LS => sys_ls(arg1, arg2),
+        SYS_READ_FILE => sys_read_file(arg1, arg2, arg3),
+        SYS_WRITE_FILE => sys_write_file(arg1, arg2, arg3),
         _ => {
             serial_println!("[kernel] unknown syscall number: {}", num);
             println!("[kernel] unknown syscall number: {}", num);
@@ -371,6 +383,95 @@ fn sys_read_nb(fd: u64, buf_ptr: u64, len: u64) -> u64 {
     0
 }
 
+/// Validates that a user buffer range is within the user address space.
+fn validate_user_buffer(ptr: u64, len: u64) -> bool {
+    let end = ptr.saturating_add(len);
+    ptr >= userspace::USER_CODE_START && end <= userspace::USER_STACK_TOP && end >= ptr
+}
+
+/// Lists root directory entries into a user buffer.
+///
+/// Each entry is 12 bytes: 11-byte 8.3 name + 1 byte attribute.
+/// Returns the number of entries, or SYSCALL_ERROR.
+fn sys_ls(buf_ptr: u64, max_entries: u64) -> u64 {
+    let max_entries = max_entries as usize;
+    let buf_len = (max_entries as u64).saturating_mul(12);
+    if !validate_user_buffer(buf_ptr, buf_len) {
+        return SYSCALL_ERROR;
+    }
+
+    let result = crate::fs::with_fs(|fs| fs.list_dir());
+    let entries = match result {
+        Some(Ok(entries)) => entries,
+        _ => return SYSCALL_ERROR,
+    };
+
+    let count = entries.len().min(max_entries);
+    // SAFETY: Buffer was validated.
+    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, buf_len as usize) };
+
+    for (i, entry) in entries.iter().take(count).enumerate() {
+        buf[i * 12..i * 12 + 11].copy_from_slice(entry);
+        buf[i * 12 + 11] = 0; // Attribute placeholder.
+    }
+
+    count as u64
+}
+
+/// Reads a file by path into a user buffer.
+///
+/// Path is null-terminated. Returns bytes read, or SYSCALL_ERROR.
+fn sys_read_file(path_ptr: u64, buf_ptr: u64, buf_len: u64) -> u64 {
+    if !validate_user_buffer(path_ptr, 256) || !validate_user_buffer(buf_ptr, buf_len) {
+        return SYSCALL_ERROR;
+    }
+
+    // SAFETY: Buffers validated.
+    let path_buf = unsafe { core::slice::from_raw_parts(path_ptr as *const u8, 256) };
+    let path_len = path_buf.iter().position(|&b| b == 0).unwrap_or(256);
+    let path = match core::str::from_utf8(&path_buf[..path_len]) {
+        Ok(s) => s,
+        Err(_) => return SYSCALL_ERROR,
+    };
+
+    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, buf_len as usize) };
+
+    let result = crate::fs::with_fs(|fs| fs.read_file(path, buf));
+    match result {
+        Some(Ok(n)) => n as u64,
+        _ => SYSCALL_ERROR,
+    }
+}
+
+/// Writes (creates or overwrites) a file by path from a user buffer.
+///
+/// Returns bytes written, or SYSCALL_ERROR.
+fn sys_write_file(path_ptr: u64, buf_ptr: u64, buf_len: u64) -> u64 {
+    if !validate_user_buffer(path_ptr, 256) || !validate_user_buffer(buf_ptr, buf_len) {
+        return SYSCALL_ERROR;
+    }
+
+    // SAFETY: Buffers validated.
+    let path_buf = unsafe { core::slice::from_raw_parts(path_ptr as *const u8, 256) };
+    let path_len = path_buf.iter().position(|&b| b == 0).unwrap_or(256);
+    let path = match core::str::from_utf8(&path_buf[..path_len]) {
+        Ok(s) => s,
+        Err(_) => return SYSCALL_ERROR,
+    };
+
+    let buf = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, buf_len as usize) };
+
+    let result = crate::fs::with_fs(|fs| {
+        // Create if not exists, then write.
+        let _ = fs.create_file(path);
+        fs.write_file(path, buf)
+    });
+    match result {
+        Some(Ok(n)) => n as u64,
+        _ => SYSCALL_ERROR,
+    }
+}
+
 /// Registers the syscall interrupt handler in the IDT.
 ///
 /// The entry at index `0x80` is configured with DPL Ring 3 so that user-mode
@@ -480,5 +581,42 @@ mod tests {
     fn test_sys_read_zero_len_returns_zero() {
         let result = syscall_dispatch(SYS_READ, 0, userspace::USER_CODE_START, 0);
         assert_eq!(result, 0, "sys_read with len=0 should return 0.");
+    }
+
+    #[test_case]
+    fn test_sys_ls_rejects_invalid_buffer() {
+        let result = syscall_dispatch(SYS_LS, userspace::USER_STACK_TOP + 1, 10, 0);
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_ls with out-of-bounds buffer should fail validation.",
+        );
+    }
+
+    #[test_case]
+    fn test_sys_read_file_rejects_invalid_buffer() {
+        let result = syscall_dispatch(
+            SYS_READ_FILE,
+            userspace::USER_CODE_START,
+            userspace::USER_STACK_TOP + 1,
+            10,
+        );
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_read_file with out-of-bounds buffer should fail.",
+        );
+    }
+
+    #[test_case]
+    fn test_sys_write_file_rejects_invalid_buffer() {
+        let result = syscall_dispatch(
+            SYS_WRITE_FILE,
+            userspace::USER_CODE_START,
+            userspace::USER_STACK_TOP + 1,
+            10,
+        );
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_write_file with out-of-bounds buffer should fail.",
+        );
     }
 }

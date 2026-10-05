@@ -19,6 +19,9 @@ const SYS_EXIT: u64 = 0;
 const SYS_WRITE: u64 = 1;
 const SYS_READ: u64 = 2;
 const SYS_TICKS: u64 = 3;
+const SYS_LS: u64 = 5;
+const SYS_READ_FILE: u64 = 6;
+const SYS_WRITE_FILE: u64 = 7;
 
 /// Invokes a syscall via `int 0x80`.
 ///
@@ -42,6 +45,56 @@ unsafe fn syscall(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
 
 fn write(buf: &[u8]) -> u64 {
     unsafe { syscall(SYS_WRITE, buf.as_ptr() as u64, buf.len() as u64, 0) }
+}
+
+fn ls() {
+    let mut buf = [0u8; 12 * 32]; // Max 32 entries.
+    let n = unsafe { syscall(SYS_LS, buf.as_mut_ptr() as u64, 32, 0) };
+    if n == u64::MAX - 1 {
+        write(b"ls failed\n");
+        return;
+    }
+    let count = n as usize;
+    if count == 0 {
+        write(b"(empty)\n");
+        return;
+    }
+    for i in 0..count {
+        let entry = &buf[i * 12..i * 12 + 11];
+        // 8.3 name: trim spaces.
+        let mut name_end = 11;
+        while name_end > 0 && entry[name_end - 1] == b' ' {
+            name_end -= 1;
+        }
+        write(&entry[..name_end]);
+        write(b"\n");
+    }
+}
+
+fn cat(path: &[u8]) {
+    let mut path_buf = [0u8; 256];
+    if path.len() >= 255 {
+        write(b"path too long\n");
+        return;
+    }
+    path_buf[..path.len()].copy_from_slice(path);
+    path_buf[path.len()] = 0;
+
+    let mut buf = [0u8; 1024];
+    let n = unsafe {
+        syscall(
+            SYS_READ_FILE,
+            path_buf.as_ptr() as u64,
+            buf.as_mut_ptr() as u64,
+            buf.len() as u64,
+        )
+    };
+    if n == u64::MAX - 1 {
+        write(b"cat failed\n");
+        return;
+    }
+    write(&buf[..n as usize]);
+    write(b"\n");
 }
 
 fn read(buf: &mut [u8]) -> u64 {
@@ -133,6 +186,8 @@ pub extern "C" fn _start() -> ! {
             write(b"  echo <txt> - print text\n");
             write(b"  clear      - clear screen\n");
             write(b"  time       - show timer ticks\n");
+            write(b"  ls         - list files\n");
+            write(b"  cat <file> - show file contents\n");
             write(b"  exit       - exit terminal\n");
         } else if eq(line, b"exit") {
             write(b"Goodbye!\n");
@@ -146,6 +201,10 @@ pub extern "C" fn _start() -> ! {
             write(b"ticks: ");
             write_u64(ticks());
             write(b"\n");
+        } else if eq(line, b"ls") {
+            ls();
+        } else if line.len() > 4 && eq(&line[..4], b"cat ") {
+            cat(&line[4..]);
         } else if line.len() > 5 && eq(&line[..5], b"echo ") {
             write(&line[5..]);
             write(b"\n");
