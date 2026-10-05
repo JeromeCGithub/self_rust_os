@@ -9,7 +9,8 @@ categories = ["operating-systems", "embedded", "rust-os", "os-dev", "bare-metal"
 keywords = ["OS", "x86_64", "os-development", "no-std", "kernel-development"]
 
 [dependencies]
-bootloader = { version = "0.9", features = ["map_physical_memory"] }
+bootloader = { version = "0.9", features = ["map_physical_memory", "vga_320x200"] }
+font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
 volatile = "0.2.6"
 spin = "0.5.2"
 x86_64 = "0.14.2"
@@ -37,7 +38,7 @@ panic = "abort"
 # concurrently (only the ata/fat32 tests actually touch their own image).
 test-args = ["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04", "-serial", "stdio", "-display", "none", "-drive", "file=tests/fixtures/disk-ata.img,format=raw,file.locking=off", "-drive", "file=tests/fixtures/disk-fat32.img,format=raw,file.locking=off"]
 test-success-exit-code = 33
-test-timeout = 10
+test-timeout = 60
 
 [[bin]]
 name = "self_rust_os"

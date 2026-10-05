@@ -42,15 +42,18 @@ entry_point!(kernel_main);
 
 /// This function is the entry point, since the linker looks for a function
 fn kernel_main(boot_info: &'static BootInfo) -> ! {
+    // Bootloader guarantees that the physical memory is available at the passed offset.
+    let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
+
+    // Initialize graphics + console first so println! works, then GDT/IDT/PICs.
+    self_rust_os::init(phys_mem_offset);
+
     serial_println!("[kernel] RustOS booting...");
     println!("RustOS booting...");
     println!("Initializing...");
-    self_rust_os::init();
     serial_println!("[kernel] Initialization complete!");
     println!("Initialization complete !");
 
-    // Bootloader guarantees that the physical memory is available at the passed offset.
-    let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
     // SAFETY:
     // Physical memory offset is valid as guaranteed by the bootloader.
     let mut mapper = unsafe { memory::init(phys_mem_offset) };

@@ -23,19 +23,25 @@ use x86_64::instructions;
 
 pub mod allocator;
 pub mod ata;
+pub mod console;
 pub mod fat32;
 pub mod gdt;
+pub mod gfx;
 pub mod interrupts;
 pub mod memory;
 pub mod serial;
 pub mod task;
 pub mod userspace;
-pub mod vga_buffer;
 
 /// Initialization function for the kernel.
-/// This function is called at the beginning of the kernel.
-/// It initializes all the necessary components of the kernel.
-pub fn init() {
+///
+/// Initializes the graphics framebuffer + text console first (so `println!`
+/// works), then the GDT, IDT, and PICs. Must be called once at boot with the
+/// physical memory offset from the bootloader.
+pub fn init(phys_mem_offset: x86_64::VirtAddr) {
+    gfx::init(phys_mem_offset);
+    console::init();
+
     gdt::init();
     interrupts::init_idt();
 
@@ -53,10 +59,10 @@ entry_point!(test_kernel_main);
 
 #[cfg(test)]
 fn test_kernel_main(boot_info: &'static BootInfo) -> ! {
-    init();
+    let phys_mem_offset = x86_64::VirtAddr::new(boot_info.physical_memory_offset);
+    init(phys_mem_offset);
 
     // Set up paging and the heap so unit tests can use `alloc`.
-    let phys_mem_offset = x86_64::VirtAddr::new(boot_info.physical_memory_offset);
     // SAFETY: The bootloader guarantees the physical memory offset is valid.
     let mut mapper = unsafe { memory::init(phys_mem_offset) };
     // SAFETY: The bootloader guarantees the memory map is valid.

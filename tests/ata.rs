@@ -24,15 +24,14 @@ use self_rust_os::{
     ata::{AtaDisk, AtaDrive, SECTOR_SIZE},
     println, serial_println,
 };
+use x86_64::VirtAddr;
 
 entry_point!(main);
 
 #[expect(clippy::undocumented_unsafe_blocks)]
 fn main(boot_info: &'static BootInfo) -> ! {
-    self_rust_os::init();
-
-    // The ATA driver only needs port I/O; no heap or paging setup required.
-    let _ = boot_info;
+    let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
+    self_rust_os::init(phys_mem_offset);
 
     test_main();
     #[expect(clippy::empty_loop)]
