@@ -11,7 +11,7 @@ use x86_64::{
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame},
 };
 
-use crate::{gdt, print, println, task::keyboard, userspace};
+use crate::{gdt, println, task::keyboard, userspace};
 
 /// The offset for the Programmable Interrupt Controller (PIC) 1 (starting after interrupt table
 /// max offset).
@@ -89,10 +89,21 @@ extern "x86-interrupt" fn double_fault_handler(
     panic!("EXCEPTION: DOUBLE FAULT\n{:#?}", stack_frame);
 }
 
+use core::sync::atomic::{AtomicU64, Ordering};
+
+/// Monotonic tick counter, incremented by the timer interrupt.
+///
+/// The PIT fires at ~18.2 Hz by default; each tick is ~54.9ms.
+static TICKS: AtomicU64 = AtomicU64::new(0);
+
+/// Returns the number of timer ticks since boot.
+#[must_use]
+pub fn ticks() -> u64 {
+    TICKS.load(Ordering::Relaxed)
+}
+
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    // Print a dot to indicate a timer interrupt has occurred.
-    #[cfg(debug_assertions)]
-    print!(".");
+    TICKS.fetch_add(1, Ordering::Relaxed);
 
     // Notify the PICs that the interrupt has been handled.
     //
@@ -137,8 +148,17 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
 mod tests {
     use x86_64::instructions::interrupts;
 
+    use super::ticks;
+
     #[test_case]
     fn test_breakpoint_exception() {
         interrupts::int3();
+    }
+
+    #[test_case]
+    fn test_ticks_is_monotonic() {
+        let t1 = ticks();
+        let t2 = ticks();
+        assert!(t2 >= t1, "ticks() should be monotonic");
     }
 }

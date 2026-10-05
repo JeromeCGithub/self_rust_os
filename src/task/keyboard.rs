@@ -28,6 +28,13 @@ pub(crate) fn add_scancode(scancode: u8) {
     }
 }
 
+/// Tries to pop a scancode from the queue for synchronous syscall reads.
+///
+/// Returns `None` if the queue is empty or not yet initialized.
+pub fn try_pop_scancode() -> Option<u8> {
+    SCANCODE_QUEUE.try_get().ok()?.pop()
+}
+
 /// Concrete implementation of a stream for keyboard scancode queue.
 pub struct ScancodeStream {
     _private: (),
@@ -85,5 +92,24 @@ pub async fn print_keypresses() {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{try_pop_scancode, ScancodeStream};
+
+    #[test_case]
+    fn test_scancode_queue_push_pop() {
+        // Initialize the queue (only once per test run).
+        let _stream = ScancodeStream::new();
+
+        // Queue should be empty initially (or have leftovers drained).
+        while try_pop_scancode().is_some() {}
+
+        // Push and pop a scancode.
+        super::add_scancode(0x1E); // 'a' key press
+        assert_eq!(try_pop_scancode(), Some(0x1E));
+        assert_eq!(try_pop_scancode(), None);
     }
 }

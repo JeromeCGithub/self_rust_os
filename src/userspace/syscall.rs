@@ -19,8 +19,14 @@ use crate::{print, println, serial_println, userspace};
 /// Syscall number for `sys_exit`: terminates the current user process.
 pub const SYS_EXIT: u64 = 0;
 
-/// Syscall number for `sys_write`: writes a buffer to the VGA text display.
+/// Syscall number for `sys_write`: writes a buffer to the console.
 pub const SYS_WRITE: u64 = 1;
+
+/// Syscall number for `sys_read`: reads keyboard input (stdin) into a buffer.
+pub const SYS_READ: u64 = 2;
+
+/// Syscall number for `sys_ticks`: returns the monotonic timer tick count.
+pub const SYS_TICKS: u64 = 3;
 
 /// Naked entry point for the `int 0x80` syscall interrupt.
 ///
@@ -174,7 +180,7 @@ const SYSCALL_ERROR: u64 = u64::MAX - 1;
 /// # Returns
 ///
 /// The syscall return value, or [`PROCESS_EXIT_SENTINEL`] to signal process exit.
-extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, _arg3: u64) -> u64 {
+extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
     match num {
         SYS_EXIT => {
             serial_println!("[kernel] user process exited with code: {}", arg1);
@@ -182,6 +188,8 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, _arg3: u64) -> u6
             PROCESS_EXIT_SENTINEL
         }
         SYS_WRITE => sys_write(arg1, arg2),
+        SYS_READ => sys_read(arg1, arg2, arg3),
+        SYS_TICKS => crate::interrupts::ticks(),
         _ => {
             serial_println!("[kernel] unknown syscall number: {}", num);
             println!("[kernel] unknown syscall number: {}", num);
@@ -236,6 +244,83 @@ fn sys_write(buf_ptr: u64, len: u64) -> u64 {
             len
         }
     }
+}
+
+/// Reads keyboard input (stdin) into a user buffer.
+///
+/// Blocks until at least one byte is available or `len` bytes are read.
+/// Returns the number of bytes read, or [`SYSCALL_ERROR`] on invalid args.
+///
+/// # Arguments
+///
+/// * `fd` - File descriptor (only 0 = stdin is supported).
+/// * `buf_ptr` - Virtual address of the user buffer.
+/// * `len` - Maximum bytes to read.
+fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
+    // Only stdin (fd 0) is supported.
+    if fd != 0 {
+        return SYSCALL_ERROR;
+    }
+
+    let len = len as usize;
+    if len == 0 {
+        return 0;
+    }
+
+    let buf_end = buf_ptr.saturating_add(len as u64);
+    if buf_ptr < userspace::USER_CODE_START
+        || buf_end > userspace::USER_STACK_TOP
+        || buf_end < buf_ptr
+    {
+        println!("[kernel] sys_read: invalid buffer range");
+        return SYSCALL_ERROR;
+    }
+
+    // SAFETY: The buffer range was validated to be within user-mapped memory.
+    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, len) };
+
+    // Keyboard decoder state. We create a fresh decoder per call; scancode
+    // streams are self-synchronizing for simple key presses.
+    use pc_keyboard::{layouts, HandleControl, Keyboard, ScancodeSet1};
+    let mut keyboard = Keyboard::new(ScancodeSet1::new(), layouts::Us104Key, HandleControl::Ignore);
+
+    let mut read = 0;
+    while read < len {
+        // Try to get a scancode; halt the CPU while waiting to avoid busy-looping.
+        let scancode = loop {
+            if let Some(sc) = crate::task::keyboard::try_pop_scancode() {
+                break sc;
+            }
+            x86_64::instructions::hlt();
+        };
+
+        // Decode the scancode; ignore non-character keys.
+        if let Ok(Some(event)) = keyboard.add_byte(scancode) {
+            if let Some(key) = keyboard.process_keyevent(event) {
+                use pc_keyboard::DecodedKey;
+                match key {
+                    DecodedKey::Unicode(c) => {
+                        // Encode as UTF-8 (ASCII fast path).
+                        let mut tmp = [0u8; 4];
+                        let encoded = c.encode_utf8(&mut tmp);
+                        for &b in encoded.as_bytes() {
+                            if read < len {
+                                buf[read] = b;
+                                read += 1;
+                            }
+                        }
+                        // Return after a newline for line-buffered input.
+                        if c == '\n' {
+                            break;
+                        }
+                    }
+                    DecodedKey::RawKey(_) => {}
+                }
+            }
+        }
+    }
+
+    read as u64
 }
 
 /// Registers the syscall interrupt handler in the IDT.
@@ -310,5 +395,42 @@ mod tests {
             result, SYSCALL_ERROR,
             "sys_write with overflowing length should fail validation.",
         );
+    }
+
+    #[test_case]
+    fn test_sys_ticks_returns_value() {
+        let t1 = syscall_dispatch(SYS_TICKS, 0, 0, 0);
+        let t2 = syscall_dispatch(SYS_TICKS, 0, 0, 0);
+        // Ticks are monotonic (non-decreasing).
+        assert!(
+            t2 >= t1,
+            "sys_ticks should be monotonic: {} >= {}",
+            t2, t1
+        );
+    }
+
+    #[test_case]
+    fn test_sys_read_rejects_invalid_fd() {
+        // Only fd 0 (stdin) is supported.
+        let result = syscall_dispatch(SYS_READ, 1, userspace::USER_CODE_START, 10);
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_read with fd != 0 should fail.",
+        );
+    }
+
+    #[test_case]
+    fn test_sys_read_rejects_invalid_buffer() {
+        let result = syscall_dispatch(SYS_READ, 0, userspace::USER_STACK_TOP + 1, 10);
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_read with out-of-bounds buffer should fail validation.",
+        );
+    }
+
+    #[test_case]
+    fn test_sys_read_zero_len_returns_zero() {
+        let result = syscall_dispatch(SYS_READ, 0, userspace::USER_CODE_START, 0);
+        assert_eq!(result, 0, "sys_read with len=0 should return 0.");
     }
 }
