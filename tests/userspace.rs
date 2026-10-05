@@ -27,7 +27,7 @@ entry_point!(test_kernel_main);
 
 fn test_kernel_main(boot_info: &'static BootInfo) -> ! {
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
-    self_rust_os::init(phys_mem_offset);
+    self_rust_os::init(phys_mem_offset, self_rust_os::gfx::FRAMEBUFFER_PHYS_ADDR, self_rust_os::gfx::WIDTH, self_rust_os::gfx::HEIGHT);
 
     // SAFETY: Physical memory offset is valid as guaranteed by the bootloader.
     let mut mapper = unsafe { memory::init(phys_mem_offset) };

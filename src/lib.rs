@@ -23,12 +23,15 @@ use x86_64::instructions;
 
 pub mod allocator;
 pub mod ata;
+#[cfg(any(feature = "grub", test))]
+pub mod boot;
 pub mod console;
 pub mod fat32;
 pub mod fs;
 pub mod gdt;
 pub mod gfx;
 pub mod interrupts;
+pub mod mbr;
 pub mod memory;
 pub mod mouse;
 pub mod scheduler;
@@ -40,9 +43,10 @@ pub mod userspace;
 ///
 /// Initializes the graphics framebuffer + text console first (so `println!`
 /// works), then the GDT, IDT, and PICs. Must be called once at boot with the
-/// physical memory offset from the bootloader.
-pub fn init(phys_mem_offset: x86_64::VirtAddr) {
-    gfx::init(phys_mem_offset);
+/// physical memory offset from the bootloader, the physical address of the
+/// linear framebuffer, and its dimensions in pixels.
+pub fn init(phys_mem_offset: x86_64::VirtAddr, fb_phys_addr: u64, fb_width: usize, fb_height: usize) {
+    gfx::init(phys_mem_offset, fb_phys_addr, fb_width, fb_height);
     console::init();
 
     gdt::init();
@@ -69,7 +73,12 @@ entry_point!(test_kernel_main);
 #[cfg(test)]
 fn test_kernel_main(boot_info: &'static BootInfo) -> ! {
     let phys_mem_offset = x86_64::VirtAddr::new(boot_info.physical_memory_offset);
-    init(phys_mem_offset);
+    init(
+        phys_mem_offset,
+        gfx::FRAMEBUFFER_PHYS_ADDR,
+        gfx::WIDTH,
+        gfx::HEIGHT,
+    );
 
     // Set up paging and the heap so unit tests can use `alloc`.
     // SAFETY: The bootloader guarantees the physical memory offset is valid.

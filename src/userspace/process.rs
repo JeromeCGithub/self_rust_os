@@ -248,7 +248,9 @@ fn map_user_stack_inner(
     Ok(())
 }
 
-/// Maps the VGA framebuffer into user space at
+/// Maps the framebuffer into user space.
+///
+/// Maps the physical framebuffer (whose address the bootloader reported) to
 /// [`USER_FRAMEBUFFER`](super::USER_FRAMEBUFFER) with USER_ACCESSIBLE |
 /// WRITABLE so user programs can draw directly to the screen.
 pub(crate) fn map_user_framebuffer(
@@ -265,7 +267,7 @@ pub(crate) fn map_user_framebuffer(
 
     let num_pages = userspace::FRAMEBUFFER_SIZE / 4096;
     let fb_virt_start = VirtAddr::new(userspace::USER_FRAMEBUFFER);
-    let fb_phys_start = PhysAddr::new(0xA0000);
+    let fb_phys_start = PhysAddr::new(crate::gfx::framebuffer_phys_addr());
 
     for i in 0..num_pages {
         let page: Page<Size4KiB> = Page::containing_address(fb_virt_start + i * 4096);

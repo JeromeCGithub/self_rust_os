@@ -27,6 +27,13 @@ futures-util = { version = "0.3", default-features = false, features = ["alloc"]
 version = "1.0"
 features = ["spin_no_std"]
 
+[features]
+# Boot via GRUB2 + Multiboot2 from a FAT32 disk image instead of the
+# `bootloader` crate's `cargo bootimage` flow. Build with:
+#   cargo build --features grub
+# then assemble the disk image with `tools/build-grub-disk.sh`.
+grub = []
+
 [profile.dev]
 panic = "abort"
 

@@ -1,8 +1,9 @@
 //! Framebuffer text console.
 //!
-//! Replaces the VGA text-mode buffer: in graphics mode (mode 13h) there is no
-//! text buffer, so characters are rendered as 8x8 glyphs into the framebuffer
-//! by [`gfx`](crate::gfx). The console is 40x25 characters and scrolls.
+//! Replaces the VGA text-mode buffer: in graphics mode there is no text
+//! buffer, so characters are rendered as 8x8 glyphs into the framebuffer by
+//! [`gfx`](crate::gfx). The console scrolls; its size in characters is
+//! derived from the framebuffer dimensions at init time.
 //!
 //! The [`print!`] and [`println!`] macros write here; [`serial_println!`]
 //! still goes to the serial port.
@@ -13,9 +14,7 @@ use conquer_once::spin::OnceCell;
 use spin::Mutex;
 use x86_64::instructions::interrupts;
 
-use crate::gfx::{
-    self, CHAR_HEIGHT, CHAR_WIDTH, COLOR_BLACK, COLOR_LIGHT_GRAY, COLS, ROWS,
-};
+use crate::gfx::{self, CHAR_HEIGHT, CHAR_WIDTH, COLOR_BLACK, COLOR_LIGHT_GRAY, COLS, ROWS};
 
 /// A text console rendered into the graphics framebuffer.
 #[derive(Debug)]
@@ -24,10 +23,13 @@ pub struct Console {
     row: usize,
     fg: u8,
     bg: u8,
+    cols: usize,
+    rows: usize,
 }
 
 impl Console {
-    /// Creates a console with the default colors.
+    /// Creates a console with the default colors and the compile-time
+    /// default dimensions (used by unit tests).
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -35,6 +37,18 @@ impl Console {
             row: 0,
             fg: COLOR_LIGHT_GRAY,
             bg: COLOR_BLACK,
+            cols: COLS,
+            rows: ROWS,
+        }
+    }
+
+    /// Creates a console sized for the currently initialized framebuffer.
+    #[must_use]
+    pub fn for_framebuffer() -> Self {
+        Self {
+            cols: gfx::cols(),
+            rows: gfx::rows(),
+            ..Self::new()
         }
     }
 
@@ -43,7 +57,7 @@ impl Console {
         match byte {
             b'\n' => self.new_line(),
             byte => {
-                if self.col >= COLS {
+                if self.col >= self.cols {
                     self.new_line();
                 }
                 let x = self.col * CHAR_WIDTH;
@@ -56,7 +70,7 @@ impl Console {
 
     fn new_line(&mut self) {
         self.col = 0;
-        if self.row + 1 >= ROWS {
+        if self.row + 1 >= self.rows {
             self.scroll();
         } else {
             self.row += 1;
@@ -66,20 +80,20 @@ impl Console {
     /// Scrolls the console up by one text row.
     fn scroll(&mut self) {
         gfx::with_framebuffer(|fb| {
-            let row_bytes = COLS * CHAR_WIDTH;
+            let row_bytes = self.cols * CHAR_WIDTH;
             let ptr = fb.as_mut_ptr();
-            // Move rows 1..ROWS up by one text row. The regions overlap,
+            // Move rows 1..rows up by one text row. The regions overlap,
             // so `copy` (not `copy_nonoverlapping`) is required.
             //
-            // SAFETY: Both regions are inside the `WIDTH * HEIGHT` byte
-            // framebuffer; `ptr` is the buffer start.
+            // SAFETY: Both regions are inside the framebuffer; `ptr` is the
+            // buffer start.
             unsafe {
                 let src = ptr.add(CHAR_HEIGHT * row_bytes);
-                let bytes = (ROWS - 1) * CHAR_HEIGHT * row_bytes;
+                let bytes = (self.rows - 1) * CHAR_HEIGHT * row_bytes;
                 core::ptr::copy(src, ptr, bytes);
             }
             // Clear the last row.
-            fb.fill_rect(0, (ROWS - 1) * CHAR_HEIGHT, row_bytes, CHAR_HEIGHT, self.bg);
+            fb.fill_rect(0, (self.rows - 1) * CHAR_HEIGHT, row_bytes, CHAR_HEIGHT, self.bg);
         });
     }
 
@@ -121,7 +135,7 @@ static WRITER: OnceCell<Mutex<Console>> = OnceCell::uninit();
 /// Panics if called more than once.
 pub fn init() {
     WRITER
-        .try_init_once(|| Mutex::new(Console::new()))
+        .try_init_once(|| Mutex::new(Console::for_framebuffer()))
         .expect("console::init must be called exactly once");
     WRITER.try_get().expect("console just initialized").lock().clear();
 }
