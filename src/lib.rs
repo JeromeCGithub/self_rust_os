@@ -22,6 +22,7 @@ use core::panic::PanicInfo;
 use x86_64::instructions;
 
 pub mod allocator;
+pub mod ata;
 pub mod gdt;
 pub mod interrupts;
 pub mod memory;

@@ -14,6 +14,7 @@ I'm following the blog post of Philipp Oppermann, then trying to enhance the OS 
 - [x] Memory management
 - [x] Multitasking (async executor)
 - [x] User mode (Ring 3 execution with syscall interface)
+- [x] ATA disk driver (PIO block device)
 - [ ] File system
 
 ## Requirements
@@ -44,6 +45,39 @@ kernel.
 ```bash
 $ cargo test
 ```
+
+The ATA integration test needs a test disk image attached (it is attached
+automatically via `test-args` in `Cargo.toml`):
+
+```bash
+$ ./e2e/ata.sh   # runs the ATA driver E2E in QEMU and prints metrics
+```
+
+Test fixtures live in `tests/fixtures/` (`disk-ata.img` is used by the ATA
+tests as the primary slave; the boot disk stays the primary master and is
+never written by tests).
+
+## Storage
+
+### ATA driver (`src/ata.rs`)
+
+Polling PIO-mode driver for IDE disks (LBA28, up to 128 GiB):
+
+```rust
+use self_rust_os::ata::{AtaDisk, AtaDrive};
+
+let mut disk = AtaDisk::primary(AtaDrive::Slave);
+let info = disk.identify()?.expect("no disk");
+let mut sector = [0u8; 512];
+disk.read_sector(42, &mut sector)?;
+disk.write_sector(42, &sector)?;
+```
+
+- `identify()` returns the model/serial/sector count, or `None` when no
+  device is attached.
+- Every operation polls the status register with a bounded timeout, so a
+  missing device fails with `AtaError::Timeout` instead of hanging the kernel.
+- Disk interrupts are not used; cache flushes are issued after every write.
 
 ## User Space
 
