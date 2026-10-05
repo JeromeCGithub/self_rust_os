@@ -28,6 +28,9 @@ pub const SYS_READ: u64 = 2;
 /// Syscall number for `sys_ticks`: returns the monotonic timer tick count.
 pub const SYS_TICKS: u64 = 3;
 
+/// Syscall number for non-blocking `sys_read`: returns 0 if no input, else bytes read.
+pub const SYS_READ_NB: u64 = 4;
+
 /// Naked entry point for the `int 0x80` syscall interrupt.
 ///
 /// This function saves all general-purpose registers, extracts the syscall
@@ -190,6 +193,7 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
         SYS_WRITE => sys_write(arg1, arg2),
         SYS_READ => sys_read(arg1, arg2, arg3),
         SYS_TICKS => crate::interrupts::ticks(),
+        SYS_READ_NB => sys_read_nb(arg1, arg2, arg3),
         _ => {
             serial_println!("[kernel] unknown syscall number: {}", num);
             println!("[kernel] unknown syscall number: {}", num);
@@ -320,6 +324,51 @@ fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
     }
 
     read as u64
+}
+
+/// Non-blocking read: tries to read one byte without blocking.
+///
+/// Returns 1 and fills the buffer if a key is available, 0 if not.
+/// Used by games for polling input without blocking the game loop.
+fn sys_read_nb(fd: u64, buf_ptr: u64, len: u64) -> u64 {
+    if fd != 0 || len == 0 {
+        return 0;
+    }
+
+    let buf_end = buf_ptr.saturating_add(1);
+    if buf_ptr < userspace::USER_CODE_START
+        || buf_end > userspace::USER_STACK_TOP
+        || buf_end < buf_ptr
+    {
+        return 0;
+    }
+
+    // Try to get a scancode without blocking.
+    let scancode = match crate::task::keyboard::try_pop_scancode() {
+        Some(sc) => sc,
+        None => return 0,
+    };
+
+    use pc_keyboard::{layouts, HandleControl, Keyboard, ScancodeSet1};
+    let mut keyboard = Keyboard::new(ScancodeSet1::new(), layouts::Us104Key, HandleControl::Ignore);
+
+    if let Ok(Some(event)) = keyboard.add_byte(scancode) {
+        if let Some(key) = keyboard.process_keyevent(event) {
+            use pc_keyboard::DecodedKey;
+            if let DecodedKey::Unicode(c) = key {
+                let mut tmp = [0u8; 4];
+                let encoded = c.encode_utf8(&mut tmp);
+                if let Some(&b) = encoded.as_bytes().first() {
+                    // SAFETY: Buffer was validated.
+                    unsafe {
+                        core::ptr::write(buf_ptr as *mut u8, b);
+                    }
+                    return 1;
+                }
+            }
+        }
+    }
+    0
 }
 
 /// Registers the syscall interrupt handler in the IDT.

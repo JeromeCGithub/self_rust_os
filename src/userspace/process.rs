@@ -11,7 +11,7 @@
 use core::sync::atomic::AtomicU64;
 
 use x86_64::{
-    structures::paging::{FrameAllocator, Mapper, Page, PageTableFlags, Size4KiB},
+    structures::paging::{FrameAllocator, Mapper, Page, PageTableFlags, PhysFrame, Size4KiB},
     VirtAddr,
 };
 
@@ -63,6 +63,7 @@ pub fn run(
 
     map_user_binary(binary, readonly_size, mapper, frame_allocator)?;
     map_user_stack(mapper, frame_allocator)?;
+    map_user_framebuffer(mapper, frame_allocator)?;
 
     serial_println!("[kernel] switching to user mode...");
     println!("[kernel] switching to user mode...");
@@ -271,6 +272,51 @@ fn map_user_stack(
         num_pages,
         userspace::USER_STACK_BOTTOM,
         userspace::USER_STACK_TOP,
+    );
+
+    Ok(())
+}
+
+/// Maps the VGA framebuffer into user space.
+///
+/// Maps the 64 KiB physical framebuffer (0xA0000-0xB0000) to
+/// [`USER_FRAMEBUFFER`](super::USER_FRAMEBUFFER) with USER_ACCESSIBLE |
+/// WRITABLE so user programs can draw directly to the screen.
+fn map_user_framebuffer(
+    mapper: &mut impl Mapper<Size4KiB>,
+    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+) -> Result<(), &'static str> {
+    use x86_64::PhysAddr;
+
+    let flags =
+        PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
+
+    // The framebuffer must not be cached for correct display.
+    let flags = flags | PageTableFlags::NO_CACHE;
+
+    let num_pages = userspace::FRAMEBUFFER_SIZE / 4096;
+    let fb_virt_start = VirtAddr::new(userspace::USER_FRAMEBUFFER);
+    let fb_phys_start = PhysAddr::new(0xA0000);
+
+    for i in 0..num_pages {
+        let page: Page<Size4KiB> = Page::containing_address(fb_virt_start + i * 4096);
+        let frame = PhysFrame::containing_address(fb_phys_start + i * 4096);
+
+        // SAFETY:
+        // The framebuffer physical pages are reserved by the hardware.
+        // We map them with NO_CACHE for correct VGA behavior.
+        unsafe {
+            mapper
+                .map_to(page, frame, flags, frame_allocator)
+                .map_err(|_| "failed to map framebuffer page")?
+                .flush();
+        }
+    }
+
+    serial_println!(
+        "[kernel] mapped framebuffer at {:#x} ({} pages)",
+        userspace::USER_FRAMEBUFFER,
+        num_pages,
     );
 
     Ok(())

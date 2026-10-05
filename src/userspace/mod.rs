@@ -23,3 +23,11 @@ pub const USER_STACK_BOTTOM: u64 = USER_STACK_TOP - USER_STACK_SIZE;
 
 /// Interrupt vector number used for syscalls (`int 0x80`).
 pub const SYSCALL_INTERRUPT_INDEX: u8 = 0x80;
+
+/// Virtual address where the VGA framebuffer is mapped for user programs.
+/// The 64 KiB mode 13h framebuffer (physical 0xA0000-0xB0000) is mapped here
+/// with USER_ACCESSIBLE | WRITABLE so user programs can draw directly.
+pub const USER_FRAMEBUFFER: u64 = 0x90_0000;
+
+/// Size of the framebuffer in bytes (320*200 = 64,000, rounded up to 64 KiB).
+pub const FRAMEBUFFER_SIZE: u64 = 64 * 1024;
