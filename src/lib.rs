@@ -23,6 +23,7 @@ use x86_64::instructions;
 
 pub mod allocator;
 pub mod ata;
+pub mod fat32;
 pub mod gdt;
 pub mod interrupts;
 pub mod memory;
@@ -51,8 +52,18 @@ const QEMU_EXIT_PORT: u16 = 0xf4;
 entry_point!(test_kernel_main);
 
 #[cfg(test)]
-fn test_kernel_main(_boot_info: &'static BootInfo) -> ! {
+fn test_kernel_main(boot_info: &'static BootInfo) -> ! {
     init();
+
+    // Set up paging and the heap so unit tests can use `alloc`.
+    let phys_mem_offset = x86_64::VirtAddr::new(boot_info.physical_memory_offset);
+    // SAFETY: The bootloader guarantees the physical memory offset is valid.
+    let mut mapper = unsafe { memory::init(phys_mem_offset) };
+    // SAFETY: The bootloader guarantees the memory map is valid.
+    let mut frame_allocator = unsafe { memory::BootInfoFrameAllocator::new(&boot_info.memory_map) };
+    #[expect(clippy::expect_used, reason = "Heap is required for unit tests using alloc")]
+    allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap init failed");
+
     test_main();
     hlt_loop();
 }

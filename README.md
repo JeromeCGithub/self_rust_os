@@ -15,6 +15,7 @@ I'm following the blog post of Philipp Oppermann, then trying to enhance the OS 
 - [x] Multitasking (async executor)
 - [x] User mode (Ring 3 execution with syscall interface)
 - [x] ATA disk driver (PIO block device)
+- [x] FAT32 filesystem (format, create/read/write/delete files)
 - [ ] File system
 
 ## Requirements
@@ -78,6 +79,29 @@ disk.write_sector(42, &sector)?;
 - Every operation polls the status register with a bounded timeout, so a
   missing device fails with `AtaError::Timeout` instead of hanging the kernel.
 - Disk interrupts are not used; cache flushes are issued after every write.
+
+### FAT32 filesystem (`src/fat32.rs`)
+
+Self-contained FAT32 implementation generic over a `BlockDevice` trait
+(so it is unit-tested against a RAM mock and runs on the real ATA disk):
+
+```rust
+use self_rust_os::ata::{AtaDisk, AtaDrive};
+use self_rust_os::fat32::Fat32;
+
+let disk = AtaDisk::secondary(AtaDrive::Master);
+let mut fs = Fat32::format(disk, 32768, b"RUSTOS     ")?;
+fs.create_file("HELLO.TXT")?;
+fs.write_file("HELLO.TXT", b"Hello, disk!")?;
+
+let mut buf = [0u8; 64];
+let n = fs.read_file("HELLO.TXT", &mut buf)?;
+```
+
+- `format` / `open` (BPB parsing + validation), `create_file`,
+  `write_file`, `read_file`, `delete_file`, `list_dir`
+- 8.3 filenames, root directory, cluster-chain allocation
+- E2E: `./e2e/fat32.sh` (uses `tests/fixtures/disk-fat32.img` as secondary master)
 
 ## User Space
 
