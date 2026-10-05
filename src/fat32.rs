@@ -114,6 +114,8 @@ const FAT_MASK: u32 = 0x0FFF_FFFF;
 
 // Directory entry attribute bits.
 const ATTR_ARCHIVE: u8 = 0x20;
+/// Directory entry attribute: volume label (not a file).
+const ATTR_VOLUME_LABEL: u8 = 0x08;
 
 // Directory entry slot markers.
 const ENTRY_FREE: u8 = 0xE5;
@@ -453,6 +455,10 @@ impl<B: BlockDevice> Fat32<B> {
                     return Ok(names);
                 }
                 if entry[0] == ENTRY_FREE {
+                    continue;
+                }
+                // Skip volume labels: they are not files.
+                if entry[11] & ATTR_VOLUME_LABEL != 0 {
                     continue;
                 }
                 let mut name = [0_u8; 11];

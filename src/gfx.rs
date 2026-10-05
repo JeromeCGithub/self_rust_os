@@ -13,7 +13,7 @@
 
 use conquer_once::spin::OnceCell;
 use font8x8::{UnicodeFonts, BASIC_FONTS};
-use x86_64::instructions::port::PortWriteOnly;
+use x86_64::instructions::port::{PortReadOnly, PortWriteOnly};
 use x86_64::VirtAddr;
 
 /// Width of the mode 13h framebuffer in pixels.
@@ -106,17 +106,6 @@ pub struct FrameBuffer {
 unsafe impl Send for FrameBuffer {}
 
 impl FrameBuffer {
-    /// Creates a framebuffer view over a raw pixel buffer.
-    ///
-    /// # Safety
-    ///
-    /// The caller must guarantee that `ptr` points to at least
-    /// `width * height` writable bytes for the lifetime of the framebuffer.
-    #[must_use]
-    pub const unsafe fn new(ptr: *mut u8, width: usize, height: usize) -> Self {
-        Self { ptr, width, height }
-    }
-
     /// Returns the width in pixels.
     #[must_use]
     pub const fn width(&self) -> usize {
@@ -127,6 +116,17 @@ impl FrameBuffer {
     #[must_use]
     pub const fn height(&self) -> usize {
         self.height
+    }
+
+    /// Creates a framebuffer view over a raw pixel buffer.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that `ptr` points to at least
+    /// `width * height` writable bytes for the lifetime of the framebuffer.
+    #[must_use]
+    pub const unsafe fn new(ptr: *mut u8, width: usize, height: usize) -> Self {
+        Self { ptr, width, height }
     }
 
     /// Returns the raw pixel buffer pointer.
@@ -215,25 +215,63 @@ impl FrameBuffer {
 /// The global hardware framebuffer, initialized by [`init`].
 static FRAMEBUFFER: OnceCell<spin::Mutex<FrameBuffer>> = OnceCell::uninit();
 
+/// Physical address of the framebuffer in use, set by [`init`].
+static FB_PHYS_ADDR: OnceCell<u64> = OnceCell::uninit();
+
 /// Initializes the graphics subsystem: maps the hardware framebuffer,
 /// programs the palette, and clears the screen.
 ///
-/// Must be called once before any drawing or console output, with the
-/// physical memory offset provided by the bootloader.
+/// Must be called once before any drawing or console output. `phys_mem_offset`
+/// must map all physical memory; `fb_phys_addr` is the physical address of
+/// the linear framebuffer configured by the bootloader, with the given
+/// `width`/`height` in pixels (8 bits per pixel).
 ///
 /// # Panics
 ///
 /// Panics if called more than once.
-pub fn init(phys_mem_offset: VirtAddr) {
-    let ptr = (phys_mem_offset.as_u64() + FRAMEBUFFER_PHYS_ADDR) as *mut u8;
-    // SAFETY: With `map_physical_memory`, the bootloader maps all physical
-    // memory at `phys_mem_offset`; the VGA framebuffer at 0xA0000 is 64 KiB.
-    let fb = unsafe { FrameBuffer::new(ptr, WIDTH, HEIGHT) };
+pub fn init(phys_mem_offset: VirtAddr, fb_phys_addr: u64, width: usize, height: usize) {
+    FB_PHYS_ADDR
+        .try_init_once(|| fb_phys_addr)
+        .expect("gfx::init must be called exactly once");
+    let ptr = (phys_mem_offset.as_u64() + fb_phys_addr) as *mut u8;
+    // SAFETY: The caller guarantees that all physical memory is mapped at
+    // `phys_mem_offset`; the framebuffer is a linear 8-bpp MMIO region.
+    let fb = unsafe { FrameBuffer::new(ptr, width, height) };
     FRAMEBUFFER
         .try_init_once(|| spin::Mutex::new(fb))
         .expect("gfx::init must be called exactly once");
     set_palette();
     with_framebuffer(|fb| fb.clear(COLOR_BLACK));
+}
+
+/// Returns the text console width in characters for the current framebuffer.
+///
+/// # Panics
+///
+/// Panics if [`init`] was not called first.
+#[must_use]
+pub fn cols() -> usize {
+    with_framebuffer(|fb| fb.width() / CHAR_WIDTH)
+}
+
+/// Returns the text console height in characters for the current framebuffer.
+///
+/// # Panics
+///
+/// Panics if [`init`] was not called first.
+#[must_use]
+pub fn rows() -> usize {
+    with_framebuffer(|fb| fb.height() / CHAR_HEIGHT)
+}
+
+/// Returns the physical address of the framebuffer passed to [`init`].
+///
+/// # Panics
+///
+/// Panics if [`init`] was not called first.
+#[must_use]
+pub fn framebuffer_phys_addr() -> u64 {
+    *FB_PHYS_ADDR.try_get().expect("gfx::init was not called")
 }
 
 /// Runs `f` with the global framebuffer locked.
@@ -249,7 +287,7 @@ where
     f(&mut lock.lock())
 }
 
-/// Programs the 16-color VGA palette via the DAC ports.
+/// Programs the VGA palette via the DAC ports.
 fn set_palette() {
     // SAFETY: Writing the VGA DAC ports is the defined way to set the palette.
     unsafe {
@@ -261,6 +299,79 @@ fn set_palette() {
             data.write(g);
             data.write(b);
         }
+    }
+}
+
+/// Programs VGA mode 13h (320x200, 256 colors) by writing the VGA registers
+/// directly. Works in long mode without BIOS calls.
+///
+/// This is used by the GRUB boot path: GRUB 2.12 cannot reliably provide a
+/// graphics framebuffer via Multiboot2 (its framebuffer request tag corrupts
+/// the heap), so the kernel sets up its own video mode. The framebuffer is
+/// then at physical address 0xA0000.
+///
+/// # Safety
+///
+/// Must be called in ring 0 with I/O port access. Resets the VGA hardware;
+/// any previous video mode is lost.
+pub unsafe fn set_vga_mode_13h() {
+    // SAFETY: The caller guarantees ring-0 I/O access. These are the
+    // standard VGA mode 13h register values.
+    unsafe {
+        // Miscellaneous Output Register: 25MHz clock, enable RAM, etc.
+        PortWriteOnly::new(0x3C2_u16).write(0x63_u8);
+
+        // Sequencer registers.
+        let mut seq_index = PortWriteOnly::new(0x3C4_u16);
+        let mut seq_data = PortWriteOnly::new(0x3C5_u16);
+        for (i, val) in [0x03_u8, 0x01, 0x0F, 0x00, 0x0E].iter().enumerate() {
+            seq_index.write(i as u8);
+            seq_data.write(*val);
+        }
+
+        // CRTC registers. Unlock first (register 0x11, bit 7 = 0).
+        let mut crtc_index = PortWriteOnly::new(0x3D4_u16);
+        let mut crtc_data = PortWriteOnly::new(0x3D5_u16);
+        crtc_index.write(0x11_u8);
+        crtc_data.write(0x0E_u8);
+        for (i, val) in [
+            0x5F_u8, 0x4F, 0x50, 0x82, 0x54, 0x80, 0xBF, 0x1F, 0x00, 0x41, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x9C, 0x0E, 0x8F, 0x28, 0x40, 0x96, 0xB9, 0xA3, 0xFF,
+        ]
+        .iter()
+        .enumerate()
+        {
+            crtc_index.write(i as u8);
+            crtc_data.write(*val);
+        }
+
+        // Graphics Controller registers.
+        let mut gc_index = PortWriteOnly::new(0x3CE_u16);
+        let mut gc_data = PortWriteOnly::new(0x3CF_u16);
+        for (i, val) in [0x00_u8, 0x00, 0x00, 0x00, 0x00, 0x40, 0x05, 0x0F, 0xFF]
+            .iter()
+            .enumerate()
+        {
+            gc_index.write(i as u8);
+            gc_data.write(*val);
+        }
+
+        // Attribute Controller registers. Reset the flip-flop first by
+        // reading the Input Status register.
+        PortReadOnly::<u8>::new(0x3DA_u16).read();
+        let mut ac = PortWriteOnly::new(0x3C0_u16);
+        for (i, val) in [
+            0x00_u8, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+            0x0E, 0x0F, 0x41, 0x00, 0x0F, 0x00, 0x00,
+        ]
+        .iter()
+        .enumerate()
+        {
+            ac.write(i as u8);
+            ac.write(*val);
+        }
+        // Reset flip-flop and enable display.
+        PortReadOnly::<u8>::new(0x3DA_u16).read();
     }
 }
 
