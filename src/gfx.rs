@@ -370,8 +370,16 @@ pub unsafe fn set_vga_mode_13h() {
             ac.write(i as u8);
             ac.write(*val);
         }
-        // Reset flip-flop and enable display.
+        // Reset the flip-flop, then re-enable video output. Every Attribute
+        // Controller index written above has bit 5 clear (palette-access
+        // mode), which blanks the display; reading 0x3DA only resets the
+        // flip-flop and does not un-blank it. Writing 0x20 to port 0x3C0
+        // selects palette register 0 *and* sets bit 5, turning the display
+        // back on. Without this write, QEMU keeps its "Guest has not
+        // initialized the display" placeholder and `screendump` captures
+        // that instead of the framebuffer.
         PortReadOnly::<u8>::new(0x3DA_u16).read();
+        PortWriteOnly::new(0x3C0_u16).write(0x20_u8);
     }
 }
 
