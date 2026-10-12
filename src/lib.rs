@@ -23,6 +23,7 @@ use x86_64::instructions;
 
 pub mod allocator;
 pub mod ata;
+pub mod fat32;
 pub mod fs;
 pub mod gdt;
 pub mod interrupts;
@@ -53,21 +54,16 @@ entry_point!(test_kernel_main);
 
 #[cfg(test)]
 fn test_kernel_main(boot_info: &'static BootInfo) -> ! {
-    use memory::BootInfoFrameAllocator;
-
     init();
 
-    // The filesystem unit tests need a working heap, so initialize it the
-    // same way the real kernel entry point does.
+    // Set up paging and the heap so unit tests can use `alloc`.
     let phys_mem_offset = x86_64::VirtAddr::new(boot_info.physical_memory_offset);
-    // SAFETY:
-    // Physical memory offset is valid as guaranteed by the bootloader.
+    // SAFETY: The bootloader guarantees the physical memory offset is valid.
     let mut mapper = unsafe { memory::init(phys_mem_offset) };
-    // SAFETY:
-    // The memory map is valid as guaranteed by the bootloader.
-    let mut frame_allocator = unsafe { BootInfoFrameAllocator::new(&boot_info.memory_map) };
-    #[expect(clippy::expect_used)]
-    allocator::init_heap(&mut mapper, &mut frame_allocator).expect("Heap initialization failed.");
+    // SAFETY: The bootloader guarantees the memory map is valid.
+    let mut frame_allocator = unsafe { memory::BootInfoFrameAllocator::new(&boot_info.memory_map) };
+    #[expect(clippy::expect_used, reason = "Heap is required for unit tests using alloc")]
+    allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap init failed");
 
     test_main();
     hlt_loop();
