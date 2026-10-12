@@ -25,17 +25,17 @@ use x86_64::VirtAddr;
 
 /// The embedded flat binary of the user-mode hello program.
 ///
-/// This binary is built from `user_programs/terminal/` and converted to a flat
-/// binary with `llvm-objcopy -O binary`. See `user_programs/terminal/build.sh`
+/// This binary is built from `user_programs/snake/` and converted to a flat
+/// binary with `llvm-objcopy -O binary`. See `user_programs/snake/build.sh`
 /// for build instructions.
-static USER_TERMINAL_BIN: &[u8] = include_bytes!("../user_programs/terminal/terminal.bin");
+static USER_SNAKE_BIN: &[u8] = include_bytes!("../user_programs/snake/snake.bin");
 
 /// Auto-generated metadata about the terminal binary layout (section boundaries).
 ///
 /// Provides `READONLY_SIZE`: the page-aligned byte count of the read-only
 /// region (`.text` + `.rodata`) so the kernel can enforce W^X permissions.
-mod terminal_meta {
-    include!("../user_programs/terminal/terminal_meta.rs");
+mod snake_meta {
+    include!("../user_programs/snake/snake_meta.rs");
 }
 
 entry_point!(kernel_main);
@@ -83,8 +83,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // context and process::run returns here.
     #[expect(clippy::expect_used)]
     userspace::process::run(
-        USER_TERMINAL_BIN,
-        terminal_meta::READONLY_SIZE,
+        USER_SNAKE_BIN,
+        snake_meta::READONLY_SIZE,
         &mut mapper,
         &mut frame_allocator,
     )
