@@ -15,7 +15,7 @@ extern crate alloc;
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use self_rust_os::{
-    allocator,
+    allocator, fs,
     memory::{self, BootInfoFrameAllocator},
     println, serial_println,
     task::{executor::Executor, keyboard, Task},
@@ -66,6 +66,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     allocator::init_heap(&mut mapper, &mut frame_allocator)
         .expect("Heap initialization failed. Reboot required.");
 
+<<<<<<< HEAD
     // Initialize the keyboard scancode queue (needs heap).
     self_rust_os::task::keyboard::init_scancode_queue();
 
@@ -78,6 +79,10 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         self_rust_os::fs::init();
         serial_println!("[kernel] root filesystem mounted");
     }
+=======
+    // The in-memory filesystem needs the heap; seed it before user space runs.
+    fs::init();
+>>>>>>> origin/feature/fat32
 
     // In test mode, run the test harness and exit before entering user space
     // or the async executor (both of which never return).

@@ -14,9 +14,9 @@ I'm following the blog post of Philipp Oppermann, then trying to enhance the OS 
 - [x] Memory management
 - [x] Multitasking (async executor)
 - [x] User mode (Ring 3 execution with syscall interface)
+- [x] In-memory file system (`ramfs`)
 - [x] ATA disk driver (PIO block device)
 - [x] FAT32 filesystem (format, create/read/write/delete files)
-- [ ] File system
 
 ## Requirements
 
@@ -122,10 +122,18 @@ The return value is placed in `rax`.
 
 #### Available syscalls
 
-| Number | Name        | Arguments                          | Description                                |
-|--------|-------------|------------------------------------|--------------------------------------------|
-| `0`    | `sys_exit`  | `rdi` = exit code                  | Terminates the user process.               |
-| `1`    | `sys_write` | `rdi` = buffer ptr, `rsi` = length | Writes a buffer to the VGA text display.   |
+| Number | Name        | Arguments                                            | Description                                |
+|--------|-------------|------------------------------------------------------|--------------------------------------------|
+| `0`    | `sys_exit`  | `rdi` = exit code                                    | Terminates the user process.               |
+| `1`    | `sys_write` | `rdi` = buffer ptr, `rsi` = length                   | Writes a buffer to the VGA text display.   |
+| `2`    | `sys_open`  | `rdi` = path ptr, `rsi` = path len, `rdx` = flags    | Opens (or creates) a file, returns a fd.   |
+| `3`    | `sys_close` | `rdi` = fd                                           | Closes an open file descriptor.            |
+| `4`    | `sys_read`  | `rdi` = fd, `rsi` = buffer ptr, `rdx` = length       | Reads bytes from an open file.             |
+| `5`    | `sys_fwrite`| `rdi` = fd, `rsi` = buffer ptr, `rdx` = length       | Writes bytes to an open file.              |
+
+`sys_open` flags: `O_READ = 0x01`, `O_WRITE = 0x02`, `O_CREATE = 0x04`,
+`O_TRUNC = 0x08`, `O_APPEND = 0x10`. Unknown syscall numbers return
+`u64::MAX - 1`.
 
 ### Building the user program
 
@@ -180,6 +188,19 @@ $ cargo run
    binary with `llvm-objcopy -O binary`.
 5. Embed the binary in the kernel with `include_bytes!` and pass it to
    `userspace::process::run()`.
+
+## File system (`ramfs`)
+
+The kernel embeds a tiny in-memory filesystem. It has a flat namespace
+(every file lives at the root, e.g. `/hello.txt`), supports up to 32 files
+of 64 KiB each, and tracks up to 32 open file descriptors with per-fd
+cursors. Paths must be absolute, use only `[A-Za-z0-9._-]` components, and
+be at most 64 bytes long.
+
+The filesystem is volatile: everything is lost on reboot. At boot the
+kernel seeds it with `/welcome.txt`. The sample user program
+(`user_programs/hello/`) demonstrates the file syscalls end to end: it
+creates `/hello.txt`, writes a greeting, reads it back, and prints it.
 
 ## Contributing
 
