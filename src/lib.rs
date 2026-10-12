@@ -24,6 +24,7 @@ use x86_64::instructions;
 pub mod allocator;
 pub mod ata;
 pub mod fat32;
+pub mod fs;
 pub mod gdt;
 pub mod interrupts;
 pub mod memory;

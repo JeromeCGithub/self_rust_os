@@ -9,18 +9,34 @@
 //! - `rdx`: third argument
 //!
 //! The return value is placed in `rax`.
+//!
+//! Besides process control (`sys_exit`) and console output (`sys_write`),
+//! the interface exposes the in-memory filesystem (see [`crate::fs`]) so
+//! user programs can create, read, and write files.
 
 use core::arch::naked_asm;
 
 use x86_64::{structures::idt::InterruptStackFrame, VirtAddr};
 
-use crate::{print, println, serial_println, userspace};
+use crate::{fs, print, println, serial_println, userspace};
 
 /// Syscall number for `sys_exit`: terminates the current user process.
 pub const SYS_EXIT: u64 = 0;
 
 /// Syscall number for `sys_write`: writes a buffer to the VGA text display.
 pub const SYS_WRITE: u64 = 1;
+
+/// Syscall number for `sys_open`: opens (or creates) a file, returns a file descriptor.
+pub const SYS_OPEN: u64 = 2;
+
+/// Syscall number for `sys_close`: closes an open file descriptor.
+pub const SYS_CLOSE: u64 = 3;
+
+/// Syscall number for `sys_read`: reads bytes from an open file.
+pub const SYS_READ: u64 = 4;
+
+/// Syscall number for `sys_fwrite`: writes bytes to an open file.
+pub const SYS_FWRITE: u64 = 5;
 
 /// Naked entry point for the `int 0x80` syscall interrupt.
 ///
@@ -174,7 +190,7 @@ const SYSCALL_ERROR: u64 = u64::MAX - 1;
 /// # Returns
 ///
 /// The syscall return value, or [`PROCESS_EXIT_SENTINEL`] to signal process exit.
-extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, _arg3: u64) -> u64 {
+extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
     match num {
         SYS_EXIT => {
             serial_println!("[kernel] user process exited with code: {}", arg1);
@@ -182,12 +198,56 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, _arg3: u64) -> u6
             PROCESS_EXIT_SENTINEL
         }
         SYS_WRITE => sys_write(arg1, arg2),
+        SYS_OPEN => sys_open(arg1, arg2, arg3),
+        SYS_CLOSE => sys_close(arg1),
+        SYS_READ => sys_read(arg1, arg2, arg3),
+        SYS_FWRITE => sys_fwrite(arg1, arg2, arg3),
         _ => {
             serial_println!("[kernel] unknown syscall number: {}", num);
             println!("[kernel] unknown syscall number: {}", num);
             SYSCALL_ERROR
         }
     }
+}
+
+/// Checks that the range `[ptr, ptr + len)` lies within user-accessible
+/// memory and returns it as an immutable byte slice.
+///
+/// Returns an error without touching memory when the range is invalid.
+fn user_slice(ptr: u64, len: u64) -> Result<&'static [u8], ()> {
+    let end = ptr.saturating_add(len);
+    if ptr < userspace::USER_CODE_START || end > userspace::USER_STACK_TOP || end < ptr {
+        return Err(());
+    }
+    if len == 0 {
+        return Ok(&[]);
+    }
+    // SAFETY:
+    //
+    // The range was validated to lie within the user address space, which the
+    // kernel has mapped and can access. The caller must not hold the slice
+    // across operations that could unmap user memory.
+    Ok(unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) })
+}
+
+/// Checks that the range `[ptr, ptr + len)` lies within user-accessible
+/// memory and returns it as a mutable byte slice.
+///
+/// Returns an error without touching memory when the range is invalid.
+fn user_slice_mut(ptr: u64, len: u64) -> Result<&'static mut [u8], ()> {
+    let end = ptr.saturating_add(len);
+    if ptr < userspace::USER_CODE_START || end > userspace::USER_STACK_TOP || end < ptr {
+        return Err(());
+    }
+    if len == 0 {
+        return Ok(&mut []);
+    }
+    // SAFETY:
+    //
+    // The range was validated to lie within the user address space, which the
+    // kernel has mapped and can access. The caller must not hold the slice
+    // across operations that could unmap user memory.
+    Ok(unsafe { core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize) })
 }
 
 /// Writes a buffer from user memory to the VGA text display.
@@ -201,22 +261,13 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, _arg3: u64) -> u6
 ///
 /// The number of bytes successfully written, or [`SYSCALL_ERROR`] on failure.
 fn sys_write(buf_ptr: u64, len: u64) -> u64 {
-    let buf_end = buf_ptr.saturating_add(len);
-
-    // Validate that the buffer resides entirely within user-accessible memory.
-    if buf_ptr < userspace::USER_CODE_START
-        || buf_end > userspace::USER_STACK_TOP
-        || buf_end < buf_ptr
-    {
-        println!("[kernel] sys_write: invalid buffer range");
-        return SYSCALL_ERROR;
-    }
-
-    // SAFETY:
-    //
-    // The buffer pointer is within user-mapped memory that the kernel has set up
-    // and can access. We verified the range is within the user address space.
-    let buf = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, len as usize) };
+    let buf = match user_slice(buf_ptr, len) {
+        Ok(buf) => buf,
+        Err(()) => {
+            println!("[kernel] sys_write: invalid buffer range");
+            return SYSCALL_ERROR;
+        }
+    };
 
     match core::str::from_utf8(buf) {
         Ok(s) => {
@@ -234,6 +285,132 @@ fn sys_write(buf_ptr: u64, len: u64) -> u64 {
                 }
             }
             len
+        }
+    }
+}
+
+/// Opens (or creates) a file in the in-memory filesystem.
+///
+/// # Arguments
+///
+/// * `path_ptr` - Virtual address of the path string in user memory.
+/// * `path_len` - Length of the path string in bytes.
+/// * `flags` - Combination of [`fs::O_READ`], [`fs::O_WRITE`], [`fs::O_CREATE`],
+///   [`fs::O_TRUNC`] and [`fs::O_APPEND`].
+///
+/// # Returns
+///
+/// The new file descriptor, or [`SYSCALL_ERROR`] on failure.
+fn sys_open(path_ptr: u64, path_len: u64, flags: u64) -> u64 {
+    let path_bytes = match user_slice(path_ptr, path_len) {
+        Ok(bytes) => bytes,
+        Err(()) => {
+            println!("[kernel] sys_open: invalid path range");
+            return SYSCALL_ERROR;
+        }
+    };
+    let path = match core::str::from_utf8(path_bytes) {
+        Ok(path) => path,
+        Err(_) => {
+            println!("[kernel] sys_open: path is not valid UTF-8");
+            return SYSCALL_ERROR;
+        }
+    };
+    let flags = match u32::try_from(flags) {
+        Ok(flags) => flags,
+        Err(_) => {
+            println!("[kernel] sys_open: flags do not fit in u32");
+            return SYSCALL_ERROR;
+        }
+    };
+    match fs::open(path, flags) {
+        Ok(fd) => u64::from(fd),
+        Err(err) => {
+            serial_println!("[kernel] sys_open failed: {:?}", err);
+            SYSCALL_ERROR
+        }
+    }
+}
+
+/// Closes an open file descriptor.
+///
+/// # Returns
+///
+/// `0` on success, or [`SYSCALL_ERROR`] on failure.
+fn sys_close(fd: u64) -> u64 {
+    let fd = match u32::try_from(fd) {
+        Ok(fd) => fd,
+        Err(_) => return SYSCALL_ERROR,
+    };
+    match fs::close(fd) {
+        Ok(()) => 0,
+        Err(err) => {
+            serial_println!("[kernel] sys_close failed: {:?}", err);
+            SYSCALL_ERROR
+        }
+    }
+}
+
+/// Reads bytes from an open file into a user buffer.
+///
+/// # Arguments
+///
+/// * `fd` - File descriptor returned by [`sys_open`].
+/// * `buf_ptr` - Virtual address of the destination buffer in user memory.
+/// * `len` - Maximum number of bytes to read.
+///
+/// # Returns
+///
+/// The number of bytes read (`0` at end of file), or [`SYSCALL_ERROR`] on failure.
+fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
+    let fd = match u32::try_from(fd) {
+        Ok(fd) => fd,
+        Err(_) => return SYSCALL_ERROR,
+    };
+    let buf = match user_slice_mut(buf_ptr, len) {
+        Ok(buf) => buf,
+        Err(()) => {
+            println!("[kernel] sys_read: invalid buffer range");
+            return SYSCALL_ERROR;
+        }
+    };
+    match fs::read(fd, buf) {
+        Ok(n) => n as u64,
+        Err(err) => {
+            serial_println!("[kernel] sys_read failed: {:?}", err);
+            SYSCALL_ERROR
+        }
+    }
+}
+
+/// Writes bytes from a user buffer to an open file.
+///
+/// # Arguments
+///
+/// * `fd` - File descriptor returned by [`sys_open`].
+/// * `buf_ptr` - Virtual address of the source buffer in user memory.
+/// * `len` - Number of bytes to write.
+///
+/// # Returns
+///
+/// The number of bytes written, or [`SYSCALL_ERROR`] on failure.
+fn sys_fwrite(fd: u64, buf_ptr: u64, len: u64) -> u64 {
+    let fd = match u32::try_from(fd) {
+        Ok(fd) => fd,
+        Err(_) => return SYSCALL_ERROR,
+    };
+    let buf = match user_slice(buf_ptr, len) {
+        Ok(buf) => buf,
+        Err(()) => {
+            println!("[kernel] sys_fwrite: invalid buffer range");
+            return SYSCALL_ERROR;
+        }
+    };
+    match fs::write(fd, buf) {
+        Ok(n) => n as u64,
+        Err(err) => {
+            serial_println!("[kernel] sys_fwrite failed: {:?}", err);
+            SYSCALL_ERROR
         }
     }
 }
@@ -310,5 +487,65 @@ mod tests {
             result, SYSCALL_ERROR,
             "sys_write with overflowing length should fail validation.",
         );
+    }
+
+    #[test_case]
+    fn test_sys_open_rejects_null_path() {
+        let result = syscall_dispatch(SYS_OPEN, 0, 10, u64::from(fs::O_READ));
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_open with address 0 should fail validation.",
+        );
+    }
+
+    #[test_case]
+    fn test_sys_open_rejects_out_of_bounds_path() {
+        let result = syscall_dispatch(
+            SYS_OPEN,
+            userspace::USER_STACK_TOP + 1,
+            10,
+            u64::from(fs::O_READ),
+        );
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_open with out-of-bounds path should fail validation.",
+        );
+    }
+
+    #[test_case]
+    fn test_sys_close_rejects_invalid_fd() {
+        let result = syscall_dispatch(SYS_CLOSE, u64::from(u32::MAX), 0, 0);
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_close with an invalid fd should fail.",
+        );
+    }
+
+    #[test_case]
+    fn test_sys_read_rejects_null_buffer() {
+        let result = syscall_dispatch(SYS_READ, 0, 0, 10);
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_read with address 0 should fail validation.",
+        );
+    }
+
+    #[test_case]
+    fn test_sys_fwrite_rejects_null_buffer() {
+        let result = syscall_dispatch(SYS_FWRITE, 0, 0, 10);
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_fwrite with address 0 should fail validation.",
+        );
+    }
+
+    #[test_case]
+    fn test_syscall_numbers_are_stable() {
+        assert_eq!(SYS_EXIT, 0, "sys_exit must stay syscall 0.");
+        assert_eq!(SYS_WRITE, 1, "sys_write must stay syscall 1.");
+        assert_eq!(SYS_OPEN, 2, "sys_open must be syscall 2.");
+        assert_eq!(SYS_CLOSE, 3, "sys_close must be syscall 3.");
+        assert_eq!(SYS_READ, 4, "sys_read must be syscall 4.");
+        assert_eq!(SYS_FWRITE, 5, "sys_fwrite must be syscall 5.");
     }
 }
