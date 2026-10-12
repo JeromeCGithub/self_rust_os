@@ -67,7 +67,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         .expect("Heap initialization failed. Reboot required.");
 
     // Initialize the keyboard scancode queue (needs heap).
-    // self_rust_os::task::keyboard::init_scancode_queue();
+    self_rust_os::task::keyboard::init_scancode_queue();
 
     // Mount the root filesystem (needs heap for FAT32).
     // If the disk is not formatted, this will panic; the disk fixture
