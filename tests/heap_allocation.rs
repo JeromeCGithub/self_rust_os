@@ -26,8 +26,8 @@ entry_point!(main);
 #[expect(clippy::undocumented_unsafe_blocks)]
 #[expect(clippy::expect_used)]
 fn main(boot_info: &'static BootInfo) -> ! {
-    self_rust_os::init();
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
+    self_rust_os::init(phys_mem_offset);
     let mut mapper = unsafe { memory::init(phys_mem_offset) };
     let mut frame_allocator = unsafe { BootInfoFrameAllocator::new(&boot_info.memory_map) };
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");

@@ -26,9 +26,8 @@ use x86_64::VirtAddr;
 entry_point!(test_kernel_main);
 
 fn test_kernel_main(boot_info: &'static BootInfo) -> ! {
-    self_rust_os::init();
-
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
+    self_rust_os::init(phys_mem_offset);
 
     // SAFETY: Physical memory offset is valid as guaranteed by the bootloader.
     let mut mapper = unsafe { memory::init(phys_mem_offset) };
