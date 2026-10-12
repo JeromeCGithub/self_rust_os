@@ -309,10 +309,9 @@ fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
                                 read += 1;
                             }
                         }
-                        // Return after a newline for line-buffered input.
-                        if c == '\n' {
-                            break;
-                        }
+                        // Return after the first character for interactive input.
+                        // The terminal handles line buffering and echo.
+                        break;
                     }
                     DecodedKey::RawKey(_) => {}
                 }
