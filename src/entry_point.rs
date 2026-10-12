@@ -15,7 +15,7 @@ extern crate alloc;
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use self_rust_os::{
-    allocator,
+    allocator, fs,
     memory::{self, BootInfoFrameAllocator},
     println, serial_println,
     task::{executor::Executor, keyboard, Task},
@@ -62,6 +62,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     #[expect(clippy::expect_used)]
     allocator::init_heap(&mut mapper, &mut frame_allocator)
         .expect("Heap initialization failed. Reboot required.");
+
+    // The in-memory filesystem needs the heap; seed it before user space runs.
+    fs::init();
 
     // In test mode, run the test harness and exit before entering user space
     // or the async executor (both of which never return).
