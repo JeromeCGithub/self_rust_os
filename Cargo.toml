@@ -33,7 +33,9 @@ panic = "abort"
 panic = "abort"
 
 [package.metadata.bootimage]
-test-args = ["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04", "-serial", "stdio", "-display", "none"]
+# `file.locking=off` lets multiple test QEMUs attach the same fixture images
+# concurrently (only the ata/fat32 tests actually touch their own image).
+test-args = ["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04", "-serial", "stdio", "-display", "none", "-drive", "file=tests/fixtures/disk-ata.img,format=raw,file.locking=off", "-drive", "file=tests/fixtures/disk-fat32.img,format=raw,file.locking=off"]
 test-success-exit-code = 33
 test-timeout = 10
 
