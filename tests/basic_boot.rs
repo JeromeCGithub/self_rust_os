@@ -6,13 +6,19 @@
 #![test_runner(self_rust_os::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
+use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
+use x86_64::VirtAddr;
 
 use self_rust_os::println;
 
+entry_point!(main);
+
 /// Entry point for the test.
-#[unsafe(no_mangle)]
-pub extern "C" fn _start() -> ! {
+fn main(boot_info: &'static BootInfo) -> ! {
+    let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
+    self_rust_os::init(phys_mem_offset);
+
     test_main();
 
     #[expect(
