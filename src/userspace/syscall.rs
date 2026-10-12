@@ -23,9 +23,28 @@ use crate::{fs, print, println, serial_println, userspace};
 /// Syscall number for `sys_exit`: terminates the current user process.
 pub const SYS_EXIT: u64 = 0;
 
-/// Syscall number for `sys_write`: writes a buffer to the VGA text display.
+/// Syscall number for `sys_write`: writes a buffer to the console.
 pub const SYS_WRITE: u64 = 1;
 
+<<<<<<< HEAD
+/// Syscall number for `sys_read`: reads keyboard input (stdin) into a buffer.
+pub const SYS_READ: u64 = 2;
+
+/// Syscall number for `sys_ticks`: returns the monotonic timer tick count.
+pub const SYS_TICKS: u64 = 3;
+
+/// Syscall number for non-blocking `sys_read`: returns 0 if no input, else bytes read.
+pub const SYS_READ_NB: u64 = 4;
+
+/// Syscall number for `sys_ls`: lists root directory entries.
+pub const SYS_LS: u64 = 5;
+
+/// Syscall number for `sys_read_file`: reads a file by path.
+pub const SYS_READ_FILE: u64 = 6;
+
+/// Syscall number for `sys_write_file`: writes (creates/overwrites) a file by path.
+pub const SYS_WRITE_FILE: u64 = 7;
+=======
 /// Syscall number for `sys_open`: opens (or creates) a file, returns a file descriptor.
 pub const SYS_OPEN: u64 = 2;
 
@@ -37,6 +56,7 @@ pub const SYS_READ: u64 = 4;
 
 /// Syscall number for `sys_fwrite`: writes bytes to an open file.
 pub const SYS_FWRITE: u64 = 5;
+>>>>>>> origin/feature/fat32
 
 /// Naked entry point for the `int 0x80` syscall interrupt.
 ///
@@ -198,10 +218,19 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
             PROCESS_EXIT_SENTINEL
         }
         SYS_WRITE => sys_write(arg1, arg2),
+<<<<<<< HEAD
+        SYS_READ => sys_read(arg1, arg2, arg3),
+        SYS_TICKS => crate::interrupts::ticks(),
+        SYS_READ_NB => sys_read_nb(arg1, arg2, arg3),
+        SYS_LS => sys_ls(arg1, arg2),
+        SYS_READ_FILE => sys_read_file(arg1, arg2, arg3),
+        SYS_WRITE_FILE => sys_write_file(arg1, arg2, arg3),
+=======
         SYS_OPEN => sys_open(arg1, arg2, arg3),
         SYS_CLOSE => sys_close(arg1),
         SYS_READ => sys_read(arg1, arg2, arg3),
         SYS_FWRITE => sys_fwrite(arg1, arg2, arg3),
+>>>>>>> origin/feature/fat32
         _ => {
             serial_println!("[kernel] unknown syscall number: {}", num);
             println!("[kernel] unknown syscall number: {}", num);
@@ -289,6 +318,215 @@ fn sys_write(buf_ptr: u64, len: u64) -> u64 {
     }
 }
 
+<<<<<<< HEAD
+/// Reads keyboard input (stdin) into a user buffer.
+///
+/// Blocks until at least one byte is available or `len` bytes are read.
+/// Returns the number of bytes read, or [`SYSCALL_ERROR`] on invalid args.
+///
+/// # Arguments
+///
+/// * `fd` - File descriptor (only 0 = stdin is supported).
+/// * `buf_ptr` - Virtual address of the user buffer.
+/// * `len` - Maximum bytes to read.
+fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
+    // Only stdin (fd 0) is supported.
+    if fd != 0 {
+        return SYSCALL_ERROR;
+    }
+
+    let len = len as usize;
+    if len == 0 {
+        return 0;
+    }
+
+    let buf_end = buf_ptr.saturating_add(len as u64);
+    if buf_ptr < userspace::USER_CODE_START
+        || buf_end > userspace::USER_STACK_TOP
+        || buf_end < buf_ptr
+    {
+        println!("[kernel] sys_read: invalid buffer range");
+        return SYSCALL_ERROR;
+    }
+
+    // SAFETY: The buffer range was validated to be within user-mapped memory.
+    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, len) };
+
+    // Keyboard decoder state. We create a fresh decoder per call; scancode
+    // streams are self-synchronizing for simple key presses.
+    use pc_keyboard::{layouts, HandleControl, Keyboard, ScancodeSet1};
+    let mut keyboard = Keyboard::new(ScancodeSet1::new(), layouts::Us104Key, HandleControl::Ignore);
+
+    let mut read = 0;
+    while read < len {
+        // Try to get a scancode; halt the CPU while waiting to avoid busy-looping.
+        let scancode = loop {
+            if let Some(sc) = crate::task::keyboard::try_pop_scancode() {
+                break sc;
+            }
+            x86_64::instructions::hlt();
+        };
+
+        // Decode the scancode; ignore non-character keys.
+        if let Ok(Some(event)) = keyboard.add_byte(scancode) {
+            if let Some(key) = keyboard.process_keyevent(event) {
+                use pc_keyboard::DecodedKey;
+                match key {
+                    DecodedKey::Unicode(c) => {
+                        // Encode as UTF-8 (ASCII fast path).
+                        let mut tmp = [0u8; 4];
+                        let encoded = c.encode_utf8(&mut tmp);
+                        for &b in encoded.as_bytes() {
+                            if read < len {
+                                buf[read] = b;
+                                read += 1;
+                            }
+                        }
+                        // Return after the first character for interactive input.
+                        // The terminal handles line buffering and echo.
+                        break;
+                    }
+                    DecodedKey::RawKey(_) => {}
+                }
+            }
+        }
+    }
+
+    read as u64
+}
+
+/// Non-blocking read: tries to read one byte without blocking.
+///
+/// Returns 1 and fills the buffer if a key is available, 0 if not.
+/// Used by games for polling input without blocking the game loop.
+fn sys_read_nb(fd: u64, buf_ptr: u64, len: u64) -> u64 {
+    if fd != 0 || len == 0 {
+        return 0;
+    }
+
+    let buf_end = buf_ptr.saturating_add(1);
+    if buf_ptr < userspace::USER_CODE_START
+        || buf_end > userspace::USER_STACK_TOP
+        || buf_end < buf_ptr
+    {
+        return 0;
+    }
+
+    // Try to get a scancode without blocking.
+    let scancode = match crate::task::keyboard::try_pop_scancode() {
+        Some(sc) => sc,
+        None => return 0,
+    };
+
+    use pc_keyboard::{layouts, HandleControl, Keyboard, ScancodeSet1};
+    let mut keyboard = Keyboard::new(ScancodeSet1::new(), layouts::Us104Key, HandleControl::Ignore);
+
+    if let Ok(Some(event)) = keyboard.add_byte(scancode) {
+        if let Some(key) = keyboard.process_keyevent(event) {
+            use pc_keyboard::DecodedKey;
+            if let DecodedKey::Unicode(c) = key {
+                let mut tmp = [0u8; 4];
+                let encoded = c.encode_utf8(&mut tmp);
+                if let Some(&b) = encoded.as_bytes().first() {
+                    // SAFETY: Buffer was validated.
+                    unsafe {
+                        core::ptr::write(buf_ptr as *mut u8, b);
+                    }
+                    return 1;
+                }
+            }
+        }
+    }
+    0
+}
+
+/// Validates that a user buffer range is within the user address space.
+fn validate_user_buffer(ptr: u64, len: u64) -> bool {
+    let end = ptr.saturating_add(len);
+    ptr >= userspace::USER_CODE_START && end <= userspace::USER_STACK_TOP && end >= ptr
+}
+
+/// Lists root directory entries into a user buffer.
+///
+/// Each entry is 12 bytes: 11-byte 8.3 name + 1 byte attribute.
+/// Returns the number of entries, or SYSCALL_ERROR.
+fn sys_ls(buf_ptr: u64, max_entries: u64) -> u64 {
+    let max_entries = max_entries as usize;
+    let buf_len = (max_entries as u64).saturating_mul(12);
+    if !validate_user_buffer(buf_ptr, buf_len) {
+        return SYSCALL_ERROR;
+    }
+
+    let result = crate::fs::with_fs(|fs| fs.list_dir());
+    let entries = match result {
+        Some(Ok(entries)) => entries,
+        _ => return SYSCALL_ERROR,
+    };
+
+    let count = entries.len().min(max_entries);
+    // SAFETY: Buffer was validated.
+    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, buf_len as usize) };
+
+    for (i, entry) in entries.iter().take(count).enumerate() {
+        buf[i * 12..i * 12 + 11].copy_from_slice(entry);
+        buf[i * 12 + 11] = 0; // Attribute placeholder.
+    }
+
+    count as u64
+}
+
+/// Reads a file by path into a user buffer.
+///
+/// Path is null-terminated. Returns bytes read, or SYSCALL_ERROR.
+fn sys_read_file(path_ptr: u64, buf_ptr: u64, buf_len: u64) -> u64 {
+    if !validate_user_buffer(path_ptr, 256) || !validate_user_buffer(buf_ptr, buf_len) {
+        return SYSCALL_ERROR;
+    }
+
+    // SAFETY: Buffers validated.
+    let path_buf = unsafe { core::slice::from_raw_parts(path_ptr as *const u8, 256) };
+    let path_len = path_buf.iter().position(|&b| b == 0).unwrap_or(256);
+    let path = match core::str::from_utf8(&path_buf[..path_len]) {
+        Ok(s) => s,
+        Err(_) => return SYSCALL_ERROR,
+    };
+
+    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, buf_len as usize) };
+
+    let result = crate::fs::with_fs(|fs| fs.read_file(path, buf));
+    match result {
+        Some(Ok(n)) => n as u64,
+        _ => SYSCALL_ERROR,
+    }
+}
+
+/// Writes (creates or overwrites) a file by path from a user buffer.
+///
+/// Returns bytes written, or SYSCALL_ERROR.
+fn sys_write_file(path_ptr: u64, buf_ptr: u64, buf_len: u64) -> u64 {
+    if !validate_user_buffer(path_ptr, 256) || !validate_user_buffer(buf_ptr, buf_len) {
+        return SYSCALL_ERROR;
+    }
+
+    // SAFETY: Buffers validated.
+    let path_buf = unsafe { core::slice::from_raw_parts(path_ptr as *const u8, 256) };
+    let path_len = path_buf.iter().position(|&b| b == 0).unwrap_or(256);
+    let path = match core::str::from_utf8(&path_buf[..path_len]) {
+        Ok(s) => s,
+        Err(_) => return SYSCALL_ERROR,
+    };
+
+    let buf = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, buf_len as usize) };
+
+    let result = crate::fs::with_fs(|fs| {
+        // Create if not exists, then write.
+        let _ = fs.create_file(path);
+        fs.write_file(path, buf)
+    });
+    match result {
+        Some(Ok(n)) => n as u64,
+        _ => SYSCALL_ERROR,
+=======
 /// Opens (or creates) a file in the in-memory filesystem.
 ///
 /// # Arguments
@@ -412,6 +650,7 @@ fn sys_fwrite(fd: u64, buf_ptr: u64, len: u64) -> u64 {
             serial_println!("[kernel] sys_fwrite failed: {:?}", err);
             SYSCALL_ERROR
         }
+>>>>>>> origin/feature/fat32
     }
 }
 
@@ -490,15 +729,72 @@ mod tests {
     }
 
     #[test_case]
+<<<<<<< HEAD
+    fn test_sys_ticks_returns_value() {
+        let t1 = syscall_dispatch(SYS_TICKS, 0, 0, 0);
+        let t2 = syscall_dispatch(SYS_TICKS, 0, 0, 0);
+        // Ticks are monotonic (non-decreasing).
+        assert!(
+            t2 >= t1,
+            "sys_ticks should be monotonic: {} >= {}",
+            t2, t1
+        );
+    }
+
+    #[test_case]
+    fn test_sys_read_rejects_invalid_fd() {
+        // Only fd 0 (stdin) is supported.
+        let result = syscall_dispatch(SYS_READ, 1, userspace::USER_CODE_START, 10);
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_read with fd != 0 should fail.",
+=======
     fn test_sys_open_rejects_null_path() {
         let result = syscall_dispatch(SYS_OPEN, 0, 10, u64::from(fs::O_READ));
         assert_eq!(
             result, SYSCALL_ERROR,
             "sys_open with address 0 should fail validation.",
+>>>>>>> origin/feature/fat32
         );
     }
 
     #[test_case]
+<<<<<<< HEAD
+    fn test_sys_read_rejects_invalid_buffer() {
+        let result = syscall_dispatch(SYS_READ, 0, userspace::USER_STACK_TOP + 1, 10);
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_read with out-of-bounds buffer should fail validation.",
+        );
+    }
+
+    #[test_case]
+    fn test_sys_read_zero_len_returns_zero() {
+        let result = syscall_dispatch(SYS_READ, 0, userspace::USER_CODE_START, 0);
+        assert_eq!(result, 0, "sys_read with len=0 should return 0.");
+    }
+
+    #[test_case]
+    fn test_sys_ls_rejects_invalid_buffer() {
+        let result = syscall_dispatch(SYS_LS, userspace::USER_STACK_TOP + 1, 10, 0);
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_ls with out-of-bounds buffer should fail validation.",
+        );
+    }
+
+    #[test_case]
+    fn test_sys_read_file_rejects_invalid_buffer() {
+        let result = syscall_dispatch(
+            SYS_READ_FILE,
+            userspace::USER_CODE_START,
+            userspace::USER_STACK_TOP + 1,
+            10,
+        );
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_read_file with out-of-bounds buffer should fail.",
+=======
     fn test_sys_open_rejects_out_of_bounds_path() {
         let result = syscall_dispatch(
             SYS_OPEN,
@@ -509,10 +805,25 @@ mod tests {
         assert_eq!(
             result, SYSCALL_ERROR,
             "sys_open with out-of-bounds path should fail validation.",
+>>>>>>> origin/feature/fat32
         );
     }
 
     #[test_case]
+<<<<<<< HEAD
+    fn test_sys_write_file_rejects_invalid_buffer() {
+        let result = syscall_dispatch(
+            SYS_WRITE_FILE,
+            userspace::USER_CODE_START,
+            userspace::USER_STACK_TOP + 1,
+            10,
+        );
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_write_file with out-of-bounds buffer should fail.",
+        );
+    }
+=======
     fn test_sys_close_rejects_invalid_fd() {
         let result = syscall_dispatch(SYS_CLOSE, u64::from(u32::MAX), 0, 0);
         assert_eq!(
@@ -548,4 +859,5 @@ mod tests {
         assert_eq!(SYS_READ, 4, "sys_read must be syscall 4.");
         assert_eq!(SYS_FWRITE, 5, "sys_fwrite must be syscall 5.");
     }
+>>>>>>> origin/feature/fat32
 }

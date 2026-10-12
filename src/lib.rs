@@ -48,7 +48,12 @@ pub fn init(phys_mem_offset: x86_64::VirtAddr) {
 
     // SAFETY:
     // Initialize the Programmable Interrupt Controller (PIC).
-    unsafe { interrupts::PICS.lock().initialize() }
+    unsafe {
+        interrupts::PICS.lock().initialize();
+        // Unmask timer (IRQ0) and keyboard (IRQ1); keep others masked.
+        // The firmware may have IRQ1 masked, which would break keyboard input.
+        interrupts::PICS.lock().write_masks(0xFC, 0xFF);
+    }
     // Enable interrupts.
     instructions::interrupts::enable();
 }
@@ -70,6 +75,9 @@ fn test_kernel_main(boot_info: &'static BootInfo) -> ! {
     let mut frame_allocator = unsafe { memory::BootInfoFrameAllocator::new(&boot_info.memory_map) };
     #[expect(clippy::expect_used, reason = "Heap is required for unit tests using alloc")]
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap init failed");
+
+    // Initialize the keyboard scancode queue (needs heap).
+    task::keyboard::init_scancode_queue();
 
     test_main();
     hlt_loop();

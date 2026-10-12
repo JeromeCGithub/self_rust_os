@@ -28,6 +28,68 @@ pub(crate) fn add_scancode(scancode: u8) {
     }
 }
 
+/// Initializes the scancode queue. Called once during kernel init.
+/// Safe to call multiple times (subsequent calls are no-ops).
+pub fn init_scancode_queue() {
+    let _ = SCANCODE_QUEUE.try_init_once(|| ArrayQueue::new(100));
+
+    // Enable the PS/2 keyboard IRQ via the 8042 controller command byte.
+    // Bit 0 enables IRQ1 for the keyboard.
+    // Use bounded waits to avoid hanging if the controller is not present.
+    unsafe {
+        use x86_64::instructions::port::Port;
+        let mut cmd: Port<u8> = Port::new(0x64);
+        let mut data: Port<u8> = Port::new(0x60);
+
+        // Helper: wait for input buffer empty with timeout.
+        let wait_input_empty = |cmd: &mut Port<u8>| -> bool {
+            for _ in 0..10000 {
+                if cmd.read() & 0x02 == 0 {
+                    return true;
+                }
+            }
+            false
+        };
+        // Helper: wait for output buffer full with timeout.
+        let wait_output_full = |cmd: &mut Port<u8>| -> bool {
+            for _ in 0..10000 {
+                if cmd.read() & 0x01 != 0 {
+                    return true;
+                }
+            }
+            false
+        };
+
+        if !wait_input_empty(&mut cmd) {
+            return;
+        }
+        cmd.write(0x20); // Read command byte.
+        if !wait_output_full(&mut cmd) {
+            return;
+        }
+        let mut cmd_byte = data.read();
+
+        // Set bit 0 (keyboard IRQ enable).
+        cmd_byte |= 0x01;
+
+        if !wait_input_empty(&mut cmd) {
+            return;
+        }
+        cmd.write(0x60); // Write command byte.
+        if !wait_input_empty(&mut cmd) {
+            return;
+        }
+        data.write(cmd_byte);
+    }
+}
+
+/// Tries to pop a scancode from the queue for synchronous syscall reads.
+///
+/// Returns `None` if the queue is empty or not yet initialized.
+pub fn try_pop_scancode() -> Option<u8> {
+    SCANCODE_QUEUE.try_get().ok()?.pop()
+}
+
 /// Concrete implementation of a stream for keyboard scancode queue.
 pub struct ScancodeStream {
     _private: (),
@@ -36,9 +98,7 @@ pub struct ScancodeStream {
 impl ScancodeStream {
     /// Create a new scan code stream.
     pub fn new() -> Self {
-        SCANCODE_QUEUE
-            .try_init_once(|| ArrayQueue::new(100))
-            .expect("ScancodeStream::new should only be called once");
+        init_scancode_queue();
         ScancodeStream { _private: () }
     }
 }
@@ -85,5 +145,24 @@ pub async fn print_keypresses() {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{try_pop_scancode, ScancodeStream};
+
+    #[test_case]
+    fn test_scancode_queue_push_pop() {
+        // Initialize the queue (only once per test run).
+        let _stream = ScancodeStream::new();
+
+        // Queue should be empty initially (or have leftovers drained).
+        while try_pop_scancode().is_some() {}
+
+        // Push and pop a scancode.
+        super::add_scancode(0x1E); // 'a' key press
+        assert_eq!(try_pop_scancode(), Some(0x1E));
+        assert_eq!(try_pop_scancode(), None);
     }
 }
