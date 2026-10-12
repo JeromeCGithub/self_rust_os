@@ -340,6 +340,11 @@ fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
     );
 
     let mut read = 0;
+    // The syscall handler is an interrupt gate, so IF is clear here. hlt()
+    // needs interrupts enabled to wake on the keyboard IRQ, so enable them
+    // for the wait loop. This doesn't leak: iretq restores the userspace
+    // RFLAGS (IF=1) when the syscall returns.
+    x86_64::instructions::interrupts::enable();
     while read < len {
         // Try to get a scancode; halt the CPU while waiting to avoid busy-looping.
         let scancode = loop {
