@@ -78,9 +78,6 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         self_rust_os::fs::init();
         serial_println!("[kernel] root filesystem mounted");
     }
-    // The in-memory filesystem needs the heap; seed it before user space runs.
-    fs::init();
-
     // In test mode, run the test harness and exit before entering user space
     // or the async executor (both of which never return).
     #[cfg(test)]
