@@ -26,7 +26,6 @@ pub const SYS_EXIT: u64 = 0;
 /// Syscall number for `sys_write`: writes a buffer to the console.
 pub const SYS_WRITE: u64 = 1;
 
-<<<<<<< HEAD
 /// Syscall number for `sys_read`: reads keyboard input (stdin) into a buffer.
 pub const SYS_READ: u64 = 2;
 
@@ -44,19 +43,6 @@ pub const SYS_READ_FILE: u64 = 6;
 
 /// Syscall number for `sys_write_file`: writes (creates/overwrites) a file by path.
 pub const SYS_WRITE_FILE: u64 = 7;
-=======
-/// Syscall number for `sys_open`: opens (or creates) a file, returns a file descriptor.
-pub const SYS_OPEN: u64 = 2;
-
-/// Syscall number for `sys_close`: closes an open file descriptor.
-pub const SYS_CLOSE: u64 = 3;
-
-/// Syscall number for `sys_read`: reads bytes from an open file.
-pub const SYS_READ: u64 = 4;
-
-/// Syscall number for `sys_fwrite`: writes bytes to an open file.
-pub const SYS_FWRITE: u64 = 5;
->>>>>>> origin/feature/fat32
 
 /// Naked entry point for the `int 0x80` syscall interrupt.
 ///
@@ -218,19 +204,12 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
             PROCESS_EXIT_SENTINEL
         }
         SYS_WRITE => sys_write(arg1, arg2),
-<<<<<<< HEAD
         SYS_READ => sys_read(arg1, arg2, arg3),
         SYS_TICKS => crate::interrupts::ticks(),
         SYS_READ_NB => sys_read_nb(arg1, arg2, arg3),
         SYS_LS => sys_ls(arg1, arg2),
         SYS_READ_FILE => sys_read_file(arg1, arg2, arg3),
         SYS_WRITE_FILE => sys_write_file(arg1, arg2, arg3),
-=======
-        SYS_OPEN => sys_open(arg1, arg2, arg3),
-        SYS_CLOSE => sys_close(arg1),
-        SYS_READ => sys_read(arg1, arg2, arg3),
-        SYS_FWRITE => sys_fwrite(arg1, arg2, arg3),
->>>>>>> origin/feature/fat32
         _ => {
             serial_println!("[kernel] unknown syscall number: {}", num);
             println!("[kernel] unknown syscall number: {}", num);
@@ -318,7 +297,6 @@ fn sys_write(buf_ptr: u64, len: u64) -> u64 {
     }
 }
 
-<<<<<<< HEAD
 /// Reads keyboard input (stdin) into a user buffer.
 ///
 /// Blocks until at least one byte is available or `len` bytes are read.
@@ -355,7 +333,11 @@ fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
     // Keyboard decoder state. We create a fresh decoder per call; scancode
     // streams are self-synchronizing for simple key presses.
     use pc_keyboard::{layouts, HandleControl, Keyboard, ScancodeSet1};
-    let mut keyboard = Keyboard::new(ScancodeSet1::new(), layouts::Us104Key, HandleControl::Ignore);
+    let mut keyboard = Keyboard::new(
+        ScancodeSet1::new(),
+        layouts::Us104Key,
+        HandleControl::Ignore,
+    );
 
     let mut read = 0;
     while read < len {
@@ -419,7 +401,11 @@ fn sys_read_nb(fd: u64, buf_ptr: u64, len: u64) -> u64 {
     };
 
     use pc_keyboard::{layouts, HandleControl, Keyboard, ScancodeSet1};
-    let mut keyboard = Keyboard::new(ScancodeSet1::new(), layouts::Us104Key, HandleControl::Ignore);
+    let mut keyboard = Keyboard::new(
+        ScancodeSet1::new(),
+        layouts::Us104Key,
+        HandleControl::Ignore,
+    );
 
     if let Ok(Some(event)) = keyboard.add_byte(scancode) {
         if let Some(key) = keyboard.process_keyevent(event) {
@@ -526,131 +512,6 @@ fn sys_write_file(path_ptr: u64, buf_ptr: u64, buf_len: u64) -> u64 {
     match result {
         Some(Ok(n)) => n as u64,
         _ => SYSCALL_ERROR,
-=======
-/// Opens (or creates) a file in the in-memory filesystem.
-///
-/// # Arguments
-///
-/// * `path_ptr` - Virtual address of the path string in user memory.
-/// * `path_len` - Length of the path string in bytes.
-/// * `flags` - Combination of [`fs::O_READ`], [`fs::O_WRITE`], [`fs::O_CREATE`],
-///   [`fs::O_TRUNC`] and [`fs::O_APPEND`].
-///
-/// # Returns
-///
-/// The new file descriptor, or [`SYSCALL_ERROR`] on failure.
-fn sys_open(path_ptr: u64, path_len: u64, flags: u64) -> u64 {
-    let path_bytes = match user_slice(path_ptr, path_len) {
-        Ok(bytes) => bytes,
-        Err(()) => {
-            println!("[kernel] sys_open: invalid path range");
-            return SYSCALL_ERROR;
-        }
-    };
-    let path = match core::str::from_utf8(path_bytes) {
-        Ok(path) => path,
-        Err(_) => {
-            println!("[kernel] sys_open: path is not valid UTF-8");
-            return SYSCALL_ERROR;
-        }
-    };
-    let flags = match u32::try_from(flags) {
-        Ok(flags) => flags,
-        Err(_) => {
-            println!("[kernel] sys_open: flags do not fit in u32");
-            return SYSCALL_ERROR;
-        }
-    };
-    match fs::open(path, flags) {
-        Ok(fd) => u64::from(fd),
-        Err(err) => {
-            serial_println!("[kernel] sys_open failed: {:?}", err);
-            SYSCALL_ERROR
-        }
-    }
-}
-
-/// Closes an open file descriptor.
-///
-/// # Returns
-///
-/// `0` on success, or [`SYSCALL_ERROR`] on failure.
-fn sys_close(fd: u64) -> u64 {
-    let fd = match u32::try_from(fd) {
-        Ok(fd) => fd,
-        Err(_) => return SYSCALL_ERROR,
-    };
-    match fs::close(fd) {
-        Ok(()) => 0,
-        Err(err) => {
-            serial_println!("[kernel] sys_close failed: {:?}", err);
-            SYSCALL_ERROR
-        }
-    }
-}
-
-/// Reads bytes from an open file into a user buffer.
-///
-/// # Arguments
-///
-/// * `fd` - File descriptor returned by [`sys_open`].
-/// * `buf_ptr` - Virtual address of the destination buffer in user memory.
-/// * `len` - Maximum number of bytes to read.
-///
-/// # Returns
-///
-/// The number of bytes read (`0` at end of file), or [`SYSCALL_ERROR`] on failure.
-fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
-    let fd = match u32::try_from(fd) {
-        Ok(fd) => fd,
-        Err(_) => return SYSCALL_ERROR,
-    };
-    let buf = match user_slice_mut(buf_ptr, len) {
-        Ok(buf) => buf,
-        Err(()) => {
-            println!("[kernel] sys_read: invalid buffer range");
-            return SYSCALL_ERROR;
-        }
-    };
-    match fs::read(fd, buf) {
-        Ok(n) => n as u64,
-        Err(err) => {
-            serial_println!("[kernel] sys_read failed: {:?}", err);
-            SYSCALL_ERROR
-        }
-    }
-}
-
-/// Writes bytes from a user buffer to an open file.
-///
-/// # Arguments
-///
-/// * `fd` - File descriptor returned by [`sys_open`].
-/// * `buf_ptr` - Virtual address of the source buffer in user memory.
-/// * `len` - Number of bytes to write.
-///
-/// # Returns
-///
-/// The number of bytes written, or [`SYSCALL_ERROR`] on failure.
-fn sys_fwrite(fd: u64, buf_ptr: u64, len: u64) -> u64 {
-    let fd = match u32::try_from(fd) {
-        Ok(fd) => fd,
-        Err(_) => return SYSCALL_ERROR,
-    };
-    let buf = match user_slice(buf_ptr, len) {
-        Ok(buf) => buf,
-        Err(()) => {
-            println!("[kernel] sys_fwrite: invalid buffer range");
-            return SYSCALL_ERROR;
-        }
-    };
-    match fs::write(fd, buf) {
-        Ok(n) => n as u64,
-        Err(err) => {
-            serial_println!("[kernel] sys_fwrite failed: {:?}", err);
-            SYSCALL_ERROR
-        }
->>>>>>> origin/feature/fat32
     }
 }
 
@@ -729,37 +590,21 @@ mod tests {
     }
 
     #[test_case]
-<<<<<<< HEAD
     fn test_sys_ticks_returns_value() {
         let t1 = syscall_dispatch(SYS_TICKS, 0, 0, 0);
         let t2 = syscall_dispatch(SYS_TICKS, 0, 0, 0);
         // Ticks are monotonic (non-decreasing).
-        assert!(
-            t2 >= t1,
-            "sys_ticks should be monotonic: {} >= {}",
-            t2, t1
-        );
+        assert!(t2 >= t1, "sys_ticks should be monotonic: {} >= {}", t2, t1);
     }
 
     #[test_case]
     fn test_sys_read_rejects_invalid_fd() {
         // Only fd 0 (stdin) is supported.
         let result = syscall_dispatch(SYS_READ, 1, userspace::USER_CODE_START, 10);
-        assert_eq!(
-            result, SYSCALL_ERROR,
-            "sys_read with fd != 0 should fail.",
-=======
-    fn test_sys_open_rejects_null_path() {
-        let result = syscall_dispatch(SYS_OPEN, 0, 10, u64::from(fs::O_READ));
-        assert_eq!(
-            result, SYSCALL_ERROR,
-            "sys_open with address 0 should fail validation.",
->>>>>>> origin/feature/fat32
-        );
+        assert_eq!(result, SYSCALL_ERROR, "sys_read with fd != 0 should fail.",);
     }
 
     #[test_case]
-<<<<<<< HEAD
     fn test_sys_read_rejects_invalid_buffer() {
         let result = syscall_dispatch(SYS_READ, 0, userspace::USER_STACK_TOP + 1, 10);
         assert_eq!(
@@ -794,23 +639,10 @@ mod tests {
         assert_eq!(
             result, SYSCALL_ERROR,
             "sys_read_file with out-of-bounds buffer should fail.",
-=======
-    fn test_sys_open_rejects_out_of_bounds_path() {
-        let result = syscall_dispatch(
-            SYS_OPEN,
-            userspace::USER_STACK_TOP + 1,
-            10,
-            u64::from(fs::O_READ),
-        );
-        assert_eq!(
-            result, SYSCALL_ERROR,
-            "sys_open with out-of-bounds path should fail validation.",
->>>>>>> origin/feature/fat32
         );
     }
 
     #[test_case]
-<<<<<<< HEAD
     fn test_sys_write_file_rejects_invalid_buffer() {
         let result = syscall_dispatch(
             SYS_WRITE_FILE,
@@ -823,41 +655,4 @@ mod tests {
             "sys_write_file with out-of-bounds buffer should fail.",
         );
     }
-=======
-    fn test_sys_close_rejects_invalid_fd() {
-        let result = syscall_dispatch(SYS_CLOSE, u64::from(u32::MAX), 0, 0);
-        assert_eq!(
-            result, SYSCALL_ERROR,
-            "sys_close with an invalid fd should fail.",
-        );
-    }
-
-    #[test_case]
-    fn test_sys_read_rejects_null_buffer() {
-        let result = syscall_dispatch(SYS_READ, 0, 0, 10);
-        assert_eq!(
-            result, SYSCALL_ERROR,
-            "sys_read with address 0 should fail validation.",
-        );
-    }
-
-    #[test_case]
-    fn test_sys_fwrite_rejects_null_buffer() {
-        let result = syscall_dispatch(SYS_FWRITE, 0, 0, 10);
-        assert_eq!(
-            result, SYSCALL_ERROR,
-            "sys_fwrite with address 0 should fail validation.",
-        );
-    }
-
-    #[test_case]
-    fn test_syscall_numbers_are_stable() {
-        assert_eq!(SYS_EXIT, 0, "sys_exit must stay syscall 0.");
-        assert_eq!(SYS_WRITE, 1, "sys_write must stay syscall 1.");
-        assert_eq!(SYS_OPEN, 2, "sys_open must be syscall 2.");
-        assert_eq!(SYS_CLOSE, 3, "sys_close must be syscall 3.");
-        assert_eq!(SYS_READ, 4, "sys_read must be syscall 4.");
-        assert_eq!(SYS_FWRITE, 5, "sys_fwrite must be syscall 5.");
-    }
->>>>>>> origin/feature/fat32
 }

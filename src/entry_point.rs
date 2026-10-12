@@ -66,9 +66,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     allocator::init_heap(&mut mapper, &mut frame_allocator)
         .expect("Heap initialization failed. Reboot required.");
 
-<<<<<<< HEAD
     // Initialize the keyboard scancode queue (needs heap).
-    self_rust_os::task::keyboard::init_scancode_queue();
+    // self_rust_os::task::keyboard::init_scancode_queue();
 
     // Mount the root filesystem (needs heap for FAT32).
     // If the disk is not formatted, this will panic; the disk fixture
@@ -79,10 +78,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         self_rust_os::fs::init();
         serial_println!("[kernel] root filesystem mounted");
     }
-=======
     // The in-memory filesystem needs the heap; seed it before user space runs.
     fs::init();
->>>>>>> origin/feature/fat32
 
     // In test mode, run the test harness and exit before entering user space
     // or the async executor (both of which never return).
