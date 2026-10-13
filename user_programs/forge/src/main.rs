@@ -2,30 +2,55 @@
 //!
 //! A simple interactive shell running in Ring 3.
 //!
-//! Commands: help, echo <text>, clear, time, ls, cat <file>, exit
+//! Commands: help, echo <text>, clear, time, ls [path], mkdir <path>, cat <file>, exit
 
 #![no_std]
 #![no_main]
 
 use userlib::{println, sys};
 
-fn ls() {
+fn ls(path: &[u8]) {
+    let path_str = match core::str::from_utf8(path) {
+        Ok(s) => s,
+        Err(_) => {
+            println!("invalid path");
+            return;
+        }
+    };
     let mut buf = [0u8; 12 * 32]; // Max 32 entries.
-    match sys::ls(&mut buf, 32) {
+    match sys::ls(path_str, &mut buf, 32) {
         None => println!("ls failed"),
         Some(0) => println!("(empty)"),
         Some(count) => {
             for i in 0..count {
                 let entry = &buf[i * 12..i * 12 + 11];
+                let attr = buf[i * 12 + 11];
                 // 8.3 name: trim spaces.
                 let mut name_end = 11;
                 while name_end > 0 && entry[name_end - 1] == b' ' {
                     name_end -= 1;
                 }
                 sys::console_write(&entry[..name_end]);
+                if attr & 0x10 != 0 {
+                    sys::console_write(b"/");
+                }
                 sys::console_write(b"\n");
             }
         }
+    }
+}
+
+fn mkdir(path: &[u8]) {
+    let path_str = match core::str::from_utf8(path) {
+        Ok(s) => s,
+        Err(_) => {
+            println!("invalid path");
+            return;
+        }
+    };
+    match sys::mkdir(path_str) {
+        Ok(()) => println!("created {}", path_str),
+        Err(()) => println!("mkdir failed"),
     }
 }
 
@@ -44,6 +69,21 @@ fn cat(path: &[u8]) {
             sys::console_write(&buf[..n]);
             sys::console_write(b"\n");
         }
+    }
+}
+
+/// Writes `text` to the file at `path` (creates or overwrites).
+fn write(path: &[u8], text: &[u8]) {
+    let path_str = match core::str::from_utf8(path) {
+        Ok(s) => s,
+        Err(_) => {
+            println!("invalid path");
+            return;
+        }
+    };
+    match sys::write_file(path_str, text) {
+        None => println!("write failed"),
+        Some(n) => println!("wrote {} bytes", n),
     }
 }
 
@@ -100,8 +140,10 @@ pub extern "C" fn user_main() {
             println!("  echo <txt> - print text");
             println!("  clear      - clear screen");
             println!("  time       - show timer ticks");
-            println!("  ls         - list files");
+            println!("  ls [path]  - list directory (default: root)");
+            println!("  mkdir <p>  - create directory (with parents)");
             println!("  cat <file> - show file contents");
+            println!("  write <f> <txt> - write text to file");
             println!("  ./<prog>   - run program from disk");
             println!("  kill <pid> - terminate a process");
             println!("  exit       - exit forge");
@@ -116,9 +158,21 @@ pub extern "C" fn user_main() {
         } else if eq(line, b"time") {
             println!("ticks: {}", sys::ticks());
         } else if eq(line, b"ls") {
-            ls();
+            ls(b"");
+        } else if line.len() > 3 && eq(&line[..3], b"ls ") {
+            ls(&line[3..]);
+        } else if line.len() > 6 && eq(&line[..6], b"mkdir ") {
+            mkdir(&line[6..]);
         } else if line.len() > 4 && eq(&line[..4], b"cat ") {
             cat(&line[4..]);
+        } else if line.len() > 6 && eq(&line[..6], b"write ") {
+            // write <path> <text>: split on the first space after "write ".
+            let rest = &line[6..];
+            if let Some(sp) = rest.iter().position(|&c| c == b' ') {
+                write(&rest[..sp], &rest[sp + 1..]);
+            } else {
+                println!("usage: write <file> <text>");
+            }
         } else if line.len() > 5 && eq(&line[..5], b"echo ") {
             sys::console_write(&line[5..]);
             sys::console_write(b"\n");

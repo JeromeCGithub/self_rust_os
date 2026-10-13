@@ -264,7 +264,7 @@ pub extern "C" fn user_main() {
             if in_rect(mx, my, ICON_X, ICON_Y, ICON_W, ICON_H) {
                 if portal.is_none() {
                     println!("[wm] Spawning portal...");
-                    match sys::spawn("PORTAL.BIN") {
+                    match sys::spawn("/bin/PORTAL.BIN") {
                         Ok(pid) => {
                             println!("[wm] Portal spawned, pid {}", pid);
                             portal = Some((pid, WIN_X0, WIN_Y0));
