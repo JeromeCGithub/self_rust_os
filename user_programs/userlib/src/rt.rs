@@ -9,7 +9,11 @@ use core::panic::PanicInfo;
 /// Kernel entry point for user programs.
 ///
 /// Calls the program's `user_main`, then exits cleanly if it returns.
+///
+/// Placed in `.text.start` so the linker script puts it at the load base
+/// (`0x400000`), where the kernel jumps to start the program.
 #[no_mangle]
+#[link_section = ".text.start"]
 pub extern "C" fn _start() -> ! {
     unsafe { super::user_main() };
     crate::sys::exit(0);
