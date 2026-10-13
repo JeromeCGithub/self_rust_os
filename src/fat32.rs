@@ -7,9 +7,9 @@
 //!
 //! # Scope (v1)
 //!
-//! - Formats disks, creates/reads/writes/deletes files in the **root directory**
-//!   (no subdirectories yet).
-//! - 8.3 short filenames (`"README.TXT"`).
+//! - Formats disks, creates/reads/writes/deletes files, creates directories,
+//!   and resolves `/`-separated paths (`/home/Desktop/note.txt`).
+//! - 8.3 short filenames (`"README.TXT"`); directory names too (`"DESKTOP"`).
 //! - Single-threaded; the caller must serialize access.
 //!
 //! # Example
@@ -20,11 +20,12 @@
 //!
 //! let disk = AtaDisk::secondary(AtaDrive::Master);
 //! let mut fs = Fat32::format(disk, 32768, b"RUSTOS     ").expect("format failed");
-//! fs.create_file("HELLO.TXT").expect("create failed");
-//! fs.write_file("HELLO.TXT", b"Hello, disk!").expect("write failed");
+//! fs.create_dir("/home/Desktop").expect("mkdir failed");
+//! fs.create_file("/home/Desktop/HELLO.TXT").expect("create failed");
+//! fs.write_file("/home/Desktop/HELLO.TXT", b"Hello, disk!").expect("write failed");
 //!
 //! let mut buf = [0u8; 64];
-//! let n = fs.read_file("HELLO.TXT", &mut buf).expect("read failed");
+//! let n = fs.read_file("/home/Desktop/HELLO.TXT", &mut buf).expect("read failed");
 //! assert_eq!(&buf[..n], b"Hello, disk!");
 //! ```
 //!
@@ -87,6 +88,10 @@ pub enum FatError {
     InvalidName,
     /// The file was not found.
     FileNotFound,
+    /// A path component that should be a directory is not one.
+    NotADirectory,
+    /// A file operation targeted a directory.
+    IsADirectory,
     /// A file with this name already exists.
     FileExists,
     /// No free clusters left on the disk.
@@ -95,6 +100,25 @@ pub enum FatError {
     DirFull,
     /// The read buffer is smaller than the file.
     BufferTooSmall,
+}
+
+/// A directory listing entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirEntry {
+    /// 8.3 name (`b"DESKTOP     "`).
+    pub name: [u8; 11],
+    /// FAT attribute byte (`0x10` = directory, `0x20` = archive/file).
+    pub attr: u8,
+    /// File size in bytes (0 for directories).
+    pub size: u32,
+}
+
+impl DirEntry {
+    /// Returns `true` if this entry is a directory.
+    #[must_use]
+    pub fn is_dir(&self) -> bool {
+        self.attr & ATTR_DIRECTORY != 0
+    }
 }
 
 // Layout constants for the volumes created by `format`.
@@ -114,6 +138,7 @@ const FAT_MASK: u32 = 0x0FFF_FFFF;
 
 // Directory entry attribute bits.
 const ATTR_ARCHIVE: u8 = 0x20;
+const ATTR_DIRECTORY: u8 = 0x10;
 
 // Directory entry slot markers.
 const ENTRY_FREE: u8 = 0xE5;
@@ -263,7 +288,18 @@ impl<B: BlockDevice> Fat32<B> {
         let sectors_per_cluster = boot[13];
         let reserved_sectors = u16::from_le_bytes([boot[14], boot[15]]);
         let num_fats = boot[16];
-        let total_sectors = u32::from_le_bytes([boot[32], boot[33], boot[34], boot[35]]);
+        let total_sectors_16 = u16::from_le_bytes([boot[19], boot[20]]);
+        let total_sectors_32 = u32::from_le_bytes([boot[32], boot[33], boot[34], boot[35]]);
+        // Per the FAT spec, when the 32-bit total sector count is zero the
+        // 16-bit field holds the volume size. Small volumes formatted by
+        // external tools (e.g. `mformat` on a 16 MiB image) put the count
+        // there and leave the 32-bit field at 0; without this fallback
+        // `total_sectors` is 0 and `allocate_cluster` underflows.
+        let total_sectors = if total_sectors_32 != 0 {
+            total_sectors_32
+        } else {
+            u32::from(total_sectors_16)
+        };
         let root_cluster = u32::from_le_bytes([boot[44], boot[45], boot[46], boot[47]]);
         let first_data_sector =
             u32::from(reserved_sectors) + u32::from(num_fats) * fat_size_sectors;
@@ -292,18 +328,24 @@ impl<B: BlockDevice> Fat32<B> {
         u64::from(self.total_sectors) * SECTOR_SIZE as u64
     }
 
-    /// Creates an empty file with the given 8.3 name (e.g. `"HELLO.TXT"`).
+    /// Creates an empty file at `path` (e.g. `"/home/Desktop/HELLO.TXT"`).
+    ///
+    /// Parent directories must already exist (see [`create_dir`](Self::create_dir)).
+    /// A plain name like `"HELLO.TXT"` refers to the root directory.
     ///
     /// # Errors
     ///
     /// Returns [`FatError::InvalidName`] for bad names, [`FatError::FileExists`]
-    /// if the file exists, [`FatError::DirFull`] if the root directory is full.
-    pub fn create_file(&mut self, name: &str) -> Result<(), FatError> {
-        let name_83 = to_83(name)?;
-        if self.find_entry(&name_83)?.is_some() {
+    /// if the file exists, [`FatError::FileNotFound`] if a parent directory
+    /// is missing, [`FatError::DirFull`] if the directory is full.
+    pub fn create_file(&mut self, path: &str) -> Result<(), FatError> {
+        let (dir_cluster, name_83) = self.resolve_parent(path)?;
+        if self.find_entry_in(dir_cluster, &name_83)?.is_some() {
             return Err(FatError::FileExists);
         }
-        let (cluster, index) = self.find_free_entry()?.ok_or(FatError::DirFull)?;
+        let (cluster, index) = self
+            .find_free_entry_in(dir_cluster)?
+            .ok_or(FatError::DirFull)?;
         let mut entry = [0_u8; DIR_ENTRY_SIZE];
         entry[0..11].copy_from_slice(&name_83);
         entry[11] = ATTR_ARCHIVE;
@@ -312,19 +354,86 @@ impl<B: BlockDevice> Fat32<B> {
         Ok(())
     }
 
-    /// Writes `data` to the file, replacing its previous contents.
+    /// Creates a directory at `path`, creating missing parents (`mkdir -p`).
+    ///
+    /// Each component is an 8.3 name (e.g. `"/home/Desktop"`). Creating a
+    /// directory that already exists is a no-op returning `Ok`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FatError::InvalidName`] for bad names,
+    /// [`FatError::NotADirectory`] if an existing path component is a file,
+    /// [`FatError::DiskFull`] / [`FatError::DirFull`] when out of space.
+    pub fn create_dir(&mut self, path: &str) -> Result<(), FatError> {
+        let components = split_path(path)?;
+        let mut dir_cluster = self.root_cluster;
+        for name_83 in &components {
+            match self.find_entry_in(dir_cluster, name_83)? {
+                Some((c, idx)) => {
+                    let mut entry = [0_u8; DIR_ENTRY_SIZE];
+                    self.read_dir_entry(c, idx, &mut entry)?;
+                    if entry[11] & ATTR_DIRECTORY == 0 {
+                        return Err(FatError::NotADirectory);
+                    }
+                    dir_cluster = self.dir_entry_cluster(c, idx)?;
+                }
+                None => {
+                    dir_cluster = self.make_dir(dir_cluster, name_83)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Creates a single directory `name_83` inside `parent_cluster`.
+    ///
+    /// Allocates a cluster, writes the `.` / `..` entries, and links the new
+    /// directory into its parent. Returns the new directory's cluster.
+    fn make_dir(&mut self, parent_cluster: u32, name_83: &[u8; 11]) -> Result<u32, FatError> {
+        // allocate_cluster zeroes the new cluster: entries 2.. are ENTRY_END.
+        let cluster = self.allocate_cluster()?;
+
+        // `.` points at the new directory itself.
+        let mut dot = [0_u8; DIR_ENTRY_SIZE];
+        dot[0..11].copy_from_slice(b".          ");
+        dot[11] = ATTR_DIRECTORY;
+        set_entry_cluster(&mut dot, cluster);
+        self.write_dir_entry(cluster, 0, &dot)?;
+
+        // `..` points at the parent.
+        let mut dotdot = [0_u8; DIR_ENTRY_SIZE];
+        dotdot[0..11].copy_from_slice(b"..         ");
+        dotdot[11] = ATTR_DIRECTORY;
+        set_entry_cluster(&mut dotdot, parent_cluster);
+        self.write_dir_entry(cluster, 1, &dotdot)?;
+
+        // Link the new directory into its parent.
+        let (pc, idx) = self
+            .find_free_entry_in(parent_cluster)?
+            .ok_or(FatError::DirFull)?;
+        let mut entry = [0_u8; DIR_ENTRY_SIZE];
+        entry[0..11].copy_from_slice(name_83);
+        entry[11] = ATTR_DIRECTORY;
+        set_entry_cluster(&mut entry, cluster);
+        self.write_dir_entry(pc, idx, &entry)?;
+        Ok(cluster)
+    }
+
+    /// Writes `data` to the file at `path`, replacing its previous contents.
     ///
     /// The file must exist (see [`create_file`](Self::create_file)). Returns
     /// the number of bytes written.
     ///
     /// # Errors
     ///
-    /// Returns [`FatError::FileNotFound`], [`FatError::DiskFull`], or
-    /// [`FatError::DeviceError`].
-    pub fn write_file(&mut self, name: &str, data: &[u8]) -> Result<usize, FatError> {
-        let name_83 = to_83(name)?;
-        let (dir_cluster, dir_index) =
-            self.find_entry(&name_83)?.ok_or(FatError::FileNotFound)?;
+    /// Returns [`FatError::FileNotFound`], [`FatError::IsADirectory`],
+    /// [`FatError::DiskFull`], or [`FatError::DeviceError`].
+    pub fn write_file(&mut self, path: &str, data: &[u8]) -> Result<usize, FatError> {
+        let (dir_cluster, name_83) = self.resolve_parent(path)?;
+        let (entry_cluster, dir_index) = self
+            .find_entry_in(dir_cluster, &name_83)?
+            .ok_or(FatError::FileNotFound)?;
+        self.ensure_not_dir(entry_cluster, dir_index)?;
 
         // Free the previous cluster chain, if any.
         let old_start = self.dir_entry_cluster(dir_cluster, dir_index)?;
@@ -369,16 +478,19 @@ impl<B: BlockDevice> Fat32<B> {
         Ok(written)
     }
 
-    /// Reads the file into `buf`, returning the number of bytes read.
+    /// Reads the file at `path` into `buf`, returning the number of bytes read.
     ///
     /// # Errors
     ///
     /// Returns [`FatError::FileNotFound`] if the file does not exist,
+    /// [`FatError::IsADirectory`] if the path is a directory,
     /// [`FatError::BufferTooSmall`] if `buf` is smaller than the file.
-    pub fn read_file(&mut self, name: &str, buf: &mut [u8]) -> Result<usize, FatError> {
-        let name_83 = to_83(name)?;
-        let (dir_cluster, dir_index) =
-            self.find_entry(&name_83)?.ok_or(FatError::FileNotFound)?;
+    pub fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, FatError> {
+        let (dir_cluster, name_83) = self.resolve_parent(path)?;
+        let (entry_cluster, dir_index) = self
+            .find_entry_in(dir_cluster, &name_83)?
+            .ok_or(FatError::FileNotFound)?;
+        self.ensure_not_dir(entry_cluster, dir_index)?;
 
         let mut entry = [0_u8; DIR_ENTRY_SIZE];
         self.read_dir_entry(dir_cluster, dir_index, &mut entry)?;
@@ -412,15 +524,18 @@ impl<B: BlockDevice> Fat32<B> {
         Ok(read)
     }
 
-    /// Deletes the file, freeing its clusters and directory entry.
+    /// Deletes the file at `path`, freeing its clusters and directory entry.
     ///
     /// # Errors
     ///
-    /// Returns [`FatError::FileNotFound`] if the file does not exist.
-    pub fn delete_file(&mut self, name: &str) -> Result<(), FatError> {
-        let name_83 = to_83(name)?;
-        let (dir_cluster, dir_index) =
-            self.find_entry(&name_83)?.ok_or(FatError::FileNotFound)?;
+    /// Returns [`FatError::FileNotFound`] if the file does not exist,
+    /// [`FatError::IsADirectory`] if the path is a directory.
+    pub fn delete_file(&mut self, path: &str) -> Result<(), FatError> {
+        let (dir_cluster, name_83) = self.resolve_parent(path)?;
+        let (entry_cluster, dir_index) = self
+            .find_entry_in(dir_cluster, &name_83)?
+            .ok_or(FatError::FileNotFound)?;
+        self.ensure_not_dir(entry_cluster, dir_index)?;
 
         let start = self.dir_entry_cluster(dir_cluster, dir_index)?;
         if start != 0 {
@@ -437,34 +552,105 @@ impl<B: BlockDevice> Fat32<B> {
         Ok(())
     }
 
-    /// Lists the names in the root directory as 8.3 byte arrays.
+    /// Lists the entries in a directory.
+    ///
+    /// `path` selects the directory: `None`, `""`, or `"/"` lists the root;
+    /// otherwise the path must resolve to an existing directory
+    /// (e.g. `"/home/Desktop"`). The `.` and `..` entries are omitted.
     ///
     /// # Errors
     ///
-    /// Returns [`FatError::DeviceError`] on I/O failure.
-    pub fn list_dir(&mut self) -> Result<Vec<[u8; 11]>, FatError> {
-        let mut names = Vec::new();
-        let mut cluster = self.root_cluster;
+    /// Returns [`FatError::FileNotFound`], [`FatError::NotADirectory`],
+    /// or [`FatError::DeviceError`].
+    pub fn list_dir(&mut self, path: Option<&str>) -> Result<Vec<DirEntry>, FatError> {
+        let dir_cluster = match path {
+            None => self.root_cluster,
+            Some(p) if p.is_empty() || p == "/" => self.root_cluster,
+            Some(p) => {
+                let components = split_path(p)?;
+                let mut dir = self.root_cluster;
+                for name_83 in &components {
+                    let (c, idx) =
+                        self.find_entry_in(dir, name_83)?.ok_or(FatError::FileNotFound)?;
+                    let mut entry = [0_u8; DIR_ENTRY_SIZE];
+                    self.read_dir_entry(c, idx, &mut entry)?;
+                    if entry[11] & ATTR_DIRECTORY == 0 {
+                        return Err(FatError::NotADirectory);
+                    }
+                    dir = self.dir_entry_cluster(c, idx)?;
+                }
+                dir
+            }
+        };
+
+        let mut entries = Vec::new();
+        let mut cluster = dir_cluster;
         loop {
             for index in 0..ENTRIES_PER_CLUSTER {
                 let mut entry = [0_u8; DIR_ENTRY_SIZE];
                 self.read_dir_entry(cluster, index, &mut entry)?;
                 if entry[0] == ENTRY_END {
-                    return Ok(names);
+                    return Ok(entries);
                 }
                 if entry[0] == ENTRY_FREE {
                     continue;
                 }
+                if entry[11] & 0x08 != 0 {
+                    continue; // volume label entry
+                }
                 let mut name = [0_u8; 11];
                 name.copy_from_slice(&entry[0..11]);
-                names.push(name);
+                // Omit the synthetic `.` / `..` entries.
+                if name == *b".          " || name == *b"..         " {
+                    continue;
+                }
+                let size = u32::from_le_bytes([entry[28], entry[29], entry[30], entry[31]]);
+                entries.push(DirEntry {
+                    name,
+                    attr: entry[11],
+                    size,
+                });
             }
             let next = self.read_fat_entry(cluster)?;
             if next >= FAT_EOC {
-                return Ok(names);
+                return Ok(entries);
             }
             cluster = next;
         }
+    }
+
+    /// Returns an error if the directory entry is a directory.
+    fn ensure_not_dir(&mut self, dir_cluster: u32, index: usize) -> Result<(), FatError> {
+        let mut entry = [0_u8; DIR_ENTRY_SIZE];
+        self.read_dir_entry(dir_cluster, index, &mut entry)?;
+        if entry[11] & ATTR_DIRECTORY != 0 {
+            return Err(FatError::IsADirectory);
+        }
+        Ok(())
+    }
+
+    /// Resolves `path` to its parent directory cluster and final 8.3 name.
+    ///
+    /// Intermediate components must exist and be directories. A plain name
+    /// like `"HELLO.TXT"` (or `"/HELLO.TXT"`) resolves to the root directory.
+    fn resolve_parent(&mut self, path: &str) -> Result<(u32, [u8; 11]), FatError> {
+        let components = split_path(path)?;
+        let (name_83, parents) = components
+            .split_last()
+            .ok_or(FatError::InvalidName)?; // unreachable: split_path rejects empty
+        let mut dir_cluster = self.root_cluster;
+        for parent in parents {
+            let (c, idx) = self
+                .find_entry_in(dir_cluster, parent)?
+                .ok_or(FatError::FileNotFound)?;
+            let mut entry = [0_u8; DIR_ENTRY_SIZE];
+            self.read_dir_entry(c, idx, &mut entry)?;
+            if entry[11] & ATTR_DIRECTORY == 0 {
+                return Err(FatError::NotADirectory);
+            }
+            dir_cluster = self.dir_entry_cluster(c, idx)?;
+        }
+        Ok((dir_cluster, *name_83))
     }
 
     // ------------------------------------------------------------------
@@ -621,9 +807,14 @@ impl<B: BlockDevice> Fat32<B> {
         Ok((hi << 16) | lo)
     }
 
-    /// Finds a directory entry by 8.3 name; returns `(cluster, index)`.
-    fn find_entry(&mut self, name_83: &[u8; 11]) -> Result<Option<(u32, usize)>, FatError> {
-        let mut cluster = self.root_cluster;
+    /// Finds a directory entry by 8.3 name within `dir_cluster`;
+    /// returns `(entry_cluster, index)`.
+    fn find_entry_in(
+        &mut self,
+        dir_cluster: u32,
+        name_83: &[u8; 11],
+    ) -> Result<Option<(u32, usize)>, FatError> {
+        let mut cluster = dir_cluster;
         loop {
             for index in 0..ENTRIES_PER_CLUSTER {
                 let mut entry = [0_u8; DIR_ENTRY_SIZE];
@@ -649,9 +840,10 @@ impl<B: BlockDevice> Fat32<B> {
         }
     }
 
-    /// Finds a free directory entry slot; extends the directory if needed.
-    fn find_free_entry(&mut self) -> Result<Option<(u32, usize)>, FatError> {
-        let mut cluster = self.root_cluster;
+    /// Finds a free directory entry slot within `dir_cluster`; extends the
+    /// directory if needed.
+    fn find_free_entry_in(&mut self, dir_cluster: u32) -> Result<Option<(u32, usize)>, FatError> {
+        let mut cluster = dir_cluster;
         loop {
             for index in 0..ENTRIES_PER_CLUSTER {
                 let mut entry = [0_u8; DIR_ENTRY_SIZE];
@@ -669,6 +861,31 @@ impl<B: BlockDevice> Fat32<B> {
             cluster = next;
         }
     }
+}
+
+/// Splits a path into 8.3 components, skipping empty segments.
+///
+/// `"/home/Desktop/a.txt"` → `[HOME, DESKTOP, A.TXT]`; `"A.TXT"` → `[A.TXT]`.
+/// Returns [`FatError::InvalidName`] when a component is not valid 8.3 or
+/// the path has no components at all.
+fn split_path(path: &str) -> Result<Vec<[u8; 11]>, FatError> {
+    let mut out = Vec::new();
+    for component in path.split('/') {
+        if component.is_empty() {
+            continue;
+        }
+        out.push(to_83(component)?);
+    }
+    if out.is_empty() {
+        return Err(FatError::InvalidName);
+    }
+    Ok(out)
+}
+
+/// Writes a cluster number into a raw directory entry's cluster fields.
+fn set_entry_cluster(entry: &mut [u8; DIR_ENTRY_SIZE], cluster: u32) {
+    entry[20..22].copy_from_slice(&((cluster >> 16) as u16).to_le_bytes());
+    entry[26..28].copy_from_slice(&(cluster as u16).to_le_bytes());
 }
 
 /// Converts `"NAME.EXT"` to 8.3 format (`b"NAME    EXT"`).
@@ -774,6 +991,21 @@ mod tests {
     }
 
     #[test_case]
+    fn test_open_falls_back_to_totsec16() {
+        let disk = MemDisk::new(TEST_SECTORS);
+        let fs = Fat32::format(disk, TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        let mut disk = fs.into_device();
+        // Simulate an mformat-style volume: the sector count lives in the
+        // 16-bit total-sectors field (BPB offset 19) and the 32-bit field
+        // (offset 32) is zero.
+        disk.data[19] = (TEST_SECTORS & 0xFF) as u8;
+        disk.data[20] = ((TEST_SECTORS >> 8) & 0xFF) as u8;
+        disk.data[32..36].fill(0);
+        let fs2 = Fat32::open(disk).unwrap();
+        assert_eq!(fs2.total_bytes(), u64::from(TEST_SECTORS) * 512);
+    }
+
+    #[test_case]
     fn test_open_rejects_non_fat32() {
         let disk = MemDisk::new(TEST_SECTORS);
         assert_eq!(
@@ -834,17 +1066,144 @@ mod tests {
 
         fs.create_file("A.TXT").unwrap();
         fs.create_file("B.TXT").unwrap();
-        assert_eq!(fs.list_dir().unwrap().len(), 2);
+        assert_eq!(fs.list_dir(None).unwrap().len(), 2);
 
         fs.delete_file("A.TXT").unwrap();
-        let names = fs.list_dir().unwrap();
+        let names = fs.list_dir(None).unwrap();
         assert_eq!(names.len(), 1);
-        assert_eq!(&names[0], b"B       TXT");
+        assert_eq!(&names[0].name, b"B       TXT");
+        assert!(!names[0].is_dir());
 
         assert_eq!(
             fs.read_file("A.TXT", &mut [0_u8; 8]).unwrap_err(),
             FatError::FileNotFound
         );
+    }
+
+    #[test_case]
+    fn test_mkdir_creates_nested_dirs() {
+        let disk = MemDisk::new(TEST_SECTORS);
+        let mut fs = Fat32::format(disk, TEST_SECTORS, b"TESTVOLUME ").unwrap();
+
+        // mkdir -p semantics: parents are created as needed.
+        fs.create_dir("/home/Desktop").unwrap();
+
+        let root = fs.list_dir(None).unwrap();
+        assert_eq!(root.len(), 1);
+        assert_eq!(&root[0].name, b"HOME       ");
+        assert!(root[0].is_dir());
+
+        let home = fs.list_dir(Some("/home")).unwrap();
+        assert_eq!(home.len(), 1);
+        assert_eq!(&home[0].name, b"DESKTOP    ");
+        assert!(home[0].is_dir());
+
+        // The new directory starts empty (`.`/`..` are hidden).
+        assert!(fs.list_dir(Some("/home/Desktop")).unwrap().is_empty());
+    }
+
+    #[test_case]
+    fn test_mkdir_is_idempotent_and_validates() {
+        let disk = MemDisk::new(TEST_SECTORS);
+        let mut fs = Fat32::format(disk, TEST_SECTORS, b"TESTVOLUME ").unwrap();
+
+        fs.create_dir("/home").unwrap();
+        // Creating an existing directory is a no-op.
+        fs.create_dir("/home").unwrap();
+        fs.create_dir("home").unwrap(); // relative form works too
+
+        // A file in the way of a directory component is an error.
+        fs.create_file("/BLOCKER").unwrap();
+        assert_eq!(
+            fs.create_dir("/BLOCKER/sub").unwrap_err(),
+            FatError::NotADirectory
+        );
+
+        // Empty path is invalid.
+        assert_eq!(fs.create_dir("").unwrap_err(), FatError::InvalidName);
+        assert_eq!(fs.create_dir("/").unwrap_err(), FatError::InvalidName);
+    }
+
+    #[test_case]
+    fn test_file_ops_in_subdirectory() {
+        let disk = MemDisk::new(TEST_SECTORS);
+        let mut fs = Fat32::format(disk, TEST_SECTORS, b"TESTVOLUME ").unwrap();
+
+        fs.create_dir("/home/Desktop").unwrap();
+        fs.create_file("/home/Desktop/NOTE.TXT").unwrap();
+        let n = fs.write_file("/home/Desktop/NOTE.TXT", b"nested!").unwrap();
+        assert_eq!(n, 7);
+
+        let mut buf = [0_u8; 32];
+        let n = fs.read_file("/home/Desktop/NOTE.TXT", &mut buf).unwrap();
+        assert_eq!(&buf[..n], b"nested!");
+
+        // Root-level file with the same name is a different file.
+        fs.create_file("NOTE.TXT").unwrap();
+        fs.write_file("NOTE.TXT", b"root").unwrap();
+        let n = fs.read_file("NOTE.TXT", &mut buf).unwrap();
+        assert_eq!(&buf[..n], b"root");
+        let n = fs.read_file("/home/Desktop/NOTE.TXT", &mut buf).unwrap();
+        assert_eq!(&buf[..n], b"nested!");
+
+        fs.delete_file("/home/Desktop/NOTE.TXT").unwrap();
+        assert_eq!(
+            fs.read_file("/home/Desktop/NOTE.TXT", &mut buf).unwrap_err(),
+            FatError::FileNotFound
+        );
+    }
+
+    #[test_case]
+    fn test_path_resolution_errors() {
+        let disk = MemDisk::new(TEST_SECTORS);
+        let mut fs = Fat32::format(disk, TEST_SECTORS, b"TESTVOLUME ").unwrap();
+
+        fs.create_file("/AFILE").unwrap();
+
+        // Missing intermediate directory.
+        assert_eq!(
+            fs.create_file("/nope/F.TXT").unwrap_err(),
+            FatError::FileNotFound
+        );
+        // File used as a directory.
+        assert_eq!(
+            fs.create_file("/AFILE/F.TXT").unwrap_err(),
+            FatError::NotADirectory
+        );
+        // File operations on a directory.
+        fs.create_dir("/adir").unwrap();
+        assert_eq!(
+            fs.read_file("/adir", &mut [0_u8; 8]).unwrap_err(),
+            FatError::IsADirectory
+        );
+        assert_eq!(
+            fs.write_file("/adir", b"x").unwrap_err(),
+            FatError::IsADirectory
+        );
+        assert_eq!(
+            fs.delete_file("/adir").unwrap_err(),
+            FatError::IsADirectory
+        );
+        // Listing a file as a directory.
+        assert_eq!(
+            fs.list_dir(Some("/AFILE")).unwrap_err(),
+            FatError::NotADirectory
+        );
+        assert_eq!(
+            fs.list_dir(Some("/missing")).unwrap_err(),
+            FatError::FileNotFound
+        );
+    }
+
+    #[test_case]
+    fn test_list_dir_root_forms() {
+        let disk = MemDisk::new(TEST_SECTORS);
+        let mut fs = Fat32::format(disk, TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        fs.create_file("A.TXT").unwrap();
+
+        assert_eq!(fs.list_dir(None).unwrap().len(), 1);
+        assert_eq!(fs.list_dir(Some("")).unwrap().len(), 1);
+        assert_eq!(fs.list_dir(Some("/")).unwrap().len(), 1);
     }
 
     #[test_case]
