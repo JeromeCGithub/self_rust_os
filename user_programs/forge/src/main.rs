@@ -55,7 +55,7 @@ fn eq(a: &[u8], b: &[u8]) -> bool {
 /// Entry point called by `userlib`'s runtime after `_start`.
 #[no_mangle]
 pub extern "C" fn user_main() {
-    println!("self_rust_os terminal v1.0");
+    println!("self_rust_os forge v1.0");
     println!("Type 'help' for commands.\n");
 
     let mut line_buf = [0u8; 256];
@@ -104,7 +104,7 @@ pub extern "C" fn user_main() {
             println!("  cat <file> - show file contents");
             println!("  ./<prog>   - run program from disk");
             println!("  kill <pid> - terminate a process");
-            println!("  exit       - exit terminal");
+            println!("  exit       - exit forge");
         } else if eq(line, b"exit") {
             println!("Goodbye!");
             sys::exit(0);

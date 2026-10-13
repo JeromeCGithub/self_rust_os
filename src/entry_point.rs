@@ -28,14 +28,14 @@ use x86_64::VirtAddr;
 /// This binary is built from `user_programs/terminal/` and converted to a flat
 /// binary with `llvm-objcopy -O binary`. See `user_programs/terminal/build.sh`
 /// for build instructions.
-static USER_TERMINAL_BIN: &[u8] = include_bytes!("../user_programs/terminal/terminal.bin");
+static USER_FORGE_BIN: &[u8] = include_bytes!("../user_programs/forge/forge.bin");
 
 /// Auto-generated metadata about the terminal binary layout (section boundaries).
 ///
 /// Provides `READONLY_SIZE`: the page-aligned byte count of the read-only
 /// region (`.text` + `.rodata`) so the kernel can enforce W^X permissions.
-mod terminal_meta {
-    include!("../user_programs/terminal/terminal_meta.rs");
+mod forge_meta {
+    include!("../user_programs/forge/forge_meta.rs");
 }
 
 entry_point!(kernel_main);
@@ -91,7 +91,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // This never returns; the timer IRQ drives preemptive multitasking.
     self_rust_os::scheduler::init(phys_mem_offset, frame_allocator);
     #[expect(clippy::expect_used)]
-    self_rust_os::scheduler::spawn_process(USER_TERMINAL_BIN, terminal_meta::READONLY_SIZE)
+    self_rust_os::scheduler::spawn_process(USER_FORGE_BIN, forge_meta::READONLY_SIZE)
         .expect("Failed to spawn initial process. Reboot required.");
     self_rust_os::scheduler::start();
 }
