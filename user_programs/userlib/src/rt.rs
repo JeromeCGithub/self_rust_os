@@ -31,8 +31,6 @@ pub extern "C" fn _start() -> ! {
             in("rdi") 0u64, // code
             in("rsi") 0u64,
             in("rdx") 0u64,
-            lateout("rcx") _,
-            lateout("r11") _,
             options(nostack, noreturn),
         );
     }
