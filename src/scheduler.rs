@@ -342,6 +342,16 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
             let page: Page<Size4KiB> = Page::containing_address(stack_bottom + i * 4096);
             let _ = unsafe { new_mapper.unmap(page) }.map(|(_, flush)| flush.flush());
         }
+        // Unmap framebuffer region. The copied P3 still holds the previous
+        // process's framebuffer mapping (same physical pages, shared
+        // display); without this, map_user_framebuffer fails with
+        // PageAlreadyMapped when spawning any second process.
+        let fb_start = VirtAddr::new(crate::userspace::USER_FRAMEBUFFER);
+        let fb_pages = (crate::userspace::FRAMEBUFFER_SIZE / 4096) as u64;
+        for i in 0..fb_pages {
+            let page: Page<Size4KiB> = Page::containing_address(fb_start + i * 4096);
+            let _ = unsafe { new_mapper.unmap(page) }.map(|(_, flush)| flush.flush());
+        }
     }
 
     // 3. Map user binary, stack, and framebuffer into the new P4.
