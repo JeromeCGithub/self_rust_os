@@ -203,6 +203,8 @@ pub fn spawn_process(binary: &[u8], readonly_size: usize) -> Result<Pid, &'stati
 fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'static str> {
     let mut sched = SCHEDULER.lock();
     let phys_offset = VirtAddr::new(sched.phys_offset);
+    // Read next_pid before the mutable borrow of allocator.
+    let is_first_process = sched.next_pid == 0;
     let allocator = sched
         .frame_allocator
         .as_mut()
@@ -250,10 +252,10 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
     // SAFETY: p4_table is a valid, freshly allocated P4.
     let mut new_mapper = unsafe { OffsetPageTable::new(p4_table, phys_offset) };
 
-    // 2b. Unmap user regions from the new (private) P3.
-    // The P3 was copied from the current P4, so it may contain the old
-    // process's user mappings. We clear them to get a clean slate.
-    {
+    // 2b. For PID 0 (first process), the copied P3 has no user mappings yet
+    // (boot P4's P3 is clean), so we skip the unmap. For PID > 0, unmap the
+    // old process's user regions to get a clean slate.
+    if !is_first_process {
         use x86_64::structures::paging::mapper::Mapper;
         use x86_64::structures::paging::page::Page;
         use x86_64::structures::paging::Size4KiB;
@@ -268,12 +270,6 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
         let stack_pages = (crate::userspace::USER_STACK_SIZE / 4096) as u64;
         for i in 0..stack_pages {
             let page: Page<Size4KiB> = Page::containing_address(stack_bottom + i * 4096);
-            let _ = unsafe { new_mapper.unmap(page) }.map(|(_, flush)| flush.flush());
-        }
-        // Unmap framebuffer region (0x900000.., 64 pages = 256KB).
-        let fb_start = VirtAddr::new(0x900000);
-        for i in 0..64u64 {
-            let page: Page<Size4KiB> = Page::containing_address(fb_start + i * 4096);
             let _ = unsafe { new_mapper.unmap(page) }.map(|(_, flush)| flush.flush());
         }
     }
