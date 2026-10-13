@@ -1,5 +1,5 @@
 [package]
-name = "terminal"
+name = "forge"
 version = "0.1.0"
 edition = "2021"
 description = "A minimal user-space program for self_rust_os."
