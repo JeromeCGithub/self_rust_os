@@ -69,6 +69,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // Initialize the keyboard scancode queue (needs heap).
     self_rust_os::task::keyboard::init_scancode_queue();
 
+    // Initialize the PS/2 mouse (IRQ12). Non-fatal if absent.
+    self_rust_os::mouse::init();
+
     // Mount the root filesystem (needs heap for FAT32).
     // If the disk is not formatted, this will panic; the disk fixture
     // must be created with the FAT32 format.
