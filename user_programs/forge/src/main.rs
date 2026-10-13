@@ -193,33 +193,44 @@ pub extern "C" fn user_main() {
 
 /// Launches a user program from disk via the spawn syscall.
 ///
-/// Converts `name` to `/NAME.BIN` (FAT32 8.3 uppercase) and spawns it.
-/// On success, this never returns (the process is replaced).
+/// PATH resolution (shell policy, not kernel):
+/// - If `name` contains '/', use it as-is (explicit path).
+/// - Otherwise, try `/bin/<NAME>.BIN` (standard program directory).
+///
+/// Converts `name` to uppercase 8.3 FAT32 format.
 fn run_program(name: &[u8]) {
     if name.is_empty() || name.len() > 8 {
         println!("usage: ./<name> (max 8 chars)");
         return;
     }
-    // Build "NAME.BIN" path (FAT32 8.3 uppercase, no leading slash).
-    let mut path = [0u8; 11];
+    // Build "NAME.BIN" (FAT32 8.3 uppercase).
+    let mut bin_name = [0u8; 12];
     for (i, &c) in name.iter().enumerate() {
-        // Uppercase ASCII.
-        path[i] = if c >= b'a' && c <= b'z' { c - 32 } else { c };
+        bin_name[i] = if c >= b'a' && c <= b'z' { c - 32 } else { c };
     }
     let name_len = name.len();
-    path[name_len] = b'.';
-    path[name_len + 1] = b'B';
-    path[name_len + 2] = b'I';
-    path[name_len + 3] = b'N';
-    
-    let path_str = match core::str::from_utf8(&path[..4 + name_len]) {
+    bin_name[name_len] = b'.';
+    bin_name[name_len + 1] = b'B';
+    bin_name[name_len + 2] = b'I';
+    bin_name[name_len + 3] = b'N';
+    let bin_len = name_len + 4;
+
+    // PATH resolution: try /bin/<name> first.
+    // (Future: support configurable PATH, cwd, etc.)
+    let mut full_path = [0u8; 256];
+    let prefix = b"/bin/";
+    full_path[..prefix.len()].copy_from_slice(prefix);
+    full_path[prefix.len()..prefix.len() + bin_len].copy_from_slice(&bin_name[..bin_len]);
+    let full_len = prefix.len() + bin_len;
+
+    let path_str = match core::str::from_utf8(&full_path[..full_len]) {
         Ok(s) => s,
         Err(_) => {
             println!("invalid program name");
             return;
         }
     };
-    
+
     println!("Spawning {}...", path_str);
     match sys::spawn(path_str) {
         Ok(pid) => {

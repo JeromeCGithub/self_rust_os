@@ -610,42 +610,14 @@ fn sys_spawn(path_ptr: u64) -> u64 {
     };
 
     // Load the binary from disk.
-    // Resolution order for a bare name like "PORTAL.BIN" (no '/'):
-    // `/bin/<name>` first (the standard program directory), then the root
-    // (backward compatibility with pre-hierarchy disks). A path containing
-    // Load the binary from disk.
-    // Resolution order for a bare name like "PORTAL.BIN" (no '/'):
-    // `/bin/<name>` first (the standard program directory), then the name
-    // as-is (backward compatibility with pre-hierarchy disks that keep
-    // binaries in the root). A path containing '/' is used as-is.
-    let binary = if !path.contains('/') {
-        let mut bin_path = [0u8; 256];
-        let prefix = b"/bin/";
-        bin_path[..prefix.len()].copy_from_slice(prefix);
-        let name_len = path.len().min(256 - prefix.len() - 1);
-        bin_path[prefix.len()..prefix.len() + name_len]
-            .copy_from_slice(&path.as_bytes()[..name_len]);
-        let bin_path = match core::str::from_utf8(&bin_path[..prefix.len() + name_len]) {
-            Ok(s) => s,
-            Err(_) => return SYSCALL_ERROR,
-        };
-        match crate::scheduler::load_program_from_disk(bin_path) {
-            Ok(b) => b,
-            Err(_) => match crate::scheduler::load_program_from_disk(path) {
-                Ok(b) => b,
-                Err(e) => {
-                    serial_println!("[kernel] sys_spawn: failed to load '{}': {}", path, e);
-                    return SYSCALL_ERROR;
-                }
-            },
-        }
-    } else {
-        match crate::scheduler::load_program_from_disk(path) {
-            Ok(b) => b,
-            Err(e) => {
-                serial_println!("[kernel] sys_spawn: failed to load '{}': {}", path, e);
-                return SYSCALL_ERROR;
-            }
+    // The kernel takes the path as-is. It does NOT do PATH resolution —
+    // that is the shell's job (policy, not mechanism). Callers must pass
+    // a full path like "/bin/SNAKE.BIN".
+    let binary = match crate::scheduler::load_program_from_disk(path) {
+        Ok(b) => b,
+        Err(e) => {
+            serial_println!("[kernel] sys_spawn: failed to load '{}': {}", path, e);
+            return SYSCALL_ERROR;
         }
     };
 
