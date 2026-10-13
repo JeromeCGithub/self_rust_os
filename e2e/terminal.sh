@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
 
 echo "[e2e] building terminal user program..."
-(cd user_programs/terminal && ./build.sh)
+./tools/build-user.sh terminal
 
 echo "[e2e] building kernel boot image..."
 cargo build 2>&1 | tail -1
