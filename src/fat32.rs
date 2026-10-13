@@ -263,7 +263,18 @@ impl<B: BlockDevice> Fat32<B> {
         let sectors_per_cluster = boot[13];
         let reserved_sectors = u16::from_le_bytes([boot[14], boot[15]]);
         let num_fats = boot[16];
-        let total_sectors = u32::from_le_bytes([boot[32], boot[33], boot[34], boot[35]]);
+        let total_sectors_16 = u16::from_le_bytes([boot[19], boot[20]]);
+        let total_sectors_32 = u32::from_le_bytes([boot[32], boot[33], boot[34], boot[35]]);
+        // Per the FAT spec, when the 32-bit total sector count is zero the
+        // 16-bit field holds the volume size. Small volumes formatted by
+        // external tools (e.g. `mformat` on a 16 MiB image) put the count
+        // there and leave the 32-bit field at 0; without this fallback
+        // `total_sectors` is 0 and `allocate_cluster` underflows.
+        let total_sectors = if total_sectors_32 != 0 {
+            total_sectors_32
+        } else {
+            u32::from(total_sectors_16)
+        };
         let root_cluster = u32::from_le_bytes([boot[44], boot[45], boot[46], boot[47]]);
         let first_data_sector =
             u32::from(reserved_sectors) + u32::from(num_fats) * fat_size_sectors;
