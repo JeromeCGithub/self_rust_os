@@ -217,9 +217,10 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
     let p4_table = unsafe { &mut *(p4_virt.as_mut_ptr() as *mut PageTable) };
 
     // Copy P4[1..512] (kernel half and everything except P4[0]).
-    // For P4[0] (user half, 0..512GB), allocate a FRESH private P3.
-    // This is critical: P4[0] must not be shared between processes,
-    // otherwise mapping one process's binary corrupts the other's.
+    // For P4[0] (user half, 0..512GB), allocate a PRIVATE P3 that is a copy
+    // of the current P3. We then unmap the user regions from it, so each
+    // process has isolated user mappings but shares kernel low-memory
+    // mappings (e.g., kernel stack).
     let (cur_frame, _) = Cr3::read();
     let cur_virt = phys_offset + cur_frame.start_address().as_u64();
     // SAFETY: Reading the current P4 via the physical offset mapping.
@@ -227,13 +228,20 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
     for i in 1..512 {
         p4_table[i] = cur_table[i].clone();
     }
-    // Allocate a fresh, zeroed P3 for P4[0].
+    // Allocate a private P3 for P4[0]: copy current P3's entries.
     {
         use x86_64::structures::paging::page_table::PageTableFlags;
+        // Get current P3 (P4[0]'s target).
+        let cur_p3_frame = cur_table[0].frame().map_err(|_| "P4[0] not mapped")?;
+        let cur_p3_virt = phys_offset + cur_p3_frame.start_address().as_u64();
+        let cur_p3 = unsafe { &*(cur_p3_virt.as_ptr() as *const PageTable) };
+        // Allocate fresh P3 and copy entries.
         let new_p3_frame = allocator.allocate_frame().ok_or("failed to allocate P3")?;
         let new_p3_virt = phys_offset + new_p3_frame.start_address().as_u64();
         let new_p3 = unsafe { &mut *(new_p3_virt.as_mut_ptr() as *mut PageTable) };
-        new_p3.zero();
+        for i in 0..512 {
+            new_p3[i] = cur_p3[i].clone();
+        }
         let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
         p4_table[0].set_frame(new_p3_frame, flags);
     }
@@ -241,6 +249,34 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
     // 2. Create a mapper for the new address space.
     // SAFETY: p4_table is a valid, freshly allocated P4.
     let mut new_mapper = unsafe { OffsetPageTable::new(p4_table, phys_offset) };
+
+    // 2b. Unmap user regions from the new (private) P3.
+    // The P3 was copied from the current P4, so it may contain the old
+    // process's user mappings. We clear them to get a clean slate.
+    {
+        use x86_64::structures::paging::mapper::Mapper;
+        use x86_64::structures::paging::page::Page;
+        use x86_64::structures::paging::Size4KiB;
+        // Unmap binary region (0x400000.., up to 16 pages).
+        let bin_start = VirtAddr::new(crate::userspace::USER_CODE_START);
+        for i in 0..16u64 {
+            let page: Page<Size4KiB> = Page::containing_address(bin_start + i * 4096);
+            let _ = unsafe { new_mapper.unmap(page) }.map(|(_, flush)| flush.flush());
+        }
+        // Unmap stack region.
+        let stack_bottom = VirtAddr::new(crate::userspace::USER_STACK_BOTTOM);
+        let stack_pages = (crate::userspace::USER_STACK_SIZE / 4096) as u64;
+        for i in 0..stack_pages {
+            let page: Page<Size4KiB> = Page::containing_address(stack_bottom + i * 4096);
+            let _ = unsafe { new_mapper.unmap(page) }.map(|(_, flush)| flush.flush());
+        }
+        // Unmap framebuffer region (0x900000.., 64 pages = 256KB).
+        let fb_start = VirtAddr::new(0x900000);
+        for i in 0..64u64 {
+            let page: Page<Size4KiB> = Page::containing_address(fb_start + i * 4096);
+            let _ = unsafe { new_mapper.unmap(page) }.map(|(_, flush)| flush.flush());
+        }
+    }
 
     // 3. Map user binary, stack, and framebuffer into the new P4.
     // We do NOT switch CR3 here. The mapper writes page tables via p4_table
