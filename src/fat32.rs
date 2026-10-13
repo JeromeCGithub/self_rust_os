@@ -785,6 +785,21 @@ mod tests {
     }
 
     #[test_case]
+    fn test_open_falls_back_to_totsec16() {
+        let disk = MemDisk::new(TEST_SECTORS);
+        let fs = Fat32::format(disk, TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        let mut disk = fs.into_device();
+        // Simulate an mformat-style volume: the sector count lives in the
+        // 16-bit total-sectors field (BPB offset 19) and the 32-bit field
+        // (offset 32) is zero.
+        disk.data[19] = (TEST_SECTORS & 0xFF) as u8;
+        disk.data[20] = ((TEST_SECTORS >> 8) & 0xFF) as u8;
+        disk.data[32..36].fill(0);
+        let fs2 = Fat32::open(disk).unwrap();
+        assert_eq!(fs2.total_bytes(), u64::from(TEST_SECTORS) * 512);
+    }
+
+    #[test_case]
     fn test_open_rejects_non_fat32() {
         let disk = MemDisk::new(TEST_SECTORS);
         assert_eq!(
