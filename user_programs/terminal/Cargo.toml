@@ -12,3 +12,6 @@ panic = "abort"
 panic = "abort"
 opt-level = "z"
 lto = true
+
+[dependencies]
+userlib = { path = "../userlib" }
