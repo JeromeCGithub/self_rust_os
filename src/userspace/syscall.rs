@@ -54,6 +54,10 @@ pub const SYS_KILL: u64 = 9;
 /// Syscall number for `sys_waitpid`: waits for a process to exit, reaps it.
 pub const SYS_WAITPID: u64 = 10;
 
+/// Syscall number for `sys_mouse`: returns packed mouse state.
+/// Bits: `[63:32]` = buttons, `[31:16]` = y, `[15:0]` = x.
+pub const SYS_MOUSE: u64 = 11;
+
 /// Sentinel: the current process has exited, schedule another (don't save context).
 const PROCESS_EXIT_SENTINEL: u64 = u64::MAX;
 
@@ -225,6 +229,7 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
         SYS_SPAWN => sys_spawn(arg1),
         SYS_KILL => sys_kill(arg1),
         SYS_WAITPID => sys_waitpid(arg1),
+        SYS_MOUSE => sys_mouse(),
         _ => {
             serial_println!("[kernel] unknown syscall number: {}", num);
             println!("[kernel] unknown syscall number: {}", num);
@@ -603,6 +608,19 @@ fn sys_kill(pid: u64) -> u64 {
 /// Returns `SYSCALL_ERROR` for an invalid PID.
 fn sys_waitpid(pid: u64) -> u64 {
     crate::scheduler::waitpid(pid as u32)
+}
+
+/// Returns the packed mouse state.
+///
+/// Bits: `[63:32]` = buttons (bit 0 = left, 1 = right, 2 = middle),
+/// `[31:16]` = y (0-199), `[15:0]` = x (0-319).
+fn sys_mouse() -> u64 {
+    let (x, y) = crate::mouse::position();
+    let buttons = crate::mouse::buttons();
+    // Clamp to u16 ranges (driver already clamps to screen, but be safe).
+    let x = x.clamp(0, 0xFFFF) as u64;
+    let y = y.clamp(0, 0xFFFF) as u64;
+    ((buttons as u64) << 32) | (y << 16) | x
 }
 
 /// Registers the syscall interrupt handler in the IDT.

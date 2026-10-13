@@ -25,17 +25,17 @@ use x86_64::VirtAddr;
 
 /// The embedded flat binary of the user-mode hello program.
 ///
-/// This binary is built from `user_programs/terminal/` and converted to a flat
-/// binary with `llvm-objcopy -O binary`. See `user_programs/terminal/build.sh`
+/// This binary is built from `user_programs/wm/` and converted to a flat
+/// binary with `llvm-objcopy -O binary`. See `tools/build-user.sh`
 /// for build instructions.
-static USER_FORGE_BIN: &[u8] = include_bytes!("../user_programs/forge/forge.bin");
+static USER_WM_BIN: &[u8] = include_bytes!("../user_programs/wm/wm.bin");
 
-/// Auto-generated metadata about the terminal binary layout (section boundaries).
+/// Auto-generated metadata about the WM binary layout (section boundaries).
 ///
 /// Provides `READONLY_SIZE`: the page-aligned byte count of the read-only
 /// region (`.text` + `.rodata`) so the kernel can enforce W^X permissions.
-mod forge_meta {
-    include!("../user_programs/forge/forge_meta.rs");
+mod wm_meta {
+    include!("../user_programs/wm/wm_meta.rs");
 }
 
 entry_point!(kernel_main);
@@ -90,11 +90,11 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     println!("--- Starting Scheduler ---");
 
     // Initialize the preemptive scheduler and spawn the initial process
-    // (the terminal). The scheduler takes ownership of the frame allocator.
+    // (the window manager). The scheduler takes ownership of the frame allocator.
     // This never returns; the timer IRQ drives preemptive multitasking.
     self_rust_os::scheduler::init(phys_mem_offset, frame_allocator);
     #[expect(clippy::expect_used)]
-    self_rust_os::scheduler::spawn_process(USER_FORGE_BIN, forge_meta::READONLY_SIZE)
+    self_rust_os::scheduler::spawn_process(USER_WM_BIN, wm_meta::READONLY_SIZE)
         .expect("Failed to spawn initial process. Reboot required.");
     self_rust_os::scheduler::start();
 }

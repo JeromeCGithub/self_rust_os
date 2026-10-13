@@ -26,6 +26,7 @@ pub const SYS_WRITE_FILE: u64 = 7;
 pub const SYS_SPAWN: u64 = 8;
 pub const SYS_KILL: u64 = 9;
 pub const SYS_WAITPID: u64 = 10;
+pub const SYS_MOUSE: u64 = 11;
 
 /// Return value indicating a failed syscall.
 pub const SYSCALL_ERROR: u64 = u64::MAX - 1;
@@ -210,4 +211,16 @@ pub fn waitpid(pid: u32) -> Result<u64, ()> {
     } else {
         Ok(n)
     }
+}
+
+/// Returns the current mouse state as `(x, y, buttons)`.
+///
+/// `x` in `[0, 320)`, `y` in `[0, 200)`, `buttons`: bit 0 = left,
+/// bit 1 = right, bit 2 = middle.
+pub fn mouse() -> (i32, i32, u8) {
+    let packed = unsafe { syscall(SYS_MOUSE, 0, 0, 0) };
+    let x = (packed & 0xFFFF) as i32;
+    let y = ((packed >> 16) & 0xFFFF) as i32;
+    let buttons = ((packed >> 32) & 0xFF) as u8;
+    (x, y, buttons)
 }

@@ -1,0 +1,22 @@
+[package]
+name = "wm"
+version = "0.1.0"
+edition = "2021"
+description = "Window manager for self_rust_os (user space)."
+license = "MIT OR Apache-2.0"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+
+[dependencies]
+userlib = { path = "../userlib" }
+
+[dependencies.font8x8]
+version = "0.3"
+default-features = false
+features = ["unicode"]
