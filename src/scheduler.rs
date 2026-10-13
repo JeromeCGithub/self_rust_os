@@ -186,6 +186,67 @@ pub fn init(phys_offset: VirtAddr, frame_allocator: RegionFrameAllocator) {
     sched.frame_allocator = Some(frame_allocator);
 }
 
+/// Deep-copies the page-table subtree under `new_p3[0]` (the first GB).
+///
+/// Must be called right after shallow-copying the P3 entries. It replaces
+/// `new_p3[0]`'s P2 — and every present, non-huge P1 beneath it — with
+/// private copies. Kernel low-memory mappings keep pointing at the same
+/// physical frames (sharing is preserved); only the page *tables* become
+/// private, so unmapping/remapping user pages in the new address space
+/// cannot corrupt the source process.
+fn deep_copy_p3_subtree(
+    new_p3: &mut PageTable,
+    allocator: &mut impl FrameAllocator<Size4KiB>,
+    phys_offset: VirtAddr,
+) -> Result<(), &'static str> {
+    use x86_64::structures::paging::page_table::PageTableFlags;
+
+    if !new_p3[0].flags().contains(PageTableFlags::PRESENT)
+        || new_p3[0].flags().contains(PageTableFlags::HUGE_PAGE)
+    {
+        return Ok(());
+    }
+    let cur_p2_frame = new_p3[0].frame().map_err(|_| "P3[0] frame error")?;
+    // SAFETY: The frame is a valid P2, readable via the physical offset mapping.
+    let cur_p2 =
+        unsafe { &*((phys_offset + cur_p2_frame.start_address().as_u64()).as_ptr() as *const PageTable) };
+
+    let new_p2_frame = allocator.allocate_frame().ok_or("failed to allocate P2 copy")?;
+    // SAFETY: Freshly allocated frame, writable via the physical offset mapping.
+    let new_p2 = unsafe {
+        &mut *((phys_offset + new_p2_frame.start_address().as_u64()).as_mut_ptr() as *mut PageTable)
+    };
+    for j in 0..512 {
+        new_p2[j] = cur_p2[j].clone();
+    }
+
+    for j in 0..512 {
+        if !new_p2[j].flags().contains(PageTableFlags::PRESENT)
+            || new_p2[j].flags().contains(PageTableFlags::HUGE_PAGE)
+        {
+            continue;
+        }
+        let cur_p1_frame = new_p2[j].frame().map_err(|_| "P2 entry frame error")?;
+        // SAFETY: The frame is a valid P1, readable via the physical offset mapping.
+        let cur_p1 =
+            unsafe { &*((phys_offset + cur_p1_frame.start_address().as_u64()).as_ptr() as *const PageTable) };
+        let new_p1_frame = allocator.allocate_frame().ok_or("failed to allocate P1 copy")?;
+        // SAFETY: Freshly allocated frame, writable via the physical offset mapping.
+        let new_p1 = unsafe {
+            &mut *((phys_offset + new_p1_frame.start_address().as_u64()).as_mut_ptr() as *mut PageTable)
+        };
+        for k in 0..512 {
+            new_p1[k] = cur_p1[k].clone();
+        }
+        let p2_flags = new_p2[j].flags();
+        new_p2[j].set_frame(new_p1_frame, p2_flags);
+    }
+
+    let p3_flags = new_p3[0].flags();
+    new_p3[0].set_frame(new_p2_frame, p3_flags);
+    Ok(())
+}
+
 /// Creates a new process running the given binary.
 ///
 /// Allocates a fresh address space, maps the binary/stack/framebuffer,
@@ -244,6 +305,15 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
         for i in 0..512 {
             new_p3[i] = cur_p3[i].clone();
         }
+        // Deep-copy P3[0]'s subtree (first GB, home of all user mappings).
+        // The entry copy above is shallow: new P3[0] still points at the
+        // source process's P2, whose P1 tables are shared. Unmapping and
+        // remapping the new process's user pages below would then modify
+        // the source's mappings too (its binary/stack would point at the
+        // new process's frames), corrupting the source process. The deep
+        // copy gives the new process private page tables while keeping the
+        // same physical frames for kernel low-memory mappings.
+        deep_copy_p3_subtree(new_p3, allocator, phys_offset)?;
         let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
         p4_table[0].set_frame(new_p3_frame, flags);
     }
