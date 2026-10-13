@@ -1,206 +1,34 @@
-//! Process loading and user mode execution.
+//! User-space memory mapping primitives.
 //!
-//! This module provides the infrastructure to load a flat binary into
-//! user-accessible memory pages and switch the CPU to Ring 3 for execution.
+//! This module provides functions to map user program binaries, stacks, and
+//! the framebuffer into a page table. Used by the scheduler when creating
+//! new processes with their own address spaces.
 //!
 //! The user binary is expected to be a position-dependent flat binary linked
-//! at [`USER_CODE_START`](super::USER_CODE_START). It is mapped into the current
-//! address space with `USER_ACCESSIBLE` page flags, and a separate user-mode
-//! stack is allocated below [`USER_STACK_TOP`](super::USER_STACK_TOP).
+//! at [`USER_CODE_START`](super::USER_CODE_START).
 
-use core::sync::atomic::AtomicU64;
-
-use alloc::boxed::Box;
-use alloc::vec::Vec;
 use x86_64::{
     structures::paging::{FrameAllocator, Mapper, Page, PageTableFlags, PhysFrame, Size4KiB},
     VirtAddr,
 };
 
-use crate::{gdt, println, serial_println, userspace};
-
-/// Saved kernel RSP before entering user mode.
-///
-/// When [`switch_to_user_mode`] executes `iretq`, the original kernel stack is
-/// abandoned. This static stores the kernel RSP so that the `sys_exit` syscall
-/// handler can restore it and effectively "return" from `switch_to_user_mode`
-/// back to [`run`].
-pub(crate) static KERNEL_RSP: AtomicU64 = AtomicU64::new(0);
-
-/// Maps the user binary into memory and switches the CPU to Ring 3 execution.
-///
-/// This function:
-/// 1. Maps the binary at [`USER_CODE_START`](super::USER_CODE_START) with user-accessible flags.
-///    Pages within the first `readonly_size` bytes are mapped read-only (W^X),
-///    while pages beyond that boundary are mapped writable for `.data`/`.bss`.
-/// 2. Allocates a user-mode stack below [`USER_STACK_TOP`](super::USER_STACK_TOP).
-/// 3. Performs an `iretq` to transition the CPU from Ring 0 to Ring 3.
-///
-/// # Arguments
-///
-/// * `binary` - The raw bytes of the flat user binary.
-/// * `readonly_size` - Number of bytes from the start of the binary that should
-///   be mapped read-only (`.text` + `.rodata`). Must be page-aligned (multiple
-///   of 4096). Pages beyond this offset are mapped writable.
-/// * `mapper` - The active page table mapper.
-/// * `frame_allocator` - A physical frame allocator.
-///
-/// # Errors
-///
-/// Returns an error string if page mapping or frame allocation fails.
-///
-/// # Safety Considerations
-///
-/// This function uses `iretq` to enter user mode and never returns to the caller.
-/// The caller must ensure that the GDT, TSS, and IDT (including the syscall
-/// handler at `int 0x80`) are fully initialized before calling this function.
-pub fn run(
-    binary: &[u8],
-    readonly_size: usize,
-    mapper: &mut impl Mapper<Size4KiB>,
-    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
-) -> Result<(), &'static str> {
-    // Map stack and framebuffer once (they persist across spawn).
-    map_user_stack(mapper, frame_allocator)?;
-    map_user_framebuffer(mapper, frame_allocator)?;
-
-    let mut current_binary: &[u8] = binary;
-    let mut current_readonly = readonly_size;
-    let mut mapped_pages: u64 = 0;
-    let mut is_spawned = false;
-
-    loop {
-        serial_println!("[kernel] loading user binary ({} bytes)...", current_binary.len());
-        println!("[kernel] loading user binary ({} bytes)...", current_binary.len());
-
-        // Unmap the previous binary (if any) before mapping the new one.
-        if mapped_pages > 0 {
-            unmap_user_binary(mapped_pages, mapper)?;
-        }
-        mapped_pages = map_user_binary(current_binary, current_readonly, mapper, frame_allocator)?;
-
-        serial_println!("[kernel] switching to user mode...");
-        println!("[kernel] switching to user mode...");
-
-        let user_cs = gdt::user_code_selector();
-        let user_ds = gdt::user_data_selector();
-
-        // SAFETY:
-        //
-        // The binary has been mapped at USER_CODE_START with USER_ACCESSIBLE pages.
-        // The user stack has been mapped below USER_STACK_TOP.
-        // The GDT contains valid Ring 3 code and data segments.
-        // The TSS has a valid RSP0 for kernel re-entry on interrupts.
-        //
-        // This call does not return until the user process invokes `sys_exit`
-        // or `sys_spawn`, at which point the syscall handler restores the kernel
-        // RSP saved by `switch_to_user_mode` and execution resumes here.
-        unsafe {
-            switch_to_user_mode(
-                userspace::USER_CODE_START,
-                userspace::USER_STACK_TOP,
-                u64::from(user_cs.0),
-                u64::from(user_ds.0),
-            );
-        }
-
-        // User process exited. Check if it requested a spawn.
-        if let Some(path_buf) = super::syscall::take_spawn_request() {
-            let path_len = path_buf.iter().position(|&b| b == 0).unwrap_or(256);
-            let path = core::str::from_utf8(&path_buf[..path_len])
-                .map_err(|_| "invalid spawn path")?;
-            serial_println!("[kernel] spawn requested: {}", path);
-            
-            // Load the program from disk.
-            let program = match load_program_from_disk(path) {
-                Ok(p) => {
-                    serial_println!("[kernel] loaded {} bytes for {}", p.len(), path);
-                    p
-                }
-                Err(e) => {
-                    serial_println!("[kernel] failed to load {}: {}", path, e);
-                    return Err(e);
-                }
-            };
-            // Leak to get 'static lifetime (Phase 1: no process cleanup yet).
-            current_binary = Box::leak(program.into_boxed_slice());
-            current_readonly = 0; // Spawned programs: all pages writable for now.
-            is_spawned = true;
-            // Loop to map and execute the new program.
-        } else if is_spawned {
-            // A spawned program exited without requesting another spawn.
-            // Reload the default shell (forge/terminal).
-            serial_println!("[kernel] spawned program exited, reloading shell");
-            let program = match load_program_from_disk("TERMINAL.BIN") {
-                Ok(p) => p,
-                Err(e) => {
-                    serial_println!("[kernel] failed to reload shell: {}", e);
-                    return Err(e);
-                }
-            };
-            current_binary = Box::leak(program.into_boxed_slice());
-            current_readonly = 0;
-            // Loop to map and execute the shell.
-        } else {
-            serial_println!("[kernel] user process exited, returning to kernel_main");
-            println!("[kernel] user process exited, returning to kernel_main");
-            break;
-        }
-    }
-
-    Ok(())
-}
-
-/// Loads a program binary from the FAT32 filesystem into a Vec.
-///
-/// Returns the binary bytes, or an error if the file cannot be read.
-fn load_program_from_disk(path: &str) -> Result<Vec<u8>, &'static str> {
-    // Max program size: 64 KiB.
-    let mut buf = alloc::vec![0u8; 65536];
-    let n = crate::fs::with_fs(|fs| fs.read_file(path, &mut buf))
-        .ok_or("filesystem not initialized")?
-        .map_err(|_| "failed to read program file")?;
-    
-    if n == 0 {
-        return Err("program file is empty");
-    }
-    
-    buf.truncate(n);
-    Ok(buf)
-}
-
-/// Unmaps `num_pages` starting at USER_CODE_START.
-fn unmap_user_binary(
-    num_pages: u64,
-    mapper: &mut impl Mapper<Size4KiB>,
-) -> Result<(), &'static str> {
-    let start_addr = VirtAddr::new(userspace::USER_CODE_START);
-    for i in 0..num_pages {
-        let page: Page<Size4KiB> = Page::containing_address(start_addr + i * 4096);
-        // SAFETY: The page was mapped by map_user_binary and is in the user range.
-        let (_, flush) = unsafe {
-            mapper.unmap(page).map_err(|_| "failed to unmap user binary page")?
-        };
-        flush.flush();
-    }
-    Ok(())
-}
+use crate::{println, serial_println, userspace};
 
 /// Maps the flat binary bytes into user-accessible pages starting at
 /// [`USER_CODE_START`](super::USER_CODE_START).
 ///
 /// All pages are initially mapped writable so the binary content can be
 /// copied in. After copying, pages within the first `readonly_size` bytes
-/// are remapped as read-only to enforce W^X (Write XOR Execute).
+/// are remapped as read-only to enforce W^X.
+///
+/// Returns the number of pages mapped.
 ///
 /// # Arguments
-///
 /// * `binary` - The raw bytes of the flat user binary.
-/// * `readonly_size` - Page-aligned byte count of the read-only region
-///   (`.text` + `.rodata`). Pages beyond this offset keep `WRITABLE`.
-/// * `mapper` - The active page table mapper.
+/// * `readonly_size` - Page-aligned byte count of the read-only region.
+/// * `mapper` - The page table mapper for the target address space.
 /// * `frame_allocator` - A physical frame allocator.
-fn map_user_binary(
+pub(crate) fn map_user_binary(
     binary: &[u8],
     readonly_size: usize,
     mapper: &mut impl Mapper<Size4KiB>,
@@ -313,7 +141,7 @@ fn map_user_binary(
 /// Allocates and maps user-accessible stack pages in the range
 /// [`USER_STACK_BOTTOM`](super::USER_STACK_BOTTOM) to
 /// [`USER_STACK_TOP`](super::USER_STACK_TOP).
-fn map_user_stack(
+pub(crate) fn map_user_stack(
     mapper: &mut impl Mapper<Size4KiB>,
     frame_allocator: &mut impl FrameAllocator<Size4KiB>,
 ) -> Result<(), &'static str> {
@@ -367,12 +195,10 @@ fn map_user_stack(
     Ok(())
 }
 
-/// Maps the VGA framebuffer into user space.
-///
-/// Maps the 64 KiB physical framebuffer (0xA0000-0xB0000) to
+/// Maps the VGA framebuffer into user space at
 /// [`USER_FRAMEBUFFER`](super::USER_FRAMEBUFFER) with USER_ACCESSIBLE |
 /// WRITABLE so user programs can draw directly to the screen.
-fn map_user_framebuffer(
+pub(crate) fn map_user_framebuffer(
     mapper: &mut impl Mapper<Size4KiB>,
     frame_allocator: &mut impl FrameAllocator<Size4KiB>,
 ) -> Result<(), &'static str> {
@@ -410,97 +236,4 @@ fn map_user_framebuffer(
     );
 
     Ok(())
-}
-
-/// Performs the actual transition from Ring 0 to Ring 3 via `iretq`.
-///
-/// Before executing `iretq`, this function saves all callee-saved registers
-/// and the kernel RSP into [`KERNEL_RSP`]. When the user process calls
-/// `sys_exit`, the syscall handler restores the saved RSP, pops the
-/// callee-saved registers, and executes `ret`, causing this function to
-/// return normally to its caller.
-///
-/// # Arguments
-///
-/// Uses the System V AMD64 calling convention (naked function):
-/// * `rdi` - The virtual address of the user binary entry point.
-/// * `rsi` - The top of the user-mode stack (initial RSP in Ring 3).
-/// * `rdx` - The user code segment selector (with RPL=3).
-/// * `rcx` - The user data segment selector (with RPL=3).
-///
-/// # Safety
-///
-/// The caller must guarantee that:
-/// - `entry_point` points to valid, executable, user-accessible code.
-/// - `user_stack` points to a valid, writable, user-accessible stack region.
-/// - `user_cs` and `user_ds` are valid Ring 3 segment selectors in the GDT.
-/// - The TSS `RSP0` is set to a valid kernel stack for interrupt re-entry.
-///
-/// This function blocks until the user process calls `sys_exit`.
-#[naked]
-unsafe extern "C" fn switch_to_user_mode(
-    _entry_point: u64,
-    _user_stack: u64,
-    _user_cs: u64,
-    _user_ds: u64,
-) {
-    // SAFETY:
-    //
-    // This naked function manually manages the entire stack layout.
-    // On entry (System V AMD64 ABI):
-    //   rdi = entry_point
-    //   rsi = user_stack
-    //   rdx = user_cs
-    //   rcx = user_ds
-    //   [rsp] = return address to caller (process::run)
-    //
-    // We save all callee-saved registers so the caller's state is preserved
-    // when sys_exit restores the kernel RSP and executes `ret`.
-    unsafe {
-        core::arch::naked_asm!(
-            // Save callee-saved registers (System V ABI).
-            "push rbx",
-            "push rbp",
-            "push r12",
-            "push r13",
-            "push r14",
-            "push r15",
-
-            // Save the kernel RSP so sys_exit can restore it later.
-            // After this point, KERNEL_RSP points to the saved r15 on
-            // the original kernel stack.
-            "mov [{kernel_rsp}], rsp",
-
-            // Load user data segment (rcx) into all data segment registers.
-            "mov ax, cx",
-            "mov ds, ax",
-            "mov es, ax",
-            "mov fs, ax",
-            "mov gs, ax",
-
-            // Build an iretq frame on the stack:
-            //   push SS      (user data segment)
-            //   push RSP     (user stack pointer)
-            //   push RFLAGS  (with IF set to enable interrupts)
-            //   push CS      (user code segment)
-            //   push RIP     (user entry point)
-            "push rax",       // SS = user data selector
-            "push rsi",       // RSP = user stack top
-            "pushfq",
-            "pop r11",
-            "or r11, 0x200",  // set IF (Interrupt Flag) so interrupts work in user mode
-            "push r11",       // RFLAGS
-            "push rdx",       // CS = user code selector
-            "push rdi",       // RIP = entry point
-
-            "iretq",
-
-            // Execution never reaches here via iretq.
-            // When sys_exit fires, the syscall handler restores RSP from
-            // KERNEL_RSP, pops r15..rbx, restores kernel segments, and
-            // executes `ret` — which returns to the caller of this function.
-
-            kernel_rsp = sym KERNEL_RSP,
-        );
-    }
 }
