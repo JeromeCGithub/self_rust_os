@@ -34,6 +34,31 @@ pub(crate) fn map_user_binary(
     mapper: &mut impl Mapper<Size4KiB>,
     frame_allocator: &mut impl FrameAllocator<Size4KiB>,
 ) -> Result<u64, &'static str> {
+    map_user_binary_inner(binary, readonly_size, mapper, frame_allocator, None)
+}
+
+/// Maps the user binary, copying content via physical addresses (no CR3 switch needed).
+///
+/// `phys_offset` is the virtual address that maps physical memory (e.g., 0x18000000000).
+/// The binary content is written to `phys_offset + frame.phys_addr` instead of the
+/// virtual page address, so the caller does not need to switch to the new address space.
+pub(crate) fn map_user_binary_via_phys(
+    binary: &[u8],
+    readonly_size: usize,
+    mapper: &mut impl Mapper<Size4KiB>,
+    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+    phys_offset: VirtAddr,
+) -> Result<u64, &'static str> {
+    map_user_binary_inner(binary, readonly_size, mapper, frame_allocator, Some(phys_offset))
+}
+
+fn map_user_binary_inner(
+    binary: &[u8],
+    readonly_size: usize,
+    mapper: &mut impl Mapper<Size4KiB>,
+    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+    phys_offset: Option<VirtAddr>,
+) -> Result<u64, &'static str> {
     assert!(
         readonly_size % 4096 == 0,
         "readonly_size must be page-aligned"
@@ -65,9 +90,15 @@ pub(crate) fn map_user_binary(
         }
 
         // Copy binary content into the mapped page.
+        // If phys_offset is Some, write via physical address (no CR3 switch needed).
+        // Otherwise, write via virtual address (caller must have switched CR3).
         let page_start = (i * 4096) as usize;
         let page_end = core::cmp::min(page_start + 4096, binary.len());
-        let dest_ptr = page.start_address().as_u64() as *mut u8;
+        let dest_ptr = if let Some(po) = phys_offset {
+            (po.as_u64() + frame.start_address().as_u64()) as *mut u8
+        } else {
+            page.start_address().as_u64() as *mut u8
+        };
 
         if page_start < binary.len() {
             let chunk = &binary[page_start..page_end];
@@ -145,6 +176,23 @@ pub(crate) fn map_user_stack(
     mapper: &mut impl Mapper<Size4KiB>,
     frame_allocator: &mut impl FrameAllocator<Size4KiB>,
 ) -> Result<(), &'static str> {
+    map_user_stack_inner(mapper, frame_allocator, None)
+}
+
+/// Maps the user stack, zeroing pages via physical addresses (no CR3 switch needed).
+pub(crate) fn map_user_stack_via_phys(
+    mapper: &mut impl Mapper<Size4KiB>,
+    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+    phys_offset: VirtAddr,
+) -> Result<(), &'static str> {
+    map_user_stack_inner(mapper, frame_allocator, Some(phys_offset))
+}
+
+fn map_user_stack_inner(
+    mapper: &mut impl Mapper<Size4KiB>,
+    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+    phys_offset: Option<VirtAddr>,
+) -> Result<(), &'static str> {
     let flags =
         PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
 
@@ -169,7 +217,12 @@ pub(crate) fn map_user_stack(
         }
 
         // Zero-initialize the stack page.
-        let dest_ptr = page.start_address().as_u64() as *mut u8;
+        // If phys_offset is Some, write via physical address (no CR3 switch needed).
+        let dest_ptr = if let Some(po) = phys_offset {
+            (po.as_u64() + frame.start_address().as_u64()) as *mut u8
+        } else {
+            page.start_address().as_u64() as *mut u8
+        };
 
         // SAFETY:
         //

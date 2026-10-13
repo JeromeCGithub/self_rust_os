@@ -216,41 +216,51 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
     // SAFETY: The frame was just allocated, and phys_offset maps all RAM.
     let p4_table = unsafe { &mut *(p4_virt.as_mut_ptr() as *mut PageTable) };
 
-    // Copy the current P4 (shares kernel mappings).
+    // Copy P4[1..512] (kernel half and everything except P4[0]).
+    // For P4[0] (user half, 0..512GB), allocate a FRESH private P3.
+    // This is critical: P4[0] must not be shared between processes,
+    // otherwise mapping one process's binary corrupts the other's.
     let (cur_frame, _) = Cr3::read();
     let cur_virt = phys_offset + cur_frame.start_address().as_u64();
     // SAFETY: Reading the current P4 via the physical offset mapping.
     let cur_table = unsafe { &*(cur_virt.as_ptr() as *const PageTable) };
-    for i in 0..512 {
+    for i in 1..512 {
         p4_table[i] = cur_table[i].clone();
     }
-    // Note: We keep P4[0] as-is (don't clear). The kernel's P4 doesn't have
-    // user mappings in the new design, so P4[0] is free for our user pages.
-    // (Clearing it caused triple faults — the bootloader may have mappings there.)
+    // Allocate a fresh, zeroed P3 for P4[0].
+    {
+        use x86_64::structures::paging::page_table::PageTableFlags;
+        let new_p3_frame = allocator.allocate_frame().ok_or("failed to allocate P3")?;
+        let new_p3_virt = phys_offset + new_p3_frame.start_address().as_u64();
+        let new_p3 = unsafe { &mut *(new_p3_virt.as_mut_ptr() as *mut PageTable) };
+        new_p3.zero();
+        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
+        p4_table[0].set_frame(new_p3_frame, flags);
+    }
 
     // 2. Create a mapper for the new address space.
     // SAFETY: p4_table is a valid, freshly allocated P4.
     let mut new_mapper = unsafe { OffsetPageTable::new(p4_table, phys_offset) };
 
-    // Switch to the new address space for mapping (so virtual addresses work).
-    // The kernel half is shared, so kernel code/data remain accessible.
-    let (old_p4, _) = Cr3::read();
-    unsafe { Cr3::write(p4_frame, Cr3Flags::empty()); }
-
-    // 3. Map user binary, stack, and framebuffer.
-    // (Reuse the existing mapping functions from process.rs)
+    // 3. Map user binary, stack, and framebuffer into the new P4.
+    // We do NOT switch CR3 here. The mapper writes page tables via p4_table
+    // (virtual address, valid in current address space). Binary content is
+    // copied via physical addresses (phys_offset + frame).
     let map_result = (|| {
-        crate::userspace::process::map_user_binary(binary, readonly_size, &mut new_mapper, allocator)
-            .map_err(|_| "failed to map user binary")?;
-        crate::userspace::process::map_user_stack(&mut new_mapper, allocator)
+        crate::userspace::process::map_user_binary_via_phys(
+            binary,
+            readonly_size,
+            &mut new_mapper,
+            allocator,
+            phys_offset,
+        )
+        .map_err(|_| "failed to map user binary")?;
+        crate::userspace::process::map_user_stack_via_phys(&mut new_mapper, allocator, phys_offset)
             .map_err(|_| "failed to map user stack")?;
         crate::userspace::process::map_user_framebuffer(&mut new_mapper, allocator)
             .map_err(|_| "failed to map framebuffer")?;
         Ok::<(), &'static str>(())
     })();
-
-    // Switch back to the original address space.
-    unsafe { Cr3::write(old_p4, Cr3Flags::empty()); }
     map_result?;
 
     // 4. Allocate a kernel stack from the heap.
