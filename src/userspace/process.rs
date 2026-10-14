@@ -85,7 +85,23 @@ fn map_user_binary_inner(
         unsafe {
             mapper
                 .map_to(page, frame, writable_flags, frame_allocator)
-                .map_err(|_| "failed to map user binary page")?
+                .map_err(|e| {
+                    // Log the specific error for debugging. The `e` is a
+                    // MapToError; we match on it to give a useful message.
+                    use x86_64::structures::paging::mapper::MapToError;
+                    let reason = match e {
+                        MapToError::FrameAllocationFailed => "frame allocation failed",
+                        MapToError::PageAlreadyMapped(_) => "page already mapped",
+                        MapToError::ParentEntryHugePage => "parent entry is huge page",
+                    };
+                    crate::serial_println!(
+                        "[process] map_user_binary: failed to map page {} (virt {:#x}): {}",
+                        i,
+                        page.start_address().as_u64(),
+                        reason
+                    );
+                    "failed to map user binary page"
+                })?
                 .flush();
         }
 

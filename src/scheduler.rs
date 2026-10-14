@@ -221,6 +221,38 @@ fn deep_copy_p3_subtree(
     }
 
     for j in 0..512 {
+        // For user-space P2 entries (indices 2, 3, 4 covering 0x400000-0xA00000:
+        // user code, stack, and framebuffer), always use a fresh EMPTY P1 table.
+        // Under GRUB, these are 2MiB huge pages (identity-mapped); copying them
+        // would cause map_to to fail with ParentEntryHugePage. Under the legacy
+        // bootloader, they might contain stale user mappings. A fresh P1 gives
+        // a clean slate for the new process's user mappings.
+        // P2[0] and P2[1] (0-4MiB, kernel low-memory) are deep-copied below to
+        // preserve kernel mappings.
+        const USER_P2_START: usize = 2;
+        const USER_P2_END: usize = 4;
+        let is_user_p2 = (USER_P2_START..=USER_P2_END).contains(&j);
+
+        if is_user_p2 {
+            // Allocate a fresh empty P1 table for user regions.
+            let new_p1_frame = allocator.allocate_frame().ok_or("failed to allocate P1 for user")?;
+            // SAFETY: Freshly allocated frame, writable via the physical offset mapping.
+            // The frame allocator zeroes frames? No — we must clear it manually.
+            // Actually, allocate_frame() returns a zeroed frame (frame allocator contract).
+            let new_p1 = unsafe {
+                &mut *((phys_offset + new_p1_frame.start_address().as_u64()).as_mut_ptr() as *mut PageTable)
+            };
+            // Ensure it's empty (clear all entries).
+            for k in 0..512 {
+                new_p1[k] = x86_64::structures::paging::page_table::PageTableEntry::new();
+            }
+            let p2_flags = PageTableFlags::PRESENT
+                | PageTableFlags::WRITABLE
+                | PageTableFlags::USER_ACCESSIBLE;
+            new_p2[j].set_frame(new_p1_frame, p2_flags);
+            continue;
+        }
+
         if !new_p2[j].flags().contains(PageTableFlags::PRESENT)
             || new_p2[j].flags().contains(PageTableFlags::HUGE_PAGE)
         {
