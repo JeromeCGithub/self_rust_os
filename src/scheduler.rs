@@ -221,16 +221,18 @@ fn deep_copy_p3_subtree(
     }
 
     for j in 0..512 {
-        // For user-space P2 entries (indices 2, 3, 4 covering 0x400000-0xA00000:
+        // For user-space P2 entries (indices 2-6 covering 0x400000-0xE00000:
         // user code, stack, and framebuffer), always use a fresh EMPTY P1 table.
         // Under GRUB, these are 2MiB huge pages (identity-mapped); copying them
         // would cause map_to to fail with ParentEntryHugePage. Under the legacy
         // bootloader, they might contain stale user mappings. A fresh P1 gives
         // a clean slate for the new process's user mappings.
+        // Note: the 720p framebuffer (0x900000 + 3.7MB = 0xC84000) extends into
+        // P2[5] and P2[6], so we must cover them too.
         // P2[0] and P2[1] (0-4MiB, kernel low-memory) are deep-copied below to
         // preserve kernel mappings.
         const USER_P2_START: usize = 2;
-        const USER_P2_END: usize = 4;
+        const USER_P2_END: usize = 6;
         let is_user_p2 = (USER_P2_START..=USER_P2_END).contains(&j);
 
         if is_user_p2 {
