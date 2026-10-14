@@ -5,3 +5,10 @@ version = 4
 [[package]]
 name = "snake"
 version = "0.1.0"
+dependencies = [
+ "userlib",
+]
+
+[[package]]
+name = "userlib"
+version = "0.1.0"
