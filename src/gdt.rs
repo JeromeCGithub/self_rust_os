@@ -46,6 +46,25 @@ pub fn user_data_selector() -> SegmentSelector {
     GDT.1.user_data_selector
 }
 
+/// Updates the TSS RSP0 (kernel stack for Ring 3 -> Ring 0 transitions).
+///
+/// Called on every context switch to point RSP0 at the new process's kernel
+/// stack. Interrupts must be disabled during the switch.
+///
+/// # Safety
+/// The caller must ensure `top` points to a valid kernel stack, and that no
+/// interrupt can occur while the TSS is being updated.
+pub fn set_kernel_stack(top: VirtAddr) {
+    // SAFETY: Interrupts are disabled during context switches, so no
+    // concurrent access to the TSS can occur. The TSS lazy_static is
+    // already initialized (GDT::init ran at boot).
+    unsafe {
+        let tss_ref: &TaskStateSegment = &TSS;
+        let tss_ptr = tss_ref as *const TaskStateSegment as *mut TaskStateSegment;
+        (*tss_ptr).privilege_stack_table[0] = top;
+    }
+}
+
 lazy_static! {
     static ref TSS: TaskStateSegment = {
         let mut tss = TaskStateSegment::new();

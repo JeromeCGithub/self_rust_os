@@ -24,6 +24,8 @@ pub const SYS_LS: u64 = 5;
 pub const SYS_READ_FILE: u64 = 6;
 pub const SYS_WRITE_FILE: u64 = 7;
 pub const SYS_SPAWN: u64 = 8;
+pub const SYS_KILL: u64 = 9;
+pub const SYS_WAITPID: u64 = 10;
 
 /// Return value indicating a failed syscall.
 pub const SYSCALL_ERROR: u64 = u64::MAX - 1;
@@ -165,11 +167,11 @@ pub fn write_file(path: &str, data: &[u8]) -> Option<usize> {
     }
 }
 
-/// Loads and executes a program from disk, replacing the current process.
+/// Creates a new process running the program at the given path.
 ///
-/// Takes a path like `/SNAKE.BIN`. Does not return on success. If the
-/// program cannot be loaded, returns (the caller continues running).
-pub fn spawn(path: &str) -> Result<(), ()> {
+/// Takes a path like `/SNAKE.BIN`. Returns the new process's PID.
+/// The caller keeps running; the new process is scheduled preemptively.
+pub fn spawn(path: &str) -> Result<u32, ()> {
     let path_buf = path_buf(path).ok_or(())?;
     let n = unsafe {
         syscall(
@@ -179,12 +181,33 @@ pub fn spawn(path: &str) -> Result<(), ()> {
             0,
         )
     };
-    // sys_spawn does not return on success (it replaces the process).
-    // If we're here, it failed.
     if n == SYSCALL_ERROR {
         Err(())
     } else {
-        // Should not happen, but treat as failure.
+        Ok(n as u32)
+    }
+}
+
+/// Terminates the process with the given PID.
+///
+/// Returns 0 on success, or an error if the PID is invalid.
+pub fn kill(pid: u32) -> Result<(), ()> {
+    let n = unsafe { syscall(SYS_KILL, pid as u64, 0, 0) };
+    if n == SYSCALL_ERROR {
         Err(())
+    } else {
+        Ok(())
+    }
+}
+
+/// Waits for the process with the given PID to exit.
+///
+/// Blocks until the target exits, then reaps it and returns its exit code.
+pub fn waitpid(pid: u32) -> Result<u64, ()> {
+    let n = unsafe { syscall(SYS_WAITPID, pid as u64, 0, 0) };
+    if n == SYSCALL_ERROR {
+        Err(())
+    } else {
+        Ok(n)
     }
 }
