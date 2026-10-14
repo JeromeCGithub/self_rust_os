@@ -60,20 +60,31 @@ pub(crate) const STATUS_MOUSE_DATA: u8 = 0x20;
 /// Status register bit: set if the output buffer holds a byte to read.
 pub(crate) const STATUS_OUTPUT_READY: u8 = STATUS_OUTPUT_FULL;
 
-/// Screen bounds for the cursor (VGA mode 13h).
-const SCREEN_WIDTH: i32 = gfx::WIDTH as i32;
-const SCREEN_HEIGHT: i32 = gfx::HEIGHT as i32;
+/// Screen bounds for the cursor. These are dynamic now (from FbInfo),
+/// so we query them at runtime instead of using compile-time consts.
 
 /// Number of port-poll iterations before giving up (avoids hanging if the
 /// controller or mouse is absent).
 const PORT_TIMEOUT: u32 = 100_000;
 
+/// Returns the screen width from the framebuffer info.
+/// Falls back to 1280 (720p) if the framebuffer is not initialized (unit tests).
+fn screen_width() -> i32 {
+    gfx::try_fb_info().map(|info| info.width as i32).unwrap_or(1280)
+}
+
+/// Returns the screen height from the framebuffer info.
+/// Falls back to 720 (720p) if the framebuffer is not initialized (unit tests).
+fn screen_height() -> i32 {
+    gfx::try_fb_info().map(|info| info.height as i32).unwrap_or(720)
+}
+
 /// Cursor position and button state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MouseState {
-    /// Cursor X, clamped to `[0, SCREEN_WIDTH)`.
+    /// Cursor X, clamped to `[0, screen_width)`.
     pub x: i32,
-    /// Cursor Y, clamped to `[0, SCREEN_HEIGHT)` (positive-down).
+    /// Cursor Y, clamped to `[0, screen_height)` (positive-down).
     pub y: i32,
     /// Buttons: bit 0 = left, bit 1 = right, bit 2 = middle.
     pub buttons: u8,
@@ -100,10 +111,11 @@ struct MouseDevice {
 impl MouseDevice {
     const fn new() -> Self {
         Self {
-            // Start the cursor in the center of the screen.
+            // Start the cursor at a reasonable default; it will be clamped
+            // to the actual screen size on first movement.
             state: MouseState {
-                x: SCREEN_WIDTH / 2,
-                y: SCREEN_HEIGHT / 2,
+                x: 640,
+                y: 360,
                 buttons: 0,
             },
             packet: [0; 3],
@@ -179,8 +191,12 @@ pub(crate) fn handle_byte(byte: u8) {
         dev.packet_index = 0;
         if let Some(ev) = parse_packet(dev.packet) {
             // PS/2 Y is positive-up; screen Y is positive-down.
-            dev.state.x = (dev.state.x + i32::from(ev.dx)).clamp(0, SCREEN_WIDTH - 1);
-            dev.state.y = (dev.state.y - i32::from(ev.dy)).clamp(0, SCREEN_HEIGHT - 1);
+            // At 720p, apply a sensitivity multiplier (2x) so the cursor
+            // doesn't feel sluggish covering 4x the pixels.
+            let dx = i32::from(ev.dx) * 2;
+            let dy = i32::from(ev.dy) * 2;
+            dev.state.x = (dev.state.x + dx).clamp(0, screen_width() - 1);
+            dev.state.y = (dev.state.y - dy).clamp(0, screen_height() - 1);
             dev.state.buttons = ev.buttons;
         }
     }
@@ -314,7 +330,7 @@ fn wait_read_ready() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{handle_byte, parse_packet, MouseEvent, SCREEN_HEIGHT, SCREEN_WIDTH};
+    use super::{handle_byte, parse_packet, screen_height, screen_width, MouseEvent};
 
     #[test_case]
     fn test_parse_packet_basic_movement() {
@@ -378,7 +394,7 @@ mod tests {
             }
         }
         let (x, _) = super::position();
-        assert_eq!(x, SCREEN_WIDTH - 1);
+        assert_eq!(x, screen_width() - 1);
 
         // Send dy=+200 (up): cursor must clamp to the top edge (y=0),
         // since PS/2 up-positive maps to screen up = decreasing y.
@@ -418,7 +434,6 @@ mod tests {
         let (x0, _) = super::position();
         handle_byte(0x00);
         let (x1, _) = super::position();
-        assert_eq!(x1, (x0 + 10).min(SCREEN_WIDTH - 1));
-        let _ = SCREEN_HEIGHT;
+        assert_eq!(x1, (x0 + 20).min(screen_width() - 1));
     }
 }

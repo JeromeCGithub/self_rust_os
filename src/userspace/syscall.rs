@@ -62,6 +62,10 @@ pub const SYS_MOUSE: u64 = 11;
 /// Syscall number for `sys_mkdir`: creates a directory (with parents).
 pub const SYS_MKDIR: u64 = 12;
 
+/// Syscall number for `sys_fb_info`: returns framebuffer geometry.
+/// Writes (width, height, pitch, bpp) as four u64 values to the user buffer.
+pub const SYS_FB_INFO: u64 = 13;
+
 /// Sentinel: the current process has exited, schedule another (don't save context).
 const PROCESS_EXIT_SENTINEL: u64 = u64::MAX;
 
@@ -235,6 +239,7 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
         SYS_WAITPID => sys_waitpid(arg1),
         SYS_MOUSE => sys_mouse(),
         SYS_MKDIR => sys_mkdir(arg1),
+        SYS_FB_INFO => sys_fb_info(arg1),
         _ => {
             serial_println!("[kernel] unknown syscall number: {}", num);
             println!("[kernel] unknown syscall number: {}", num);
@@ -529,6 +534,26 @@ fn sys_mkdir(path_ptr: u64) -> u64 {
             SYSCALL_ERROR
         }
     }
+}
+
+/// Returns framebuffer geometry to user space.
+///
+/// Writes four u64 values to the user buffer at `buf_ptr`:
+/// (width, height, pitch, bpp). Returns 0 on success, SYSCALL_ERROR on failure.
+fn sys_fb_info(buf_ptr: u64) -> u64 {
+    if !validate_user_buffer(buf_ptr, 32) {
+        return SYSCALL_ERROR;
+    }
+    let info = crate::gfx::fb_info();
+    // SAFETY: Buffer validated above; 32 bytes for 4 u64 values.
+    unsafe {
+        let buf = buf_ptr as *mut u64;
+        buf.write(info.width as u64);
+        buf.add(1).write(info.height as u64);
+        buf.add(2).write(info.pitch as u64);
+        buf.add(3).write(info.bpp as u64);
+    }
+    0
 }
 
 /// Reads a file by path into a user buffer.

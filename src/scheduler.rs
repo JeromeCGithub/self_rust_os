@@ -50,7 +50,7 @@ use x86_64::{
     PhysAddr, VirtAddr,
 };
 
-use crate::{gdt, memory::BootInfoFrameAllocator, userspace};
+use crate::{gdt, memory::RegionFrameAllocator, userspace};
 
 /// Process identifier. PIDs are allocated sequentially starting from 0.
 pub type Pid = u32;
@@ -151,7 +151,7 @@ pub struct Scheduler {
     /// Physical memory offset (for page table manipulation), as raw u64.
     phys_offset: u64,
     /// Frame allocator (for new address spaces).
-    frame_allocator: Option<BootInfoFrameAllocator>,
+    frame_allocator: Option<crate::memory::RegionFrameAllocator>,
 }
 
 impl Scheduler {
@@ -180,7 +180,7 @@ static TICKS_SINCE_SWITCH: AtomicU64 = AtomicU64::new(0);
 /// # Arguments
 /// * `phys_offset` - Physical memory offset for page table access.
 /// * `frame_allocator` - Frame allocator for new address spaces.
-pub fn init(phys_offset: VirtAddr, frame_allocator: BootInfoFrameAllocator) {
+pub fn init(phys_offset: VirtAddr, frame_allocator: RegionFrameAllocator) {
     let mut sched = SCHEDULER.lock();
     sched.phys_offset = phys_offset.as_u64();
     sched.frame_allocator = Some(frame_allocator);

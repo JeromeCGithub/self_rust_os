@@ -28,6 +28,7 @@ pub const SYS_KILL: u64 = 9;
 pub const SYS_WAITPID: u64 = 10;
 pub const SYS_MOUSE: u64 = 11;
 pub const SYS_MKDIR: u64 = 12;
+pub const SYS_FB_INFO: u64 = 13;
 
 /// Return value indicating a failed syscall.
 pub const SYSCALL_ERROR: u64 = u64::MAX - 1;
@@ -181,6 +182,36 @@ pub fn mkdir(path: &str) -> Result<(), ()> {
         Err(())
     } else {
         Ok(())
+    }
+}
+
+/// Framebuffer geometry returned by [`fb_info`].
+#[derive(Debug, Clone, Copy)]
+pub struct FbInfo {
+    /// Width in pixels.
+    pub width: usize,
+    /// Height in pixels.
+    pub height: usize,
+    /// Bytes per scanline.
+    pub pitch: usize,
+    /// Bits per pixel (32).
+    pub bpp: usize,
+}
+
+/// Returns the framebuffer geometry (width, height, pitch, bpp).
+/// User programs must use this instead of hardcoding dimensions.
+pub fn fb_info() -> Result<FbInfo, ()> {
+    let mut buf = [0u64; 4];
+    let n = unsafe { syscall(SYS_FB_INFO, buf.as_mut_ptr() as u64, 0, 0) };
+    if n == SYSCALL_ERROR {
+        Err(())
+    } else {
+        Ok(FbInfo {
+            width: buf[0] as usize,
+            height: buf[1] as usize,
+            pitch: buf[2] as usize,
+            bpp: buf[3] as usize,
+        })
     }
 }
 

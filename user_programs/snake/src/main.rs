@@ -10,22 +10,25 @@
 
 use userlib::{println, sys};
 
-/// Framebuffer mapped at 0x90_0000 (320x200, 8-bit color).
+/// Framebuffer mapped at 0x90_0000 (32bpp).
 const FB_ADDR: usize = 0x90_0000;
-const FB_WIDTH: usize = 320;
-const FB_HEIGHT: usize = 200;
 
-/// Game grid: 40x25 cells of 8x8 pixels.
-const GRID_W: usize = 40;
-const GRID_H: usize = 25;
-const CELL: usize = 8;
+/// Global framebuffer geometry (set at startup).
+static mut FB_WIDTH: usize = 1280;
+static mut FB_HEIGHT: usize = 720;
+static mut FB_PITCH: usize = 1280 * 4;
 
-/// Colors (VGA palette indices).
-const BLACK: u8 = 0;
-const GREEN: u8 = 2;
-const RED: u8 = 4;
-const WHITE: u8 = 15;
-const DARK_GREEN: u8 = 10;
+/// Game grid: scaled for 720p. 80x45 cells of 16x16 pixels.
+const GRID_W: usize = 80;
+const GRID_H: usize = 45;
+const CELL: usize = 16;
+
+/// Colors (32-bit XRGB).
+const BLACK: u32 = 0x000000;
+const GREEN: u32 = 0x00FF00;
+const RED: u32 = 0xFF0000;
+const WHITE: u32 = 0xFFFFFF;
+const DARK_GREEN: u32 = 0x008800;
 
 /// Ticks per move (PIT at ~18.2 Hz; 4 ticks ≈ 220ms).
 const MOVE_TICKS: u64 = 4;
@@ -39,17 +42,18 @@ fn read_nb() -> Option<u8> {
     }
 }
 
-/// Sets a pixel in the framebuffer.
-fn set_pixel(x: usize, y: usize, color: u8) {
-    if x < FB_WIDTH && y < FB_HEIGHT {
-        unsafe {
-            core::ptr::write((FB_ADDR + y * FB_WIDTH + x) as *mut u8, color);
+/// Sets a pixel in the framebuffer (32bpp).
+fn set_pixel(x: usize, y: usize, color: u32) {
+    unsafe {
+        if x < FB_WIDTH && y < FB_HEIGHT {
+            let offset = y * FB_PITCH + x * 4;
+            core::ptr::write((FB_ADDR + offset) as *mut u32, color);
         }
     }
 }
 
 /// Fills a rectangle.
-fn fill_rect(x: usize, y: usize, w: usize, h: usize, color: u8) {
+fn fill_rect(x: usize, y: usize, w: usize, h: usize, color: u32) {
     for dy in 0..h {
         for dx in 0..w {
             set_pixel(x + dx, y + dy, color);
@@ -58,9 +62,13 @@ fn fill_rect(x: usize, y: usize, w: usize, h: usize, color: u8) {
 }
 
 /// Clears the screen.
-fn clear(color: u8) {
+fn clear(color: u32) {
     unsafe {
-        core::ptr::write_bytes(FB_ADDR as *mut u8, color, FB_WIDTH * FB_HEIGHT);
+        for y in 0..FB_HEIGHT {
+            for x in 0..FB_WIDTH {
+                set_pixel(x, y, color);
+            }
+        }
     }
 }
 
@@ -97,18 +105,16 @@ impl Game {
             score: 0,
             seed: 12345,
         };
-        // Initial snake in the middle.
         for i in 0..3 {
             g.snake[i] = Pos {
-                x: 20 - i,
-                y: 12,
+                x: 40 - i,
+                y: 22,
             };
         }
         g.place_food();
         g
     }
 
-    /// Simple LCG for food placement.
     fn rand(&mut self) -> usize {
         self.seed = self.seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         (self.seed >> 32) as usize
@@ -118,7 +124,6 @@ impl Game {
         loop {
             let x = self.rand() % GRID_W;
             let y = self.rand() % GRID_H;
-            // Don't place on snake.
             let mut on_snake = false;
             for i in 0..self.len {
                 if self.snake[i].x == x && self.snake[i].y == y {
@@ -134,7 +139,6 @@ impl Game {
     }
 
     fn update(&mut self) -> bool {
-        // Returns false on collision (game over).
         let head = self.snake[0];
         let new_head = match self.dir {
             Dir::Up => Pos {
@@ -155,25 +159,21 @@ impl Game {
             },
         };
 
-        // Wall collision.
         if new_head.x >= GRID_W || new_head.y >= GRID_H {
             return false;
         }
 
-        // Self collision.
         for i in 0..self.len {
             if self.snake[i].x == new_head.x && self.snake[i].y == new_head.y {
                 return false;
             }
         }
 
-        // Move snake.
         for i in (1..self.len).rev() {
             self.snake[i] = self.snake[i - 1];
         }
         self.snake[0] = new_head;
 
-        // Eat food?
         if new_head.x == self.food.x && new_head.y == self.food.y {
             if self.len < 100 {
                 self.len += 1;
@@ -188,7 +188,6 @@ impl Game {
     fn draw(&self) {
         clear(BLACK);
 
-        // Draw food.
         fill_rect(
             self.food.x * CELL,
             self.food.y * CELL,
@@ -197,7 +196,6 @@ impl Game {
             RED,
         );
 
-        // Draw snake.
         for i in 0..self.len {
             let color = if i == 0 { GREEN } else { DARK_GREEN };
             fill_rect(
@@ -209,14 +207,15 @@ impl Game {
             );
         }
 
-        // Draw border.
-        for x in 0..FB_WIDTH {
-            set_pixel(x, 0, WHITE);
-            set_pixel(x, FB_HEIGHT - 1, WHITE);
-        }
-        for y in 0..FB_HEIGHT {
-            set_pixel(0, y, WHITE);
-            set_pixel(FB_WIDTH - 1, y, WHITE);
+        unsafe {
+            for x in 0..FB_WIDTH {
+                set_pixel(x, 0, WHITE);
+                set_pixel(x, FB_HEIGHT - 1, WHITE);
+            }
+            for y in 0..FB_HEIGHT {
+                set_pixel(0, y, WHITE);
+                set_pixel(FB_WIDTH - 1, y, WHITE);
+            }
         }
     }
 }
@@ -224,14 +223,22 @@ impl Game {
 /// Entry point called by `userlib`'s runtime after `_start`.
 #[no_mangle]
 pub extern "C" fn user_main() {
-    println!("Snake game starting...");
+    println!("Snake game starting (720p)...");
     println!("Controls: WASD / Arrows, Q to quit");
+
+    // Get framebuffer geometry.
+    if let Ok(info) = sys::fb_info() {
+        unsafe {
+            FB_WIDTH = info.width;
+            FB_HEIGHT = info.height;
+            FB_PITCH = info.pitch;
+        }
+    }
 
     let mut game = Game::new();
     let mut last_move = sys::ticks();
 
     loop {
-        // Non-blocking input.
         while let Some(c) = read_nb() {
             match c {
                 b'w' | b'W' => {
@@ -262,16 +269,13 @@ pub extern "C" fn user_main() {
             }
         }
 
-        // Game tick.
         let now = sys::ticks();
         if now.wrapping_sub(last_move) >= MOVE_TICKS {
             last_move = now;
             if !game.update() {
-                // Game over.
                 clear(BLACK);
                 println!("Game Over! Score: {}", game.score);
-                // Wait a bit then exit.
-                let end = sys::ticks() + 36; // ~2 seconds.
+                let end = sys::ticks() + 36;
                 while sys::ticks() < end {}
                 sys::exit(0);
             }

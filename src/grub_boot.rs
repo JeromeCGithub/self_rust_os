@@ -204,16 +204,32 @@ pub extern "C" fn grub_entry_rust(magic: u64, info_ptr: u64) -> ! {
         fb.addr,
         fb.pitch
     );
-    // GRUB 2.12 cannot reliably provide a graphics framebuffer via Multiboot2
-    // (the framebuffer request header tag corrupts its heap, and gfxpayload
-    // does not apply without the tag), so the kernel programs VGA mode 13h
-    // (320x200x8) directly. The framebuffer is then at physical 0xA0000.
-    //
-    // SAFETY: We are in ring 0 with I/O port access during early boot.
-    unsafe {
-        self_rust_os::gfx::set_vga_mode_13h();
+
+    // Validate the framebuffer: we need 32bpp RGB.
+    if fb.bpp != 32 {
+        serial_println!("[grub] FATAL: framebuffer bpp={} (expected 32)", fb.bpp);
+        self_rust_os::hlt_loop();
     }
-    serial_println!("[grub] VGA mode 13h set: 320x200x8 at 0xa0000");
+    if fb.fb_type != 1 {
+        serial_println!("[grub] FATAL: framebuffer type={} (expected 1=RGB)", fb.fb_type);
+        self_rust_os::hlt_loop();
+    }
+
+    // Construct FbInfo from the Multiboot2 framebuffer tag.
+    let fb_info = self_rust_os::gfx::FbInfo {
+        addr: fb.addr,
+        width: fb.width as usize,
+        height: fb.height as usize,
+        pitch: fb.pitch as usize,
+        bpp: fb.bpp,
+    };
+    serial_println!(
+        "[grub] FbInfo: {}x{} pitch={} addr={:#x}",
+        fb_info.width,
+        fb_info.height,
+        fb_info.pitch,
+        fb_info.addr
+    );
 
     // Reserve the kernel image itself: the firmware memory map may mark it
     // as available RAM, so clamp every region to start after `__kernel_end`.
@@ -244,17 +260,18 @@ pub extern "C" fn grub_entry_rust(magic: u64, info_ptr: u64) -> ! {
         count
     );
 
-    // Map all RAM at the higher-half offset, plus the kernel image and VGA
-    // framebuffer. The kernel image (0..kernel_end) must be mapped because
+    // Map all RAM at the higher-half offset, plus the kernel image.
+    // The kernel image (0..kernel_end) must be mapped because
     // the active P4 page table lives inside it; `memory::init` accesses the
-    // P4 through the offset. Mode 13h uses physical 0xA0000..0xB0000.
-    const VGA_FB_START: u64 = 0xA0000;
-    const VGA_FB_END: u64 = 0xB0000;
+    // P4 through the offset.
+    //
+    // NOTE: The linear framebuffer (e.g. at 0xE0000000) is NOT mapped here
+    // because it's MMIO above RAM top. It will be mapped explicitly below.
     // SAFETY: Identity mapping is active; tables live below 1 GiB.
     let mapped = unsafe {
         boot::map_all_physical_memory(
             &SAVED_REGIONS[..SAVED_REGION_COUNT],
-            &[(0, kernel_end), (VGA_FB_START, VGA_FB_END)],
+            &[(0, kernel_end)],
         )
     };
     serial_println!(
@@ -273,14 +290,60 @@ pub extern "C" fn grub_entry_rust(magic: u64, info_ptr: u64) -> ! {
         unsafe { &SAVED_REGIONS[..SAVED_REGION_COUNT] };
     let mut frame_allocator = unsafe { memory::RegionFrameAllocator::new(regions) };
 
+    // Explicitly map the linear framebuffer. It's at a high MMIO address
+    // (e.g. 0xE0000000), not covered by the RAM mapping above.
+    // Size: width * height * 4 bytes (32bpp). For 1280x720: 3,686,400 bytes.
+    let fb_size = (fb_info.height * fb_info.pitch) as u64;
+    let fb_pages = (fb_size + 4095) / 4096;
+    serial_println!(
+        "[grub] mapping framebuffer: {} pages at phys {:#x}",
+        fb_pages,
+        fb_info.addr
+    );
+
+    // Choose a virtual address for the framebuffer: use the physical memory
+    // offset + a high address, or a dedicated region. For simplicity, map it
+    // at PHYS_MEM_OFFSET + fb.addr (if within mapped range) OR allocate
+    // a new virtual region.
+    //
+    // Actually, the simplest: map it at a fixed high virtual address.
+    // Let's use 0xFFFF_9000_0000_0000 as the framebuffer virtual base.
+    const FB_VIRT_BASE: u64 = 0xFFFF_9000_0000_0000;
+    let fb_virt_addr = VirtAddr::new(FB_VIRT_BASE);
+
+    {
+        use x86_64::structures::paging::{Page, PhysFrame, Mapper, Size4KiB, PageTableFlags};
+        let mut page = Page::<Size4KiB>::containing_address(fb_virt_addr);
+        let mut frame = PhysFrame::<Size4KiB>::containing_address(
+            x86_64::PhysAddr::new(fb_info.addr)
+        );
+        let flags = PageTableFlags::PRESENT
+            | PageTableFlags::WRITABLE
+            | PageTableFlags::NO_CACHE;
+        for _ in 0..fb_pages {
+            // SAFETY: Mapping MMIO framebuffer; not RAM, so no allocator needed.
+            unsafe {
+                mapper
+                    .map_to(page, frame, flags, &mut frame_allocator)
+                    .expect("failed to map framebuffer page")
+                    .flush();
+            }
+            page += 1;
+            frame += 1;
+        }
+    }
+    serial_println!(
+        "[grub] framebuffer mapped at virt {:#x}",
+        FB_VIRT_BASE
+    );
+
     // From here on, this is the same bring-up as the legacy boot path.
-    // The framebuffer is the VGA mode 13h buffer at physical 0xA0000.
+    // SAFETY: run_kernel is defined in entry_point.rs (crate root for grub feature).
     crate::run_kernel(
         &mut mapper,
-        &mut frame_allocator,
+        frame_allocator,
         phys_mem_offset,
-        self_rust_os::gfx::FRAMEBUFFER_PHYS_ADDR,
-        self_rust_os::gfx::WIDTH,
-        self_rust_os::gfx::HEIGHT,
+        fb_info,
+        fb_virt_addr,
     )
 }

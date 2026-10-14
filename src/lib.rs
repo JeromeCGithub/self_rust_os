@@ -43,10 +43,12 @@ pub mod userspace;
 ///
 /// Initializes the graphics framebuffer + text console first (so `println!`
 /// works), then the GDT, IDT, and PICs. Must be called once at boot with the
-/// physical memory offset from the bootloader, the physical address of the
-/// linear framebuffer, and its dimensions in pixels.
-pub fn init(phys_mem_offset: x86_64::VirtAddr, fb_phys_addr: u64, fb_width: usize, fb_height: usize) {
-    gfx::init(phys_mem_offset, fb_phys_addr, fb_width, fb_height);
+/// physical memory offset from the bootloader and the framebuffer info.
+pub fn init(phys_mem_offset: x86_64::VirtAddr, fb_info: gfx::FbInfo, fb_virt_addr: x86_64::VirtAddr) {
+    // SAFETY: fb_virt_addr must point to mapped framebuffer memory.
+    unsafe {
+        gfx::init(fb_info, fb_virt_addr);
+    }
     console::init();
 
     gdt::init();
@@ -73,11 +75,21 @@ entry_point!(test_kernel_main);
 #[cfg(test)]
 fn test_kernel_main(boot_info: &'static BootInfo) -> ! {
     let phys_mem_offset = x86_64::VirtAddr::new(boot_info.physical_memory_offset);
+    // For unit tests, use a dummy framebuffer info. The actual framebuffer
+    // is not mapped in the test environment.
+    let fb_info = gfx::FbInfo {
+        addr: 0xA0000,
+        width: 320,
+        height: 200,
+        pitch: 320 * 4,
+        bpp: 32,
+    };
+    // SAFETY: In tests, we don't actually draw to the framebuffer.
+    // This is just to satisfy the init signature.
     init(
         phys_mem_offset,
-        gfx::FRAMEBUFFER_PHYS_ADDR,
-        gfx::WIDTH,
-        gfx::HEIGHT,
+        fb_info,
+        x86_64::VirtAddr::new(0xFFFF_8000_000A_0000),
     );
 
     // Set up paging and the heap so unit tests can use `alloc`.

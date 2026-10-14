@@ -57,6 +57,11 @@ pub struct FrameBuffer {
     pitch: usize,
 }
 
+// SAFETY: The framebuffer is a singleton accessed via a Mutex.
+// The raw pointer is only dereferenced within the Mutex guard.
+unsafe impl Send for FrameBuffer {}
+unsafe impl Sync for FrameBuffer {}
+
 impl FrameBuffer {
     /// Creates a framebuffer from the given info and virtual base address.
     ///
@@ -128,6 +133,29 @@ impl FrameBuffer {
     pub fn rows(&self) -> usize {
         self.height / CHAR_HEIGHT
     }
+
+    /// Scrolls the framebuffer up by `pixels` rows, filling the bottom with `color`.
+    pub fn scroll_up(&mut self, pixels: usize, color: u32) {
+        if pixels >= self.height {
+            self.fill_rect(0, 0, self.width, self.height, color);
+            return;
+        }
+        // Copy rows [pixels..height) to [0..height-pixels).
+        // Must handle pitch correctly and overlapping regions.
+        for y in 0..(self.height - pixels) {
+            let src_offset = (y + pixels) * self.pitch;
+            let dst_offset = y * self.pitch;
+            // SAFETY: Both regions are within the framebuffer.
+            // Use copy (not copy_nonoverlapping) for overlapping regions.
+            unsafe {
+                let src = self.ptr.add(src_offset);
+                let dst = self.ptr.add(dst_offset);
+                core::ptr::copy(src, dst, self.width * 4);
+            }
+        }
+        // Clear the bottom rows.
+        self.fill_rect(0, self.height - pixels, self.width, pixels, color);
+    }
 }
 
 // Global framebuffer, initialized by `init`.
@@ -151,6 +179,18 @@ pub unsafe fn init(info: FbInfo, fb_virt_addr: VirtAddr) {
 /// Returns the framebuffer info.
 pub fn fb_info() -> FbInfo {
     *FB_INFO.get().expect("Framebuffer not initialized")
+}
+
+/// Returns the framebuffer info, or `None` if not initialized.
+/// Useful for code that needs to work in unit tests.
+pub fn try_fb_info() -> Option<FbInfo> {
+    FB_INFO.get().copied()
+}
+
+/// Returns the physical address of the framebuffer.
+/// Panics if the framebuffer is not initialized.
+pub fn framebuffer_phys_addr() -> u64 {
+    fb_info().addr
 }
 
 /// Runs a closure with the global framebuffer.

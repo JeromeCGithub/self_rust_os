@@ -58,18 +58,17 @@ mod wm_meta {
 
 /// Shared kernel bring-up used by both boot paths.
 ///
-/// `fb_phys_addr` is the physical address of the linear framebuffer the
-/// bootloader configured, with the given dimensions in pixels.
+/// `fb_info` describes the framebuffer the bootloader configured.
+/// `fb_virt_addr` is the virtual address where the framebuffer is mapped.
 fn run_kernel(
     mapper: &mut OffsetPageTable<'static>,
-    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
+    mut frame_allocator: self_rust_os::memory::RegionFrameAllocator,
     phys_mem_offset: VirtAddr,
-    fb_phys_addr: u64,
-    fb_width: usize,
-    fb_height: usize,
+    fb_info: self_rust_os::gfx::FbInfo,
+    fb_virt_addr: VirtAddr,
 ) -> ! {
     // Initialize graphics + console first so println! works, then GDT/IDT/PICs.
-    self_rust_os::init(phys_mem_offset, fb_phys_addr, fb_width, fb_height);
+    self_rust_os::init(phys_mem_offset, fb_info, fb_virt_addr);
 
     serial_println!("[kernel] RustOS booting...");
     println!("RustOS booting...");
@@ -82,7 +81,7 @@ fn run_kernel(
         // Disable interrupts during heap init: the timer interrupt fires
         // during mapping and the x86_64 OffsetPageTable is not reentrant.
         x86_64::instructions::interrupts::disable();
-        let result = allocator::init_heap(mapper, frame_allocator);
+        let result = allocator::init_heap(mapper, &mut frame_allocator);
         result.expect("Heap initialization failed. Reboot required.");
     }
 
@@ -147,18 +146,44 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // Physical memory offset is valid as guaranteed by the bootloader.
     let mut mapper = unsafe { memory::init(phys_mem_offset) };
 
-    // SAFETY:
-    // The memory map is valid as guaranteed by the bootloader.
-    let mut frame_allocator =
-        unsafe { BootInfoFrameAllocator::new(&boot_info.memory_map) };
+    // Convert the bootloader memory map to MemRegions for RegionFrameAllocator.
+    // We need a 'static slice, so use a static mut array.
+    static mut LEGACY_REGIONS: [memory::MemRegion; 32] =
+        [memory::MemRegion { start: 0, end: 0 }; 32];
+    let mut region_count = 0;
+    for region in boot_info.memory_map.iter() {
+        use bootloader::bootinfo::MemoryRegionType;
+        if region.region_type == MemoryRegionType::Usable && region_count < 32 {
+            // SAFETY: Single-threaded boot; no other code touches this.
+            unsafe {
+                LEGACY_REGIONS[region_count] = memory::MemRegion {
+                    start: region.range.start_addr(),
+                    end: region.range.end_addr(),
+                };
+            }
+            region_count += 1;
+        }
+    }
+    // SAFETY: The regions describe usable RAM from the bootloader memory map.
+    let mut frame_allocator = unsafe {
+        memory::RegionFrameAllocator::new(&LEGACY_REGIONS[..region_count])
+    };
 
     run_kernel(
         &mut mapper,
-        &mut frame_allocator,
+        frame_allocator,
         phys_mem_offset,
-        gfx::FRAMEBUFFER_PHYS_ADDR,
-        gfx::WIDTH,
-        gfx::HEIGHT,
+        // Legacy VGA path: 320x200. Note: the bootloader sets up 8bpp mode 13h,
+        // but we describe it as 32bpp for API compatibility. Colors will be wrong
+        // on the legacy path; use the GRUB path for correct 720p output.
+        self_rust_os::gfx::FbInfo {
+            addr: 0xA0000,
+            width: 320,
+            height: 200,
+            pitch: 320 * 4,
+            bpp: 32,
+        },
+        phys_mem_offset + 0xA0000u64,
     )
 }
 
