@@ -263,7 +263,18 @@ impl<B: BlockDevice> Fat32<B> {
         let sectors_per_cluster = boot[13];
         let reserved_sectors = u16::from_le_bytes([boot[14], boot[15]]);
         let num_fats = boot[16];
-        let total_sectors = u32::from_le_bytes([boot[32], boot[33], boot[34], boot[35]]);
+        let total_sectors_16 = u16::from_le_bytes([boot[19], boot[20]]);
+        let total_sectors_32 = u32::from_le_bytes([boot[32], boot[33], boot[34], boot[35]]);
+        // Per the FAT spec, when the 32-bit total sector count is zero the
+        // 16-bit field holds the volume size. Small volumes formatted by
+        // external tools (e.g. `mformat` on a 16 MiB image) put the count
+        // there and leave the 32-bit field at 0; without this fallback
+        // `total_sectors` is 0 and `allocate_cluster` underflows.
+        let total_sectors = if total_sectors_32 != 0 {
+            total_sectors_32
+        } else {
+            u32::from(total_sectors_16)
+        };
         let root_cluster = u32::from_le_bytes([boot[44], boot[45], boot[46], boot[47]]);
         let first_data_sector =
             u32::from(reserved_sectors) + u32::from(num_fats) * fat_size_sectors;
@@ -769,6 +780,21 @@ mod tests {
         assert_eq!(fs.total_bytes(), u64::from(TEST_SECTORS) * 512);
 
         let disk = fs.into_device();
+        let fs2 = Fat32::open(disk).unwrap();
+        assert_eq!(fs2.total_bytes(), u64::from(TEST_SECTORS) * 512);
+    }
+
+    #[test_case]
+    fn test_open_falls_back_to_totsec16() {
+        let disk = MemDisk::new(TEST_SECTORS);
+        let fs = Fat32::format(disk, TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        let mut disk = fs.into_device();
+        // Simulate an mformat-style volume: the sector count lives in the
+        // 16-bit total-sectors field (BPB offset 19) and the 32-bit field
+        // (offset 32) is zero.
+        disk.data[19] = (TEST_SECTORS & 0xFF) as u8;
+        disk.data[20] = ((TEST_SECTORS >> 8) & 0xFF) as u8;
+        disk.data[32..36].fill(0);
         let fs2 = Fat32::open(disk).unwrap();
         assert_eq!(fs2.total_bytes(), u64::from(TEST_SECTORS) * 512);
     }
