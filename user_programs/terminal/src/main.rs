@@ -102,6 +102,7 @@ pub extern "C" fn user_main() {
             println!("  time       - show timer ticks");
             println!("  ls         - list files");
             println!("  cat <file> - show file contents");
+            println!("  ./<prog>   - run program from disk");
             println!("  exit       - exit terminal");
         } else if eq(line, b"exit") {
             println!("Goodbye!");
@@ -120,12 +121,56 @@ pub extern "C" fn user_main() {
         } else if line.len() > 5 && eq(&line[..5], b"echo ") {
             sys::console_write(&line[5..]);
             sys::console_write(b"\n");
+        } else if line.len() > 2 && eq(&line[..2], b"./") {
+            // Launch a program from disk: ./name -> /NAME.BIN
+            run_program(&line[2..]);
         } else if line.is_empty() {
             // Empty line, just reprompt.
         } else {
             sys::console_write(b"unknown command: ");
             sys::console_write(line);
             sys::console_write(b"\n");
+        }
+    }
+}
+
+/// Launches a user program from disk via the spawn syscall.
+///
+/// Converts `name` to `/NAME.BIN` (FAT32 8.3 uppercase) and spawns it.
+/// On success, this never returns (the process is replaced).
+fn run_program(name: &[u8]) {
+    if name.is_empty() || name.len() > 8 {
+        println!("usage: ./<name> (max 8 chars)");
+        return;
+    }
+    // Build "NAME.BIN" path (FAT32 8.3 uppercase, no leading slash).
+    let mut path = [0u8; 11];
+    for (i, &c) in name.iter().enumerate() {
+        // Uppercase ASCII.
+        path[i] = if c >= b'a' && c <= b'z' { c - 32 } else { c };
+    }
+    let name_len = name.len();
+    path[name_len] = b'.';
+    path[name_len + 1] = b'B';
+    path[name_len + 2] = b'I';
+    path[name_len + 3] = b'N';
+    
+    let path_str = match core::str::from_utf8(&path[..4 + name_len]) {
+        Ok(s) => s,
+        Err(_) => {
+            println!("invalid program name");
+            return;
+        }
+    };
+    
+    println!("Spawning {}...", path_str);
+    match sys::spawn(path_str) {
+        Ok(()) => {
+            // Should not return on success.
+            println!("spawn returned unexpectedly");
+        }
+        Err(()) => {
+            println!("failed to spawn {}", path_str);
         }
     }
 }

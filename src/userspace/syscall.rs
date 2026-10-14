@@ -16,6 +16,7 @@
 
 use core::arch::naked_asm;
 
+use spin::Mutex;
 use x86_64::{structures::idt::InterruptStackFrame, VirtAddr};
 
 use crate::{fs, print, println, serial_println, userspace};
@@ -43,6 +44,19 @@ pub const SYS_READ_FILE: u64 = 6;
 
 /// Syscall number for `sys_write_file`: writes (creates/overwrites) a file by path.
 pub const SYS_WRITE_FILE: u64 = 7;
+
+/// Syscall number for `sys_spawn`: loads and executes a program from disk.
+/// Does not return on success (replaces the current process).
+pub const SYS_SPAWN: u64 = 8;
+
+/// Pending spawn request: path of the program to load after the current
+/// process exits. Set by `sys_spawn`, consumed by `process::run`.
+static SPAWN_REQUEST: Mutex<Option<[u8; 256]>> = Mutex::new(None);
+
+/// Takes the pending spawn request, if any.
+pub fn take_spawn_request() -> Option<[u8; 256]> {
+    SPAWN_REQUEST.lock().take()
+}
 
 /// Naked entry point for the `int 0x80` syscall interrupt.
 ///
@@ -210,6 +224,7 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
         SYS_LS => sys_ls(arg1, arg2),
         SYS_READ_FILE => sys_read_file(arg1, arg2, arg3),
         SYS_WRITE_FILE => sys_write_file(arg1, arg2, arg3),
+        SYS_SPAWN => sys_spawn(arg1),
         _ => {
             serial_println!("[kernel] unknown syscall number: {}", num);
             println!("[kernel] unknown syscall number: {}", num);
@@ -518,6 +533,35 @@ fn sys_write_file(path_ptr: u64, buf_ptr: u64, buf_len: u64) -> u64 {
         Some(Ok(n)) => n as u64,
         _ => SYSCALL_ERROR,
     }
+}
+
+/// Loads and executes a program from disk, replacing the current process.
+///
+/// Takes a null-terminated path (max 255 chars) in `path_ptr`. On success,
+/// records the spawn request and returns `PROCESS_EXIT_SENTINEL`, causing
+/// the current process to exit. `process::run` will then load and execute
+/// the requested program. Does not return to the caller on success.
+///
+/// Returns `SYSCALL_ERROR` if the path is invalid.
+fn sys_spawn(path_ptr: u64) -> u64 {
+    if !validate_user_buffer(path_ptr, 256) {
+        return SYSCALL_ERROR;
+    }
+
+    // SAFETY: Buffer validated.
+    let path_buf = unsafe { core::slice::from_raw_parts(path_ptr as *const u8, 256) };
+    let path_len = path_buf.iter().position(|&b| b == 0).unwrap_or(256);
+    if path_len == 0 || path_len >= 255 {
+        return SYSCALL_ERROR;
+    }
+
+    let mut request = [0u8; 256];
+    request[..path_len].copy_from_slice(&path_buf[..path_len]);
+
+    *SPAWN_REQUEST.lock() = Some(request);
+
+    // Exit the current process; process::run will load the new program.
+    PROCESS_EXIT_SENTINEL
 }
 
 /// Registers the syscall interrupt handler in the IDT.

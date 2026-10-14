@@ -23,6 +23,7 @@ pub const SYS_READ_NB: u64 = 4;
 pub const SYS_LS: u64 = 5;
 pub const SYS_READ_FILE: u64 = 6;
 pub const SYS_WRITE_FILE: u64 = 7;
+pub const SYS_SPAWN: u64 = 8;
 
 /// Return value indicating a failed syscall.
 pub const SYSCALL_ERROR: u64 = u64::MAX - 1;
@@ -161,5 +162,29 @@ pub fn write_file(path: &str, data: &[u8]) -> Option<usize> {
         None
     } else {
         Some(n as usize)
+    }
+}
+
+/// Loads and executes a program from disk, replacing the current process.
+///
+/// Takes a path like `/SNAKE.BIN`. Does not return on success. If the
+/// program cannot be loaded, returns (the caller continues running).
+pub fn spawn(path: &str) -> Result<(), ()> {
+    let path_buf = path_buf(path).ok_or(())?;
+    let n = unsafe {
+        syscall(
+            SYS_SPAWN,
+            path_buf.as_ptr() as u64,
+            0,
+            0,
+        )
+    };
+    // sys_spawn does not return on success (it replaces the process).
+    // If we're here, it failed.
+    if n == SYSCALL_ERROR {
+        Err(())
+    } else {
+        // Should not happen, but treat as failure.
+        Err(())
     }
 }
