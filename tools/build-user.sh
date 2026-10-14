@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# Unified builder for self_rust_os user-space programs.
+#
+# Replaces the per-program build.sh scripts (which were identical except for
+# the program name). Builds one or all user programs:
+#
+#   ./tools/build-user.sh            # build all programs
+#   ./tools/build-user.sh terminal   # build just the terminal
+#
+# For each program this:
+#   1. Compiles the Rust no_std binary for the custom x86_64 target.
+#   2. Converts the ELF to a flat binary with llvm-objcopy.
+#   3. Generates `<prog>_meta.rs` with layout metadata so the kernel can apply
+#      per-section page permissions (W^X).
+#
+# Prerequisites:
+#   - Rust nightly toolchain (matching the kernel's rust-toolchain file)
+#   - llvm-tools-preview component: rustup component add llvm-tools-preview
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+USER_PROGRAMS="${ROOT}/user_programs"
+
+TARGET="x86_64-user-program"
+PROFILE="release"
+BASE_ADDR=0x400000  # USER_CODE_START, must match linker.ld
+
+build_one() {
+    local prog="$1"
+    local dir="${USER_PROGRAMS}/${prog}"
+
+    if [ ! -d "${dir}" ]; then
+        echo "Error: unknown user program '${prog}' (no ${dir})" >&2
+        return 1
+    fi
+    if [ "${prog}" = "userlib" ]; then
+        echo "[userlib] Skipping library crate '${prog}'."
+        return 0
+    fi
+
+    local elf_path="${dir}/target/${TARGET}/${PROFILE}/${prog}"
+    local output="${dir}/${prog}.bin"
+    local meta_output="${dir}/${prog}_meta.rs"
+
+    echo "[user_programs/${prog}] Building ${prog} for ${TARGET}..."
+    (cd "${dir}" && cargo build --release)
+
+    # Locate llvm-objcopy and llvm-readobj from the Rust toolchain.
+    local rustc_sysroot
+    rustc_sysroot="$(rustc --print sysroot)"
+    local llvm_objcopy
+    llvm_objcopy="$(find "${rustc_sysroot}" -name 'llvm-objcopy' -type f 2>/dev/null | head -1)"
+    local llvm_readobj
+    llvm_readobj="$(find "${rustc_sysroot}" -name 'llvm-readobj' -type f 2>/dev/null | head -1)"
+
+    if [ -z "${llvm_objcopy}" ]; then
+        echo "Error: llvm-objcopy not found in the Rust sysroot." >&2
+        echo "Install it with: rustup component add llvm-tools-preview" >&2
+        return 1
+    fi
+    if [ -z "${llvm_readobj}" ]; then
+        echo "Error: llvm-readobj not found in the Rust sysroot." >&2
+        echo "Install it with: rustup component add llvm-tools-preview" >&2
+        return 1
+    fi
+
+    echo "[user_programs/${prog}] Converting ELF to flat binary..."
+    "${llvm_objcopy}" -O binary "${elf_path}" "${output}"
+
+    local size
+    size=$(wc -c < "${output}")
+    echo "[user_programs/${prog}] Built ${prog}.bin (${size} bytes)"
+
+    # ------------------------------------------------------------------
+    # Generate <prog>_meta.rs with the read-only boundary.
+    #
+    # The linker script lays out sections in this order, each ALIGN(4K):
+    #   .text    (code, read-only + executable)
+    #   .rodata  (read-only data)
+    #   .data    (initialized mutable data)
+    #   .bss     (zero-initialized mutable data)
+    #
+    # We compute the read-only size as the offset (from the load base) of the
+    # first writable section (.data), rounded up to 4 KiB page alignment.
+    # If .data and .bss are both absent/empty, the entire binary is read-only.
+    # ------------------------------------------------------------------
+
+    echo "[user_programs/${prog}] Generating ${prog}_meta.rs..."
+
+    get_section_vma() {
+        local section_name="$1"
+        "${llvm_readobj}" --section-headers "${elf_path}" 2>/dev/null \
+            | awk -v name="${section_name}" '
+                /Name:/ { current_name = $2 }
+                /Address:/ && current_name == name { print $2; exit }
+            '
+    }
+
+    get_section_size() {
+        local section_name="$1"
+        "${llvm_readobj}" --section-headers "${elf_path}" 2>/dev/null \
+            | awk -v name="${section_name}" '
+                /Name:/ { current_name = $2 }
+                /Size:/ && current_name == name { print $2; exit }
+            '
+    }
+
+    local data_vma data_size bss_vma bss_size
+    data_vma=$(get_section_vma ".data")
+    data_size=$(get_section_size ".data")
+    bss_vma=$(get_section_vma ".bss")
+    bss_size=$(get_section_size ".bss")
+
+    local first_writable_vma=""
+    if [ -n "${data_vma}" ] && [ "$(printf '%d' "${data_size}")" -gt 0 ]; then
+        first_writable_vma="${data_vma}"
+    elif [ -n "${bss_vma}" ] && [ "$(printf '%d' "${bss_size}")" -gt 0 ]; then
+        first_writable_vma="${bss_vma}"
+    fi
+
+    local readonly_size
+    if [ -n "${first_writable_vma}" ]; then
+        readonly_size=$(printf '%d' $(( $(printf '%d' "${first_writable_vma}") - $(printf '%d' "${BASE_ADDR}") )))
+    else
+        readonly_size=$(( (size + 4095) / 4096 * 4096 ))
+    fi
+
+    echo "[user_programs/${prog}] Read-only region: ${readonly_size} bytes ($(( readonly_size / 4096 )) pages)"
+
+    cat > "${meta_output}" << EOF
+// Auto-generated by \`tools/build-user.sh\` — do not edit manually.
+//
+// Contains compile-time metadata about the ${prog} user binary layout so the
+// kernel can apply read-only page permissions to the code and rodata pages.
+
+/// Number of bytes from the start of the flat binary that should be mapped
+/// as read-only (no \`WRITABLE\` flag). This value is always page-aligned.
+///
+/// Pages beyond this offset (if any) contain mutable \`.data\`/\\\`.bss\` sections
+/// and are mapped as writable.
+pub const READONLY_SIZE: usize = ${readonly_size};
+EOF
+
+    echo "[user_programs/${prog}] Generated ${prog}_meta.rs (READONLY_SIZE = ${readonly_size})"
+}
+
+if [ $# -eq 0 ]; then
+    # Build all programs (directories with a Cargo.toml, except userlib).
+    for prog_dir in "${USER_PROGRAMS}"/*/; do
+        prog="$(basename "${prog_dir}")"
+        if [ -f "${prog_dir}/Cargo.toml" ]; then
+            build_one "${prog}"
+        fi
+    done
+else
+    for prog in "$@"; do
+        build_one "${prog}"
+    done
+fi
+
+echo "[userlib] All requested user programs built."

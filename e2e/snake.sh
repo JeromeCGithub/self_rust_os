@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
 
 echo "[e2e] building snake user program..."
-(cd user_programs/snake && ./build.sh)
+./tools/build-user.sh snake
 
 echo "[e2e] building kernel boot image..."
 cargo build 2>&1 | tail -1

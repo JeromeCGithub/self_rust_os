@@ -1,0 +1,17 @@
+[package]
+name = "userlib"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal user-space standard library for self_rust_os."
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["rlib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
