@@ -23,8 +23,7 @@ use self_rust_os::{
 };
 
 // Multiboot2 header: must sit within the first 32 KiB of the image (the
-// linker script places `.boot` first). Requests a 320x200x8 framebuffer so
-// the kernel's VGA console keeps working unchanged.
+// linker script places `.boot` first). Requests a 1280x720x32 framebuffer.
 global_asm!(
     r#"
     .section .multiboot2_header, "a"
@@ -34,7 +33,16 @@ mb2_header_start:
     .long 0                       /* architecture: i386 */
     .long mb2_header_end - mb2_header_start
     .long -(0xE85250D6 + 0 + (mb2_header_end - mb2_header_start))  /* checksum */
-    /* end tag (framebuffer comes from gfxpayload, not the header) */
+    /* framebuffer tag (type 5): request 1280x720x32 */
+    .align 8
+    .short 5                      /* type */
+    .short 0                      /* flags */
+    .long 20                      /* size */
+    .long 1280                    /* width */
+    .long 720                     /* height */
+    .long 32                      /* depth (bpp) */
+    /* end tag */
+    .align 8
     .short 0
     .short 0
     .long 8
