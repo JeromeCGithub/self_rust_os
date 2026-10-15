@@ -54,6 +54,9 @@
             echo "  cargo build --features grub"
             echo "  ./tools/build-user.sh wm portal snake forge hello"
             echo "  ./tools/build-grub-disk.sh"
+            echo ""
+            echo "Run (QEMU 11+ requires explicit VRAM for 720p):"
+            echo "  qemu-system-x86_64 -drive file=target/grub-disk.img,format=raw -serial stdio -m 128 -vga std -global VGA.vgamem_mb=32"
           '';
         };
       }
