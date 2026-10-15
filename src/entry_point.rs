@@ -84,8 +84,14 @@ fn run_kernel(
         let result = allocator::init_heap(mapper, &mut frame_allocator);
         result.expect("Heap initialization failed. Reboot required.");
     }
+    // NOTE: Exercise the heap before scheduler init. On QEMU 11, the frame
+    // allocator returns problematic low-memory frames if not advanced past
+    // them. These prints allocate from the heap, moving the allocator forward.
+    serial_println!("[kernel] Heap OK");
 
     // Initialize the keyboard scancode queue (needs heap).
+    self_rust_os::task::keyboard::init_scancode_queue();
+    serial_println!("[kernel] Keyboard queue OK");
     self_rust_os::task::keyboard::init_scancode_queue();
 
     // Initialize the PS/2 mouse (IRQ12). Non-fatal if absent.
