@@ -30,4 +30,4 @@ pub const SYSCALL_INTERRUPT_INDEX: u8 = 0x80;
 pub const USER_FRAMEBUFFER: u64 = 0x90_0000;
 
 /// Size of the framebuffer in bytes (320*200 = 64,000, rounded up to 64 KiB).
-pub const FRAMEBUFFER_SIZE: u64 = 1280 * 720 * 4;
+pub const FRAMEBUFFER_SIZE: u64 = 640 * 480 * 4;
