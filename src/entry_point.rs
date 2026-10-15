@@ -196,6 +196,18 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    // Mirror the panic message to the serial port: in `-serial stdio` setups
+    // (and headless runs) the VGA console is invisible, so a VGA-only panic
+    // looks like a silent freeze — this exact gap cost a full debug round on
+    // the FAT32 `allocate_cluster` overflow. `try_lock` (not `lock`) is used
+    // so a panic that fires while the serial port is already held cannot
+    // deadlock us inside the panic handler.
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        use core::fmt::Write;
+        if let Some(mut serial) = self_rust_os::serial::SERIAL1.try_lock() {
+            let _ = writeln!(serial, "Kernel panic: {}", info);
+        }
+    });
     println!("Kernel {}", info);
     self_rust_os::hlt_loop();
 }
