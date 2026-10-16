@@ -26,7 +26,12 @@
           overlays = [ rust-overlay.overlays.default ];
         };
 
-        rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+        # Explicit extensions: rust-toolchain.toml also lists them, but the
+        # override guarantees llvm-tools-preview (llvm-objcopy) is present
+        # for tools/build-user.sh, regardless of TOML parsing.
+        rustToolchain = (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
+          extensions = [ "rust-src" "llvm-tools-preview" ];
+        };
       in
       {
         devShells.default = pkgs.mkShell {
