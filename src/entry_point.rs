@@ -106,9 +106,14 @@ fn run_kernel(
         self_rust_os::fs::init();
         serial_println!("[kernel] root filesystem mounted");
     }
-    // Re-enable interrupts now that critical init is done. The PIC must be
-    // re-initialized: GRUB leaves it in a state where the timer interrupt
-    // hangs the kernel if enabled directly.
+    // Re-initialize the PIC: GRUB leaves it in a state where the timer
+    // interrupt hangs the kernel if enabled directly.
+    // NOTE: Do NOT enable interrupts here. The timer IRQ must stay disabled
+    // until the scheduler has spawned its first process — if a timer fires
+    // during scheduler::init/spawn_process, timer_entry runs with no
+    // runnable process and corrupts the interrupt return state (double fault
+    // at timer_entry's iretq). Interrupts are enabled below, right before
+    // scheduler::start().
     // SAFETY: Single-threaded boot; IDT is already set up.
     // Masks: 0xF8 (master: timer, keyboard, cascade), 0xEF (slave: mouse IRQ12).
     #[cfg(feature = "grub")]
@@ -117,7 +122,6 @@ fn run_kernel(
         self_rust_os::interrupts::PICS
             .lock()
             .write_masks(0xF8, 0xEF);
-        x86_64::instructions::interrupts::enable();
     }
     // In test mode, run the test harness and exit before entering user space
     // or the async executor (both of which never return).
@@ -134,6 +138,11 @@ fn run_kernel(
     #[expect(clippy::expect_used)]
     self_rust_os::scheduler::spawn_process(USER_WM_BIN, wm_meta::READONLY_SIZE)
         .expect("Failed to spawn initial process. Reboot required.");
+    // Now that the scheduler has a runnable process, it's safe to enable
+    // interrupts: the timer IRQ can preempt without corrupting state.
+    // (On the GRUB path the PIC was initialized above; on the legacy path
+    // the bootloader's PIC state is used.)
+    x86_64::instructions::interrupts::enable();
     self_rust_os::scheduler::start();
 }
 
