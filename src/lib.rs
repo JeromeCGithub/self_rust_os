@@ -58,12 +58,17 @@ pub fn init(phys_mem_offset: x86_64::VirtAddr, fb_info: gfx::FbInfo, fb_virt_add
     // Initialize the Programmable Interrupt Controller (PIC).
     unsafe {
         interrupts::PICS.lock().initialize();
-        // Unmask timer (IRQ0), keyboard (IRQ1), and the PIC2 cascade (IRQ2);
-        // on the slave, unmask the mouse (IRQ12). The firmware may have these
-        // masked, which would break input.
-        interrupts::PICS.lock().write_masks(0xF8, 0xEF);
+        // Mask the timer (IRQ0) for now: it stays masked until the scheduler
+        // has spawned its first process. If a timer fires during early boot,
+        // timer_entry runs with no scheduler state and double-faults.
+        // Unmask keyboard (IRQ1) and the PIC2 cascade (IRQ2); on the slave,
+        // unmask the mouse (IRQ12). The firmware may have these masked, which
+        // would break input.
+        // 0xF9 = 11111001: IRQ0 masked, IRQ1/IRQ2 unmasked.
+        interrupts::PICS.lock().write_masks(0xF9, 0xEF);
     }
-    // Enable interrupts.
+    // Enable interrupts. Note: the timer IRQ is masked in the PIC, so no
+    // timer interrupt can fire until the scheduler unmasks it.
     instructions::interrupts::enable();
 }
 

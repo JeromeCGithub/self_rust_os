@@ -138,10 +138,16 @@ fn run_kernel(
     #[expect(clippy::expect_used)]
     self_rust_os::scheduler::spawn_process(USER_WM_BIN, wm_meta::READONLY_SIZE)
         .expect("Failed to spawn initial process. Reboot required.");
-    // Now that the scheduler has a runnable process, it's safe to enable
-    // interrupts: the timer IRQ can preempt without corrupting state.
-    // (On the GRUB path the PIC was initialized above; on the legacy path
-    // the bootloader's PIC state is used.)
+    // Now that the scheduler has a runnable process, unmask the timer IRQ
+    // and enable interrupts. The timer was kept masked since lib::init() to
+    // prevent timer_entry from running with no scheduler state (double fault).
+    // SAFETY: Single-threaded boot; scheduler is initialized.
+    #[cfg(feature = "grub")]
+    unsafe {
+        self_rust_os::interrupts::PICS
+            .lock()
+            .write_masks(0xF8, 0xEF); // unmask timer (IRQ0)
+    }
     x86_64::instructions::interrupts::enable();
     self_rust_os::scheduler::start();
 }
