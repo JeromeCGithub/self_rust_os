@@ -138,9 +138,13 @@ fn run_kernel(
     #[expect(clippy::expect_used)]
     self_rust_os::scheduler::spawn_process(USER_WM_BIN, wm_meta::READONLY_SIZE)
         .expect("Failed to spawn initial process. Reboot required.");
-    // Now that the scheduler has a runnable process, unmask the timer IRQ
-    // and enable interrupts. The timer was kept masked since lib::init() to
-    // prevent timer_entry from running with no scheduler state (double fault).
+    // Now that the scheduler has a runnable process, unmask the timer IRQ.
+    // The timer was kept masked since lib::init() to prevent timer_entry from
+    // running with no scheduler state (double fault).
+    // NOTE: Do NOT enable interrupts here. scheduler::start() disables them
+    // during the stack switch, and the iretq to user mode restores RFLAGS
+    // with IF=1. Enabling here would open a window where the timer fires
+    // in kernel mode during the context-switch setup.
     // SAFETY: Single-threaded boot; scheduler is initialized.
     #[cfg(feature = "grub")]
     unsafe {
@@ -148,7 +152,6 @@ fn run_kernel(
             .lock()
             .write_masks(0xF8, 0xEF); // unmask timer (IRQ0)
     }
-    x86_64::instructions::interrupts::enable();
     self_rust_os::scheduler::start();
 }
 
