@@ -190,6 +190,8 @@ extern "x86-interrupt" fn timer_entry(_frame: InterruptStackFrame) {
 /// # Returns
 /// New kernel RSP to switch to, or 0 to resume the interrupted context.
 extern "C" fn timer_dispatch(saved_rsp: u64) -> u64 {
+    // DEBUG temporaire: tracer l'entrée du handler
+    crate::serial_println!("[timer] dispatch: saved_rsp={:#x}", saved_rsp);
     TICKS.fetch_add(1, Ordering::Relaxed);
 
     // Notify the PIC that the interrupt has been handled.
@@ -202,12 +204,17 @@ extern "C" fn timer_dispatch(saved_rsp: u64) -> u64 {
     // Check if we interrupted user mode: CS is at saved_rsp + 0x80.
     // (15 saved regs * 8 = 0x78, then RIP at +0x78, CS at +0x80)
     let cs = unsafe { *((saved_rsp + 0x80) as *const u64) };
+    crate::serial_println!("[timer] cs={:#x}", cs);
     if cs & 3 != 3 {
         // From kernel mode: no preemption.
         return 0;
     }
 
     // From user mode: maybe preempt.
+    // DEBUG-BISECT: preemption disabled to isolate the timer switch path.
+    let _ = saved_rsp;
+    return 0;
+    #[allow(unreachable_code)]
     crate::scheduler::on_timer(saved_rsp)
 }
 
