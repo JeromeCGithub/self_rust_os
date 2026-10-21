@@ -1,0 +1,11 @@
+# Generated emulator artifacts (build-qemu-wasm.sh / fetch-prebuilt-qemu.sh)
+htdocs/out.js
+htdocs/qemu-system-x86_64.wasm
+htdocs/qemu-system-x86_64.worker.js
+# Staged guest files (package-image.sh / ROM staging)
+htdocs/pack-src/grub-disk.img
+# Local qemu-wasm checkout used by build-qemu-wasm.sh
+qemu-wasm/
+# Temp clone used by fetch-prebuilt-qemu.sh
+.fetch-tmp.*/
+__pycache__/

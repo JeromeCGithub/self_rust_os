@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>self_rust_os in the browser (QEMU Wasm POC)</title>
+    <link rel="stylesheet" href="./vendor/xterm.css" />
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; }
+      #terminal { width: 720px; }
+      #serial-log {
+        background: #111; color: #ddd; padding: 1rem; width: 720px;
+        height: 240px; overflow-y: auto; white-space: pre-wrap;
+      }
+      #status { color: #555; }
+    </style>
+  </head>
+  <body>
+    <h1>self_rust_os — browser POC (QEMU Wasm, x86_64 guest)</h1>
+    <p id="status">Loading emulator and disk image…</p>
+    <div id="terminal"></div>
+    <h2>Serial log (COM1, mirrored)</h2>
+    <pre id="serial-log"></pre>
+
+    <script type="module">
+      import './vendor/xterm.js';
+      import './vendor/xterm-pty.js';
+      import './module.js';
+      import initEmscriptenModule from './out.js';
+
+      const status = document.getElementById('status');
+      if (!window.crossOriginIsolated) {
+        status.textContent =
+          'Warning: page is not cross-origin isolated, SharedArrayBuffer ' +
+          'is unavailable and QEMU Wasm cannot start. Serve this folder ' +
+          'with ../serve.py (it sets the COOP/COEP headers).';
+        throw new Error('not cross-origin isolated');
+      }
+
+      // Files the guest needs inside the Emscripten filesystem. Upstream
+      // qemu-wasm examples bake these into a file_packager .data bundle;
+      // we fetch and inject them at runtime instead, so rebuilding the
+      // OS disk image does not require repacking the emulator bundle.
+      const PACK_FILES = [
+        'bios-256k.bin',      // SeaBIOS
+        'vgabios-stdvga.bin', // VGA BIOS (VBE for the framebuffer mode)
+        'kvmvapic.bin',
+        'linuxboot_dma.bin',
+        'grub-disk.img',      // self_rust_os boot disk (GRUB2 + FAT32)
+      ];
+
+      const buffers = {};
+      for (const name of PACK_FILES) {
+        const res = await fetch('./pack-src/' + name);
+        if (!res.ok) {
+          status.textContent = 'Missing ./pack-src/' + name +
+            ' — run ../package-image.sh and ../build-qemu-wasm.sh first.';
+          throw new Error('missing pack file ' + name);
+        }
+        buffers[name] = new Uint8Array(await res.arrayBuffer());
+      }
+      Module['preRun'].push((mod) => {
+        mod.FS.mkdir('/pack');
+        for (const name of PACK_FILES) {
+          mod.FS.writeFile('/pack/' + name, buffers[name]);
+        }
+      });
+
+      const term = new Terminal();
+      term.open(document.getElementById('terminal'));
+      const { master, slave } = openpty();
+      term.loadAddon(master);
+      Module.pty = slave;
+      Module['mainScriptUrlOrBlob'] = location.origin + '/out.js';
+
+      // Mirror the terminal content into a plain DOM node once a second.
+      // This makes the serial boot log readable (and scriptable) without
+      // scraping the xterm canvas.
+      const logEl = document.getElementById('serial-log');
+      setInterval(() => {
+        const buf = term.buffer.active;
+        let text = '';
+        for (let i = 0; i < buf.length; i++) {
+          const line = buf.getLine(i);
+          if (line) text += line.translateToString(true) + '\n';
+        }
+        if (logEl.textContent !== text) {
+          logEl.textContent = text;
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+      }, 1000);
+
+      status.textContent = 'Starting QEMU…';
+      const instance = await initEmscriptenModule(Module);
+
+      // Same TTY poll workaround as the upstream qemu-wasm examples.
+      var oldPoll = Module['TTY'].stream_ops.poll;
+      var pty = Module['pty'];
+      Module['TTY'].stream_ops.poll = function (stream, timeout) {
+        if (!pty.readable) {
+          return (pty.readable ? 1 : 0) | (pty.writable ? 4 : 0);
+        }
+        return oldPoll.call(stream, timeout);
+      };
+      status.textContent = 'QEMU running — guest output goes to the terminal.';
+    </script>
+  </body>
+</html>
