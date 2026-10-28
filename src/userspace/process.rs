@@ -251,7 +251,7 @@ pub(crate) fn map_user_framebuffer(
     let flags = if display_owner { flags | PageTableFlags::NO_CACHE } else { flags };
     let mut frames = alloc::vec::Vec::new();
 
-    let num_pages = userspace::FRAMEBUFFER_SIZE / 4096;
+    let num_pages = userspace::framebuffer_pages(&crate::gfx::fb_info())?;
     let fb_virt_start = VirtAddr::new(userspace::USER_FRAMEBUFFER);
     let fb_phys_start = PhysAddr::new(crate::gfx::framebuffer_phys_addr());
 
@@ -267,9 +267,10 @@ pub(crate) fn map_user_framebuffer(
             frame
         };
 
-        // SAFETY:
-        // The framebuffer physical pages are reserved by the hardware.
-        // We map them with NO_CACHE for correct VGA behavior.
+        // SAFETY: This process owns an empty user page-table subtree. The
+        // frame is either reserved display MMIO (PID 0, NO_CACHE) or freshly
+        // allocated private RAM. The scheduler serializes mapping changes
+        // with interrupts disabled, and each new mapping's TLB is flushed.
         unsafe {
             mapper
                 .map_to(page, frame, flags, frame_allocator)

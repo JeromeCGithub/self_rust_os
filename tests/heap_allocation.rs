@@ -29,7 +29,11 @@ entry_point!(main);
 #[expect(clippy::expect_used)]
 fn main(boot_info: &'static BootInfo) -> ! {
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
-    self_rust_os::init(phys_mem_offset, common::FRAMEBUFFER_INFO, common::framebuffer_addr());
+    self_rust_os::init(
+        phys_mem_offset,
+        common::FRAMEBUFFER_INFO,
+        common::framebuffer_addr(),
+    );
     let mut mapper = unsafe { memory::init(phys_mem_offset) };
     let mut frame_allocator = unsafe { BootInfoFrameAllocator::new(&boot_info.memory_map) };
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");
@@ -60,6 +64,16 @@ fn when_creating_large_vec_then_memory_is_allocated() {
         vec.push(i);
     }
     assert_eq!(vec.iter().sum::<u64>(), (0..1000).sum());
+}
+
+#[test_case]
+fn when_loading_1080p_compositor_then_staging_buffer_fits() {
+    // The flat image contains two full 1080p buffers. Keep another MiB live
+    // for filesystem/scheduler allocations during loading.
+    let staging = alloc::vec![0x5au8; 2 * 1920 * 1080 * 4];
+    let overhead = alloc::vec![0xa5u8; 1024 * 1024];
+    assert_eq!(staging[staging.len() - 1], 0x5a);
+    assert_eq!(overhead[overhead.len() - 1], 0xa5);
 }
 
 #[test_case]

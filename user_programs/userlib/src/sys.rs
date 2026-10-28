@@ -185,6 +185,9 @@ pub fn mkdir(path: &str) -> Result<(), ()> {
     }
 }
 
+/// Base address of the display owner's MMIO or a client's private drawing surface.
+pub const FRAMEBUFFER_ADDR: usize = 0x210_0000;
+
 /// Framebuffer geometry returned by [`fb_info`].
 #[derive(Debug, Clone, Copy)]
 pub struct FbInfo {

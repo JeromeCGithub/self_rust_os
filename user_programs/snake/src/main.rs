@@ -1,6 +1,6 @@
 //! Snake game for `self_rust_os`, built on `userlib`.
 //!
-//! Runs in Ring 3, draws directly to the framebuffer mapped at 0x90_0000.
+//! Runs in Ring 3, draws into its private framebuffer mapping.
 //! Uses `sys::ticks` for timing and `sys::read_nb` for non-blocking input.
 //!
 //! Controls: WASD or Arrow keys to move, Q to quit.
@@ -10,8 +10,8 @@
 
 use userlib::{println, sys};
 
-/// Framebuffer mapped at 0x90_0000 (32bpp).
-const FB_ADDR: usize = 0x90_0000;
+/// Private framebuffer base (32bpp).
+const FB_ADDR: usize = sys::FRAMEBUFFER_ADDR;
 
 /// Global framebuffer geometry (set at startup).
 static mut FB_WIDTH: usize = 1280;

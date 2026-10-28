@@ -16,7 +16,7 @@ It is not a production OS or a Linux/POSIX-compatible system.
 
 - GDT/TSS, interrupts, paging, heap, serial diagnostics, and preemptive user processes.
 - ATA PIO storage, MBR partitions, FAT32 files/directories and file syscalls.
-- GRUB/Multiboot2 desktop boot with a 640×480×32 framebuffer.
+- GRUB/Multiboot2 desktop boot with a 1920×1080×32 framebuffer.
 - Userspace compositor with an image wallpaper, discovered application icons,
   private application surfaces, window stacking, dragging, close buttons and focus.
 - Portal graphical terminal, Forge text shell, Hello, Snake and CPU-bound Spin app.
@@ -96,7 +96,7 @@ keyboard, file-by-path, display/surface and focus operations. It does not implem
 the old ramfs open/close API, Linux syscall numbers, or a POSIX descriptor model.
 The root filesystem is now FAT32, and the kernel loads the WM from disk at runtime.
 
-The desktop currently targets 640×480. Process frames/stacks are not fully reclaimed
+The desktop defaults to 1920×1080. Process frames/stacks are not fully reclaimed
 on exit; repeated launches can exhaust memory. User-pointer validation and code
 permissions also need further hardening. See [architecture](docs/architecture.md)
 for boundaries and exceptions and [known test gaps](docs/testing.md#known-baseline-gaps)

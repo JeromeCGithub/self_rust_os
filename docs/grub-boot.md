@@ -31,7 +31,7 @@ LBA 2048..end  FAT32 partition in a 128 MiB image
                /HOME and /TMP
 ```
 
-GRUB's embedded configuration searches for the kernel, selects a 640×480×32 graphics
+GRUB's embedded configuration searches for the kernel, selects a 1920×1080×32 graphics
 mode, keeps that framebuffer as the payload, and invokes `multiboot2 /kernel.elf`.
 The [Multiboot2 header](../src/grub_boot.rs) requests that geometry. Do not describe
 its framebuffer tag as informational only: the current kernel validates and uses it.
