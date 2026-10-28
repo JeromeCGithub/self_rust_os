@@ -1,4 +1,4 @@
-//! PS/2 mouse driver (IRQ12).
+//! PS/2 mouse driver (IRQ12), with QEMU absolute pointer integration.
 //!
 //! Initializes the PS/2 auxiliary port, enables the mouse, and decodes the
 //! standard 3-byte PS/2 mouse packets into a clamped cursor position and
@@ -17,6 +17,8 @@
 //! The public API ([`position`], [`buttons`]) is safe to call from any
 //! context, including syscall handlers: it disables interrupts while taking
 //! the device lock, so it can never deadlock against the IRQ handler.
+
+mod absolute;
 
 use spin::Mutex;
 use x86_64::instructions::port::Port;
@@ -131,6 +133,7 @@ static MOUSE: Mutex<MouseDevice> = Mutex::new(MouseDevice::new());
 /// Safe to call from any context (disables interrupts while reading).
 pub fn position() -> (i32, i32) {
     x86_64::instructions::interrupts::without_interrupts(|| {
+        absolute::poll();
         let dev = MOUSE.lock();
         (dev.state.x, dev.state.y)
     })
@@ -179,6 +182,11 @@ fn sign_extend_9bit(magnitude: u8, sign: bool) -> i16 {
 /// Called from the IRQ12 handler. Silently drops bytes until packet sync is
 /// re-established (a first byte with bit 3 set).
 pub(crate) fn handle_byte(byte: u8) {
+    // Read the wake-up packet from the controller, but absolute coordinates
+    // come from the hypervisor queue when the compositor polls the mouse.
+    if absolute::enabled() {
+        return;
+    }
     let mut dev = MOUSE.lock();
     if dev.packet_index == 0 && byte & 0x08 == 0 {
         // Out of sync: ignore this byte and wait for a valid first byte.
@@ -191,10 +199,9 @@ pub(crate) fn handle_byte(byte: u8) {
         dev.packet_index = 0;
         if let Some(ev) = parse_packet(dev.packet) {
             // PS/2 Y is positive-up; screen Y is positive-down.
-            // At 720p, apply a sensitivity multiplier (2x) so the cursor
-            // doesn't feel sluggish covering 4x the pixels.
-            let dx = i32::from(ev.dx) * 2;
-            let dy = i32::from(ev.dy) * 2;
+            // Use one screen pixel per PS/2 movement unit.
+            let dx = i32::from(ev.dx);
+            let dy = i32::from(ev.dy);
             dev.state.x = (dev.state.x + dx).clamp(0, screen_width() - 1);
             dev.state.y = (dev.state.y - dy).clamp(0, screen_height() - 1);
             dev.state.buttons = ev.buttons;
@@ -214,6 +221,11 @@ pub(crate) fn handle_byte(byte: u8) {
 /// bytes cannot be stolen by the IRQ handler mid-sequence.
 pub fn init() {
     x86_64::instructions::interrupts::without_interrupts(|| {
+        {
+            let mut dev = MOUSE.lock();
+            dev.state.x = screen_width() / 2;
+            dev.state.y = screen_height() / 2;
+        }
         // SAFETY: PS/2 controller ports; bounded waits, no hangs.
         unsafe {
             // Discard any stale output byte (e.g. a self-test result) so it
@@ -265,6 +277,7 @@ pub fn init() {
             }
 
             serial_println!("[mouse] initialized (IRQ12, 3-byte packets)");
+            absolute::init();
         }
     });
 }

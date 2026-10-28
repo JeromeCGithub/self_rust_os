@@ -1,13 +1,13 @@
 //! Portal: graphical terminal window for `self_rust_os`, built on `userlib`.
 //!
-//! Draws a window (position from `portal.pos` file, written by the WM),
-//! and runs a mini-shell inside. Uses 32bpp framebuffer.
+//! Renders a shell into a private surface; the compositor owns window
+//! decorations, placement, focus, and presentation.
 
 #![no_std]
 #![no_main]
 
-use userlib::{println, sys};
 use font8x8::{UnicodeFonts, BASIC_FONTS};
+use userlib::{println, sys};
 
 /// Framebuffer base address (mapped by kernel).
 const FB_ADDR: usize = 0x90_0000;
@@ -17,26 +17,23 @@ static mut FB_WIDTH: i32 = 1280;
 static mut FB_HEIGHT: i32 = 720;
 static mut FB_PITCH: i32 = 1280 * 4;
 
-/// Window dimensions (must match WM).
-const WIN_W: i32 = 640;
-const WIN_H: i32 = 400;
-const TITLE_H: i32 = 32;
+/// Logical content dimensions (must match the compositor).
+const WIN_W: i32 = 488;
+const WIN_H: i32 = 288;
+const TITLE_H: i32 = 0;
 
 /// Content area (inside window frame).
 const CONTENT_X_OFF: i32 = 4;
 const CONTENT_Y_OFF: i32 = TITLE_H + 4;
 
-/// Font dimensions (2x scaled 8x8 for readability at 720p).
-const FONT_W: i32 = 16;
-const FONT_H: i32 = 16;
+/// Font cell dimensions.
+const FONT_W: i32 = 8;
+const FONT_H: i32 = 12;
 
 /// Colors (32-bit XRGB).
-const BLACK: u32 = 0x000000;
-const GREEN: u32 = 0x00FF00;
+const BLACK: u32 = 0x101827;
+const GREEN: u32 = 0xbed5e8;
 const WHITE: u32 = 0xFFFFFF;
-
-/// Position file (written by WM).
-const POS_FILE: &str = "portal.pos";
 
 /// Sets a pixel (with bounds check). 32bpp.
 fn set_pixel(x: i32, y: i32, color: u32) {
@@ -57,16 +54,15 @@ fn fill_rect(x: i32, y: i32, w: i32, h: i32, color: u32) {
     }
 }
 
-/// Draws a character at (x, y) using the 8x8 font, scaled 2x.
+/// Draws a character at (x, y) using the 8x8 font.
 fn draw_char(x: i32, y: i32, c: char, color: u32) {
     if let Some(glyph) = BASIC_FONTS.get(c) {
         for (row, byte) in glyph.iter().enumerate() {
             for col in 0..8 {
                 if (byte >> col) & 1 != 0 {
-                    // 2x scale: each pixel becomes 2x2.
-                    let px = x + (col as i32) * 2;
-                    let py = y + (row as i32) * 2;
-                    fill_rect(px, py, 2, 2, color);
+                    let px = x + col as i32;
+                    let py = y + row as i32;
+                    fill_rect(px, py, 1, 1, color);
                 }
             }
         }
@@ -81,21 +77,6 @@ fn draw_str(x: i32, y: i32, s: &str, color: u32) -> i32 {
         cx += FONT_W;
     }
     cx
-}
-
-/// Reads the window position from the pos file. Returns (x, y).
-fn read_pos() -> (i32, i32) {
-    let mut buf = [0u8; 16];
-    match sys::read_file(POS_FILE, &mut buf) {
-        Some(n) => {
-            let s = core::str::from_utf8(&buf[..n]).unwrap_or("100 80");
-            let mut parts = s.split_whitespace();
-            let x = parts.next().and_then(|p| p.parse().ok()).unwrap_or(100);
-            let y = parts.next().and_then(|p| p.parse().ok()).unwrap_or(80);
-            (x, y)
-        }
-        None => (100, 80),
-    }
 }
 
 /// Simple line buffer for the shell.
@@ -117,6 +98,10 @@ impl Shell {
     }
 
     fn push_line(&mut self, s: &[u8]) {
+        println!(
+            "[portal] output: {}",
+            core::str::from_utf8(s).unwrap_or("?")
+        );
         if self.line_count >= 20 {
             for i in 1..20 {
                 self.lines[i - 1] = self.lines[i];
@@ -136,6 +121,10 @@ impl Shell {
         let cmd_len = self.input_len.min(64);
         cmd_buf[..cmd_len].copy_from_slice(&self.input[..cmd_len]);
         let cmd = &cmd_buf[..cmd_len];
+        println!(
+            "[portal] command: {}",
+            core::str::from_utf8(cmd).unwrap_or("?")
+        );
 
         let mut echo = [0u8; 64];
         echo[0] = b'>';
@@ -145,7 +134,81 @@ impl Shell {
         self.push_line(&echo[..2 + len]);
 
         if cmd == b"help" {
-            self.push_line(b"Commands: help, echo, clear");
+            self.push_line(b"help echo clear pwd ls cat write mkdir time exit");
+        } else if cmd == b"pwd" {
+            self.push_line(b"/");
+        } else if cmd == b"exit" {
+            sys::exit(0);
+        } else if cmd == b"time" {
+            let mut buf = [0u8; 64];
+            use core::fmt::Write;
+            let mut out = Line {
+                buf: &mut buf,
+                len: 0,
+            };
+            let _ = write!(out, "{} ticks since boot", sys::ticks());
+            let n = out.len;
+            self.push_line(&buf[..n]);
+        } else if cmd == b"ls" || cmd.starts_with(b"ls ") {
+            let path = core::str::from_utf8(cmd.get(3..).unwrap_or(b"/")).unwrap_or("/");
+            let mut entries = [0u8; 384];
+            if let Some(n) = sys::ls(path, &mut entries, 32) {
+                for e in entries.chunks_exact(12).take(n.min(32)) {
+                    let mut name = [0u8; 16];
+                    let mut len = 0;
+                    for &b in &e[..8] {
+                        if b != b' ' {
+                            name[len] = b;
+                            len += 1;
+                        }
+                    }
+                    if e[8] != b' ' {
+                        name[len] = b'.';
+                        len += 1;
+                        for &b in &e[8..11] {
+                            if b != b' ' {
+                                name[len] = b;
+                                len += 1;
+                            }
+                        }
+                    }
+                    if e[11] & 0x10 != 0 {
+                        name[len] = b'/';
+                        len += 1;
+                    }
+                    self.push_line(&name[..len]);
+                }
+            } else {
+                self.push_line(b"ls: directory not found");
+            }
+        } else if cmd.starts_with(b"cat ") {
+            let mut buf = [0u8; 1024];
+            let path = core::str::from_utf8(&cmd[4..]).unwrap_or("");
+            if let Some(n) = sys::read_file(path, &mut buf) {
+                for line in buf[..n].split(|b| *b == b'\n') {
+                    self.push_line(line);
+                }
+            } else {
+                self.push_line(b"cat: file not found");
+            }
+        } else if cmd.starts_with(b"mkdir ") {
+            let path = core::str::from_utf8(&cmd[6..]).unwrap_or("");
+            self.push_line(if sys::mkdir(path).is_ok() {
+                b"directory created"
+            } else {
+                b"mkdir: failed"
+            });
+        } else if cmd.starts_with(b"write ") {
+            if let Some(end) = cmd[6..].iter().position(|b| *b == b' ') {
+                let path = core::str::from_utf8(&cmd[6..6 + end]).unwrap_or("");
+                self.push_line(if sys::write_file(path, &cmd[7 + end..]).is_some() {
+                    b"file written"
+                } else {
+                    b"write: failed"
+                });
+            } else {
+                self.push_line(b"usage: write /FILE.TXT text");
+            }
         } else if cmd == b"clear" {
             self.line_count = 0;
         } else if cmd_len > 5 && &cmd[..5] == b"echo " {
@@ -162,6 +225,7 @@ impl Shell {
 /// Entry point.
 #[no_mangle]
 pub extern "C" fn user_main() {
+    sys::graphics_mode();
     println!("[portal] Portal starting...");
 
     // Get framebuffer geometry.
@@ -171,20 +235,17 @@ pub extern "C" fn user_main() {
             FB_HEIGHT = info.height as i32;
             FB_PITCH = info.pitch as i32;
         }
-        println!(
-            "[portal] Framebuffer: {}x{}",
-            info.width, info.height
-        );
+        println!("[portal] Framebuffer: {}x{}", info.width, info.height);
     }
 
     let mut shell = Shell::new();
-    shell.push_line(b"portal v1.0 - mini shell (720p)");
+    shell.push_line(b"Portal / RustOS shell");
     shell.push_line(b"Type 'help' for commands");
 
     let mut char_buf = [0u8; 4];
 
     loop {
-        let (wx, wy) = read_pos();
+        let (wx, wy) = (0, 0);
         let cx = wx + CONTENT_X_OFF;
         let cy = wy + CONTENT_Y_OFF;
         let cw = WIN_W - 8;
@@ -209,9 +270,9 @@ pub extern "C" fn user_main() {
         if input_y + FONT_H <= cy + ch {
             draw_str(cx + 8, input_y, "> ", GREEN);
             let input_str = core::str::from_utf8(&shell.input[..shell.input_len]).unwrap_or("");
-            let end_x = draw_str(cx + 8 + 32, input_y, input_str, WHITE);
+            let end_x = draw_str(cx + 8 + 16, input_y, input_str, WHITE);
             if (sys::ticks() / 9) % 2 == 0 {
-                fill_rect(end_x, input_y, 16, FONT_H, WHITE);
+                fill_rect(end_x, input_y, 8, FONT_H, WHITE);
             }
         }
 
@@ -233,5 +294,18 @@ pub extern "C" fn user_main() {
 
         let start = sys::ticks();
         while sys::ticks() - start < 1 {}
+    }
+}
+
+struct Line<'a> {
+    buf: &'a mut [u8],
+    len: usize,
+}
+impl core::fmt::Write for Line<'_> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let n = s.len().min(self.buf.len() - self.len);
+        self.buf[self.len..self.len + n].copy_from_slice(&s.as_bytes()[..n]);
+        self.len += n;
+        Ok(())
     }
 }

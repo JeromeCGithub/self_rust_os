@@ -99,14 +99,13 @@ pub extern "C" fn user_main() {
     println!("Type 'help' for commands.\n");
 
     let mut line_buf = [0u8; 256];
-    let mut line_len = 0;
     let mut char_buf = [0u8; 4];
 
     loop {
         sys::console_write(b"> ");
 
         // Read a line with echo.
-        line_len = 0;
+        let mut line_len = 0;
         loop {
             let n = sys::read(sys::STDIN_FD, &mut char_buf);
             if n == 0 {

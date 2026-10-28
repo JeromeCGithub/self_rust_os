@@ -233,20 +233,23 @@ fn map_user_stack_inner(
 
 /// Maps the framebuffer into user space.
 ///
-/// Maps the physical framebuffer (whose address the bootloader reported) to
-/// [`USER_FRAMEBUFFER`](super::USER_FRAMEBUFFER) with USER_ACCESSIBLE |
-/// WRITABLE so user programs can draw directly to the screen.
+/// The compositor maps the physical display. Other processes receive private,
+/// zero-filled frames at the same virtual address, isolating client drawing.
+/// Returns the private frames so the compositor can request snapshots.
 pub(crate) fn map_user_framebuffer(
     mapper: &mut impl Mapper<Size4KiB>,
     frame_allocator: &mut impl FrameAllocator<Size4KiB>,
-) -> Result<(), &'static str> {
+    display_owner: bool,
+    phys_offset: VirtAddr,
+) -> Result<alloc::vec::Vec<PhysFrame>, &'static str> {
     use x86_64::PhysAddr;
 
     let flags =
         PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
 
     // The framebuffer must not be cached for correct display.
-    let flags = flags | PageTableFlags::NO_CACHE;
+    let flags = if display_owner { flags | PageTableFlags::NO_CACHE } else { flags };
+    let mut frames = alloc::vec::Vec::new();
 
     let num_pages = userspace::FRAMEBUFFER_SIZE / 4096;
     let fb_virt_start = VirtAddr::new(userspace::USER_FRAMEBUFFER);
@@ -254,7 +257,15 @@ pub(crate) fn map_user_framebuffer(
 
     for i in 0..num_pages {
         let page: Page<Size4KiB> = Page::containing_address(fb_virt_start + i * 4096);
-        let frame = PhysFrame::containing_address(fb_phys_start + i * 4096);
+        let frame = if display_owner {
+            PhysFrame::containing_address(fb_phys_start + i * 4096)
+        } else {
+            let frame = frame_allocator.allocate_frame().ok_or("surface allocation failed")?;
+            // SAFETY: Newly allocated frame, mapped by the physical memory offset.
+            unsafe { core::ptr::write_bytes((phys_offset + frame.start_address().as_u64()).as_mut_ptr::<u8>(), 0, 4096); }
+            frames.push(frame);
+            frame
+        };
 
         // SAFETY:
         // The framebuffer physical pages are reserved by the hardware.
@@ -273,5 +284,5 @@ pub(crate) fn map_user_framebuffer(
         num_pages,
     );
 
-    Ok(())
+    Ok(frames)
 }

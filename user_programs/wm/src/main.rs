@@ -1,357 +1,284 @@
-//! Window manager for `self_rust_os`, built on `userlib`.
-//!
-//! A user-space compositor that draws the desktop (wallpaper, taskbar with
-//! terminal icon), tracks the mouse cursor, and manages portal windows
-//! (spawn on icon click, close via X button, drag via title bar).
-//!
-//! Uses 32bpp XRGB framebuffer with dynamic geometry from `SYS_FB_INFO`.
-
+//! Desktop compositor. Only PID 0 owns the hardware framebuffer; applications
+//! draw into private surfaces which are composed in window stacking order.
 #![no_std]
 #![no_main]
-
+use font8x8::{UnicodeFonts, BASIC_FONTS};
 use userlib::{println, sys};
-
-/// Framebuffer base address (mapped by kernel).
-const FB_ADDR: usize = 0x90_0000;
-
-// 32-bit XRGB colors (0x00RRGGBB).
-const BLACK: u32 = 0x000000;
-const BLUE: u32 = 0x0000AA;
-const GREEN: u32 = 0x00AA00;
-const RED: u32 = 0xAA0000;
-const BROWN: u32 = 0xAA5500;
-const LIGHT_GRAY: u32 = 0xAAAAAA;
-const DARK_GRAY: u32 = 0x555555;
-const LIGHT_BLUE: u32 = 0x5555FF;
-const LIGHT_GREEN: u32 = 0x55FF55;
-const YELLOW: u32 = 0xFFFF55;
-const WHITE: u32 = 0xFFFFFF;
-
-/// Global framebuffer geometry (set at startup from SYS_FB_INFO).
-static mut FB_WIDTH: i32 = 1280;
-static mut FB_HEIGHT: i32 = 720;
-static mut FB_PITCH: i32 = 1280 * 4;
-
-/// Taskbar height (scaled for 720p).
-const TASKBAR_H: i32 = 40;
-/// Terminal icon rect (in taskbar).
-const ICON_X: i32 = 16;
-const ICON_W: i32 = 64;
-const ICON_H: i32 = 32;
-
-/// Portal window defaults (scaled for 720p).
-const WIN_W: i32 = 640;
-const WIN_H: i32 = 400;
-const WIN_X0: i32 = 100;
-const WIN_Y0: i32 = 80;
-const TITLE_H: i32 = 32;
-
-/// Position file for portal window (written by WM, read by portal).
-const POS_FILE: &str = "portal.pos";
-
-/// Returns the icon Y position (depends on FB_HEIGHT).
-fn icon_y() -> i32 {
-    unsafe { FB_HEIGHT - TASKBAR_H + 4 }
+const W: usize = 640;
+const H: usize = 480;
+const MAX: usize = 6;
+static mut BACK: [u32; W * H] = [0; W * H];
+static mut SURFACE: [u32; W * H] = [0; W * H];
+static mut WALL: [u8; 57615] = [0; 57615];
+#[derive(Clone, Copy)]
+struct App {
+    name: [u8; 12],
+    path: [u8; 32],
 }
-
-/// Sets a pixel (with bounds check). 32bpp XRGB.
-fn set_pixel(x: i32, y: i32, color: u32) {
-    unsafe {
-        if x >= 0 && x < FB_WIDTH && y >= 0 && y < FB_HEIGHT {
-            let offset = (y * FB_PITCH + x * 4) as usize;
-            core::ptr::write((FB_ADDR as *mut u8).add(offset) as *mut u32, color);
+const EMPTY_APP: App = App {
+    name: [0; 12],
+    path: [0; 32],
+};
+#[derive(Clone, Copy)]
+struct Window {
+    pid: u32,
+    app: App,
+    x: i32,
+    y: i32,
+    exited: bool,
+}
+fn string(bytes: &[u8]) -> &str {
+    core::str::from_utf8(&bytes[..bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len())])
+        .unwrap_or("")
+}
+fn pixel(x: i32, y: i32, c: u32) {
+    if x >= 0 && y >= 0 && x < W as i32 && y < H as i32 {
+        unsafe {
+            BACK[y as usize * W + x as usize] = c;
         }
     }
 }
-
-/// Fills a rectangle.
-fn fill_rect(x: i32, y: i32, w: i32, h: i32, color: u32) {
-    for dy in 0..h {
-        for dx in 0..w {
-            set_pixel(x + dx, y + dy, color);
+fn rect(x: i32, y: i32, w: i32, h: i32, c: u32) {
+    for yy in y.max(0)..(y + h).min(H as i32) {
+        for xx in x.max(0)..(x + w).min(W as i32) {
+            pixel(xx, yy, c);
         }
     }
 }
-
-/// Draws a simple wallpaper: gradient sky, sun, hills (scaled for 720p).
-fn draw_wallpaper() {
-    unsafe {
-        let horizon = FB_HEIGHT - TASKBAR_H - 100;
-        // Sky gradient.
-        for y in 0..horizon {
-            let color = if y < horizon / 2 { LIGHT_BLUE } else { BLUE };
-            for x in 0..FB_WIDTH {
-                set_pixel(x, y, color);
-            }
-        }
-        // Sun (yellow circle, bigger for 720p).
-        let (scx, scy, r) = (FB_WIDTH - 200, 80, 40);
-        for dy in -r..=r {
-            for dx in -r..=r {
-                if dx * dx + dy * dy <= r * r {
-                    set_pixel(scx + dx, scy + dy, YELLOW);
-                }
-            }
-        }
-        // Hills (green).
-        for x in 0..FB_WIDTH {
-            let t1 = (x % 400) as i32;
-            let h1 = horizon - 60 + if t1 < 200 { t1 / 4 } else { (400 - t1) / 4 };
-            let t2 = ((x + 100) % 500) as i32;
-            let h2 = horizon - 40 + if t2 < 250 { t2 / 4 } else { (500 - t2) / 4 };
-            let hill_top = h1.min(h2);
-            for y in hill_top..(FB_HEIGHT - TASKBAR_H) {
-                let color = if y < hill_top + 20 { LIGHT_GREEN } else { GREEN };
-                set_pixel(x, y, color);
-            }
-        }
-        // Ground strip.
-        for y in (FB_HEIGHT - TASKBAR_H - 30)..(FB_HEIGHT - TASKBAR_H) {
-            for x in 0..FB_WIDTH {
-                set_pixel(x, y, BROWN);
-            }
-        }
-    }
-}
-
-/// Draws the taskbar with terminal icon.
-fn draw_taskbar() {
-    unsafe {
-        let taskbar_y = FB_HEIGHT - TASKBAR_H;
-        // Taskbar background.
-        fill_rect(0, taskbar_y, FB_WIDTH, TASKBAR_H, DARK_GRAY);
-        // Top border.
-        fill_rect(0, taskbar_y, FB_WIDTH, 2, LIGHT_GRAY);
-
-        let iy = icon_y();
-        // Terminal icon: dark rect with green ">" symbol.
-        fill_rect(ICON_X, iy, ICON_W, ICON_H, BLACK);
-        fill_rect(ICON_X, iy, ICON_W, 2, LIGHT_GRAY);
-        fill_rect(ICON_X, iy + ICON_H - 2, ICON_W, 2, LIGHT_GRAY);
-        fill_rect(ICON_X, iy, 2, ICON_H, LIGHT_GRAY);
-        fill_rect(ICON_X + ICON_W - 2, iy, 2, ICON_H, LIGHT_GRAY);
-        // Draw ">" (bigger for 720p).
-        let cx = ICON_X + 12;
-        let cy = iy + 16;
-        for i in 0..10 {
-            set_pixel(cx + i, cy - i, GREEN);
-            set_pixel(cx + i, cy + i, GREEN);
-        }
-        // Underscore cursor.
-        for i in 0..12 {
-            set_pixel(cx + 16 + i, cy + 8, GREEN);
-        }
-    }
-}
-
-/// Draws the mouse cursor (bigger white arrow for 720p).
-fn draw_cursor(x: i32, y: i32) {
-    // Arrow: vertical line (20px) with diagonal.
-    for i in 0..20 {
-        set_pixel(x, y + i, WHITE);
-        set_pixel(x + 1, y + i, WHITE);
-    }
-    for i in 2..12 {
-        set_pixel(x + i, y + i, WHITE);
-        set_pixel(x + i, y + i + 1, WHITE);
-    }
-    // Black outline.
-    for i in 0..20 {
-        set_pixel(x - 1, y + i, BLACK);
-        set_pixel(x + 2, y + i, BLACK);
-    }
-}
-
-/// Draws window decorations (title bar with close button).
-/// Returns the close button rect for hit-testing.
-fn draw_window_frame(x: i32, y: i32) -> (i32, i32, i32, i32) {
-    // Window border.
-    fill_rect(x - 4, y - 4, WIN_W + 8, WIN_H + 8, LIGHT_GRAY);
-    // Title bar.
-    fill_rect(x, y, WIN_W, TITLE_H, BLUE);
-    // Close button (red X, bigger).
-    let bx = x + WIN_W - 28;
-    let by = y + 4;
-    fill_rect(bx, by, 24, 24, RED);
-    for i in 0..16 {
-        set_pixel(bx + 4 + i, by + 4 + i, WHITE);
-        set_pixel(bx + 4 + i, by + 5 + i, WHITE);
-        set_pixel(bx + 19 - i, by + 4 + i, WHITE);
-        set_pixel(bx + 19 - i, by + 5 + i, WHITE);
-    }
-    (bx, by, 24, 24)
-}
-
-/// Writes the portal window position to the pos file.
-fn write_pos(x: i32, y: i32) {
-    let mut buf = [0u8; 16];
-    let s = format_pos(x, y, &mut buf);
-    let _ = sys::write_file(POS_FILE, s.as_bytes());
-}
-
-/// Formats "x y\n" into the buffer. Returns the string.
-fn format_pos<'a>(x: i32, y: i32, buf: &'a mut [u8; 16]) -> &'a str {
-    let mut i = 0;
-    let mut n = x;
-    if n == 0 {
-        buf[i] = b'0';
-        i += 1;
-    } else {
-        let mut digits = [0u8; 8];
-        let mut d = 0;
-        while n > 0 {
-            digits[d] = b'0' + (n % 10) as u8;
-            n /= 10;
-            d += 1;
-        }
-        for j in (0..d).rev() {
-            buf[i] = digits[j];
-            i += 1;
-        }
-    }
-    buf[i] = b' ';
-    i += 1;
-    let mut n = y;
-    if n == 0 {
-        buf[i] = b'0';
-        i += 1;
-    } else {
-        let mut digits = [0u8; 8];
-        let mut d = 0;
-        while n > 0 {
-            digits[d] = b'0' + (n % 10) as u8;
-            n /= 10;
-            d += 1;
-        }
-        for j in (0..d).rev() {
-            buf[i] = digits[j];
-            i += 1;
-        }
-    }
-    buf[i] = b'\n';
-    i += 1;
-    core::str::from_utf8(&buf[..i]).unwrap_or("0 0\n")
-}
-
-/// Checks if point (px, py) is in rect (x, y, w, h).
-fn in_rect(px: i32, py: i32, x: i32, y: i32, w: i32, h: i32) -> bool {
-    px >= x && px < x + w && py >= y && py < y + h
-}
-
-/// Entry point.
-#[no_mangle]
-pub extern "C" fn user_main() {
-    println!("[wm] Window manager starting...");
-
-    // Get framebuffer geometry from the kernel.
-    match sys::fb_info() {
-        Ok(info) => {
-            unsafe {
-                FB_WIDTH = info.width as i32;
-                FB_HEIGHT = info.height as i32;
-                FB_PITCH = info.pitch as i32;
-            }
-            println!(
-                "[wm] Framebuffer: {}x{} pitch={} bpp={}",
-                info.width, info.height, info.pitch, info.bpp
-            );
-        }
-        Err(()) => {
-            println!("[wm] Failed to get framebuffer info, using defaults");
-        }
-    }
-
-    // Window state: None = no portal, Some((pid, x, y)) = portal open.
-    let mut portal: Option<(u32, i32, i32)> = None;
-
-    // Drag state: None = not dragging, Some((offset_x, offset_y)) = dragging.
-    let mut drag: Option<(i32, i32)> = None;
-
-    // Previous mouse buttons for edge detection.
-    let mut prev_buttons: u8 = 0;
-
-    // Initial draw.
-    draw_wallpaper();
-    draw_taskbar();
-
-    loop {
-        let (mx, my, buttons) = sys::mouse();
-        let left_pressed = (buttons & 0x01) != 0;
-        let left_clicked = left_pressed && (prev_buttons & 0x01) == 0;
-        let left_released = !left_pressed && (prev_buttons & 0x01) != 0;
-
-        // Redraw desktop (simple: full redraw each frame).
-        draw_wallpaper();
-        draw_taskbar();
-
-        // Draw portal window frame if open.
-        let mut close_rect = (0, 0, 0, 0);
-        if let Some((_, wx, wy)) = portal {
-            close_rect = draw_window_frame(wx, wy);
-        }
-
-        // Handle input.
-        if left_clicked {
-            let iy = icon_y();
-            // Click on terminal icon?
-            if in_rect(mx, my, ICON_X, iy, ICON_W, ICON_H) {
-                if portal.is_none() {
-                    println!("[wm] Spawning portal...");
-                    match sys::spawn("/bin/PORTAL.BIN") {
-                        Ok(pid) => {
-                            println!("[wm] Portal spawned, pid {}", pid);
-                            portal = Some((pid, WIN_X0, WIN_Y0));
-                            write_pos(WIN_X0, WIN_Y0);
-                        }
-                        Err(()) => {
-                            println!("[wm] Failed to spawn portal");
-                        }
+fn text(x: i32, y: i32, s: &str, c: u32) {
+    for (i, ch) in s.chars().enumerate() {
+        if let Some(g) = BASIC_FONTS.get(ch) {
+            for (yy, b) in g.iter().enumerate() {
+                for xx in 0..8 {
+                    if b & (1 << xx) != 0 {
+                        pixel(x + i as i32 * 8 + xx, y + yy as i32, c);
                     }
                 }
             }
-            // Click on close button?
-            else if let Some((pid, wx, wy)) = portal {
-                let (bx, by, bw, bh) = close_rect;
-                if in_rect(mx, my, bx, by, bw, bh) {
-                    println!("[wm] Closing portal pid {}", pid);
-                    let _ = sys::kill(pid);
-                    portal = None;
-                    let _ = sys::write_file(POS_FILE, b"");
-                }
-                // Click on title bar? Start drag.
-                else if in_rect(mx, my, wx, wy, WIN_W, TITLE_H) {
-                    drag = Some((mx - wx, my - wy));
-                }
-            }
         }
-
-        // Handle drag.
-        if let Some((ox, oy)) = drag {
-            if left_pressed {
-                if let Some((pid, _, _)) = portal {
-                    unsafe {
-                        let nx = (mx - ox).clamp(0, FB_WIDTH - WIN_W);
-                        let ny = (my - oy).clamp(0, FB_HEIGHT - TASKBAR_H - WIN_H);
-                        portal = Some((pid, nx, ny));
-                        write_pos(nx, ny);
+    }
+}
+fn hit(mx: i32, my: i32, x: i32, y: i32, w: i32, h: i32) -> bool {
+    mx >= x && mx < x + w && my >= y && my < y + h
+}
+fn discover(apps: &mut [App; MAX]) -> usize {
+    let mut entries = [0u8; 12 * 32];
+    let mut count = 0;
+    if let Some(n) = sys::ls("/BIN", &mut entries, 32) {
+        for e in entries.chunks_exact(12).take(n.min(32)) {
+            if &e[8..11] != b"BIN" || &e[..8] == b"WM      " || count == MAX {
+                continue;
+            }
+            let len = e[..8].iter().position(|b| *b == b' ').unwrap_or(8);
+            let mut app = EMPTY_APP;
+            app.name[..len].copy_from_slice(&e[..len]);
+            if &e[..len] == b"PORTAL" {
+                app.name = [0; 12];
+                app.name[..8].copy_from_slice(b"Terminal");
+            }
+            app.path[..5].copy_from_slice(b"/BIN/");
+            app.path[5..5 + len].copy_from_slice(&e[..len]);
+            app.path[5 + len..9 + len].copy_from_slice(b".BIN");
+            apps[count] = app;
+            count += 1;
+        }
+    }
+    count
+}
+fn desktop(apps: &[App], wallpaper: bool) {
+    for y in 0..H {
+        for x in 0..W {
+            let c = if wallpaper {
+                let i = 15 + ((y * 120 / H) * 160 + x * 160 / W) * 3;
+                unsafe {
+                    ((WALL[i] as u32) << 16) | ((WALL[i + 1] as u32) << 8) | WALL[i + 2] as u32
+                }
+            } else {
+                0x16364e
+            };
+            pixel(x as i32, y as i32, c);
+        }
+    }
+    rect(0, 0, 640, 27, 0x111d30);
+    text(15, 10, "RustOS", 0xffffff);
+    text(375, 10, "DESKTOP / APPLICATIONS", 0xa3bfd6);
+    for (i, app) in apps.iter().enumerate() {
+        let x = 18 + i as i32 * 100;
+        rect(x + 12, 48, 44, 38, 0x0a1628);
+        rect(x + 12, 48, 44, 3, 0x72dac6);
+        let symbol = match string(&app.name) {
+            "Terminal" => ">_",
+            "FORGE" => "sh",
+            "HELLO" => "hi",
+            "SNAKE" => "S",
+            "SPIN" => "@",
+            _ => "[]",
+        };
+        text(x + 22, 62, symbol, 0x91e4d2);
+        text(x, 98, string(&app.name), 0xffffff);
+    }
+    rect(0, 448, 640, 32, 0x101c2e);
+    text(14, 461, "R  /  Workspace 1", 0xc8e7f0);
+    text(340, 461, "Click an app to open a window", 0x9bb2c8);
+}
+fn window(win: &mut Window, active: bool) {
+    let result = unsafe { sys::snapshot(win.pid, &mut *core::ptr::addr_of_mut!(SURFACE)) };
+    win.exited = result == Ok(true);
+    rect(win.x + 5, win.y + 5, 492, 326, 0x081321);
+    rect(
+        win.x - 1,
+        win.y - 1,
+        490,
+        322,
+        if active { 0x86cfc8 } else { 0x45576e },
+    );
+    rect(
+        win.x,
+        win.y,
+        488,
+        28,
+        if active { 0x233b55 } else { 0x1c2d42 },
+    );
+    text(win.x + 12, win.y + 10, string(&win.app.name), 0xf4f8ff);
+    if win.exited {
+        text(win.x + 200, win.y + 10, "Exited", 0x99b4c9);
+    }
+    text(win.x + 465, win.y + 10, "x", 0xffa9a9);
+    let scale = string(&win.app.name) == "SNAKE";
+    for y in 0..288 {
+        for x in 0..488 {
+            let sx = if scale { x * W / 488 } else { x };
+            let sy = if scale { y * H / 288 } else { y };
+            let c = if result.is_err() {
+                0x101827
+            } else {
+                unsafe { SURFACE[sy * W + sx] }
+            };
+            pixel(win.x + x as i32, win.y + 28 + y as i32, c);
+        }
+    }
+}
+fn focus(pid: u32) {
+    let _ = sys::focus(pid);
+}
+#[no_mangle]
+pub extern "C" fn user_main() {
+    sys::graphics_mode();
+    let info = match sys::fb_info() {
+        Ok(i) if i.width == W && i.height == H && i.bpp == 32 => i,
+        _ => {
+            println!("[desktop] requires 640x480x32");
+            sys::exit(1)
+        }
+    };
+    let wallpaper = unsafe {
+        sys::read_file("/ETC/WALL.PPM", &mut *core::ptr::addr_of_mut!(WALL)) == Some(57615)
+            && &WALL[..15] == b"P6\n160 120\n255\n"
+    };
+    println!("[desktop] wallpaper loaded: {}", wallpaper);
+    let mut apps = [EMPTY_APP; MAX];
+    let count = discover(&mut apps);
+    println!("[desktop] ready: {} applications", count);
+    let mut windows: [Option<Window>; MAX] = [None; MAX];
+    let mut used = 0;
+    let mut previous = 0;
+    let mut drag: Option<(i32, i32)> = None;
+    loop {
+        let (mx, my, buttons) = sys::mouse();
+        let down = buttons & 1 != 0;
+        let click = down && previous & 1 == 0;
+        if click {
+            let window_hit = (0..used).rev().find(|&i| {
+                let w = windows[i].unwrap();
+                hit(mx, my, w.x, w.y, 488, 316)
+            });
+            if window_hit.is_none() && my >= 40 && my < 120 {
+                let index = ((mx - 18).max(0) / 100) as usize;
+                if index < count && used < MAX {
+                    let app = apps[index];
+                    match sys::spawn(string(&app.path)) {
+                        Ok(pid) => {
+                            windows[used] = Some(Window {
+                                pid,
+                                app,
+                                x: 80 + used as i32 * 12,
+                                y: 126 + (used as i32 * 2).min(6),
+                                exited: false,
+                            });
+                            used += 1;
+                            focus(pid);
+                            println!("[desktop] launched {} pid={}", string(&app.name), pid);
+                        }
+                        Err(()) => println!("[desktop] launch failed: {}", string(&app.path)),
                     }
                 }
             } else {
-                drag = None;
+                if let Some(i) = window_hit {
+                    let w = windows[i].unwrap();
+                    for j in i..used - 1 {
+                        windows[j] = windows[j + 1];
+                    }
+                    windows[used - 1] = Some(w);
+                    focus(w.pid);
+                    if hit(mx, my, w.x + 455, w.y, 33, 28) {
+                        let _ = sys::kill(w.pid);
+                        let _ = sys::waitpid(w.pid);
+                        used -= 1;
+                        windows[used] = None;
+                        focus(if used > 0 {
+                            windows[used - 1].unwrap().pid
+                        } else {
+                            0
+                        });
+                    } else if hit(mx, my, w.x, w.y, 455, 28) {
+                        drag = Some((mx - w.x, my - w.y));
+                    }
+                } else {
+                    focus(0);
+                }
             }
         }
-
-        if left_released {
+        if !down {
             drag = None;
         }
-
-        // Draw cursor on top.
-        draw_cursor(mx, my);
-
-        prev_buttons = buttons;
-
-        // Small delay to avoid busy loop (~30fps).
-        let start = sys::ticks();
-        while sys::ticks() - start < 2 {}
+        if let Some((dx, dy)) = drag {
+            if used > 0 {
+                let w = windows[used - 1].as_mut().unwrap();
+                w.x = (mx - dx).clamp(0, 152);
+                w.y = (my - dy).clamp(28, 132);
+            }
+        }
+        desktop(&apps[..count], wallpaper);
+        for i in 0..used {
+            window(windows[i].as_mut().unwrap(), i == used - 1);
+        }
+        for y in 0..14 {
+            for x in 0..=y / 2 {
+                pixel(
+                    mx + x,
+                    my + y,
+                    if x == 0 || x == y / 2 {
+                        0x081321
+                    } else {
+                        0xffffff
+                    },
+                );
+            }
+        }
+        unsafe {
+            let ptr = core::ptr::addr_of!(BACK) as *const u32;
+            for y in 0..H {
+                core::ptr::copy_nonoverlapping(
+                    ptr.add(y * W),
+                    (0x900000 + y * info.pitch) as *mut u32,
+                    W,
+                );
+            }
+        }
+        previous = buttons;
+        let tick = sys::ticks();
+        while sys::ticks() == tick {
+            core::hint::spin_loop();
+        }
     }
 }
