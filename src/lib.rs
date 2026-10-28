@@ -44,7 +44,7 @@ pub mod userspace;
 /// Initializes the graphics framebuffer + text console first (so `println!`
 /// works), then the GDT, IDT, and PICs. Must be called once at boot with the
 /// physical memory offset from the bootloader and the framebuffer info.
-pub fn init(phys_mem_offset: x86_64::VirtAddr, fb_info: gfx::FbInfo, fb_virt_addr: x86_64::VirtAddr) {
+pub fn init(_phys_mem_offset: x86_64::VirtAddr, fb_info: gfx::FbInfo, fb_virt_addr: x86_64::VirtAddr) {
     // SAFETY: fb_virt_addr must point to mapped framebuffer memory.
     unsafe {
         gfx::init(fb_info, fb_virt_addr);

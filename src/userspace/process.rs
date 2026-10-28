@@ -14,29 +14,6 @@ use x86_64::{
 
 use crate::{println, serial_println, userspace};
 
-/// Maps the flat binary bytes into user-accessible pages starting at
-/// [`USER_CODE_START`](super::USER_CODE_START).
-///
-/// All pages are initially mapped writable so the binary content can be
-/// copied in. After copying, pages within the first `readonly_size` bytes
-/// are remapped as read-only to enforce W^X.
-///
-/// Returns the number of pages mapped.
-///
-/// # Arguments
-/// * `binary` - The raw bytes of the flat user binary.
-/// * `readonly_size` - Page-aligned byte count of the read-only region.
-/// * `mapper` - The page table mapper for the target address space.
-/// * `frame_allocator` - A physical frame allocator.
-pub(crate) fn map_user_binary(
-    binary: &[u8],
-    readonly_size: usize,
-    mapper: &mut impl Mapper<Size4KiB>,
-    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
-) -> Result<u64, &'static str> {
-    map_user_binary_inner(binary, readonly_size, mapper, frame_allocator, None)
-}
-
 /// Maps the user binary, copying content via physical addresses (no CR3 switch needed).
 ///
 /// `phys_offset` is the virtual address that maps physical memory (e.g., 0x18000000000).
@@ -183,16 +160,6 @@ fn map_user_binary_inner(
     );
 
     Ok(num_pages)
-}
-
-/// Allocates and maps user-accessible stack pages in the range
-/// [`USER_STACK_BOTTOM`](super::USER_STACK_BOTTOM) to
-/// [`USER_STACK_TOP`](super::USER_STACK_TOP).
-pub(crate) fn map_user_stack(
-    mapper: &mut impl Mapper<Size4KiB>,
-    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
-) -> Result<(), &'static str> {
-    map_user_stack_inner(mapper, frame_allocator, None)
 }
 
 /// Maps the user stack, zeroing pages via physical addresses (no CR3 switch needed).

@@ -10,6 +10,8 @@
 #![reexport_test_harness_main = "test_main"]
 #![allow(missing_docs)]
 
+mod common;
+
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use self_rust_os::{interrupts, println, serial_println};
@@ -19,7 +21,7 @@ entry_point!(main);
 
 fn main(boot_info: &'static BootInfo) -> ! {
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
-    self_rust_os::init(phys_mem_offset, self_rust_os::gfx::FRAMEBUFFER_PHYS_ADDR, self_rust_os::gfx::WIDTH, self_rust_os::gfx::HEIGHT);
+    self_rust_os::init(phys_mem_offset, common::FRAMEBUFFER_INFO, common::framebuffer_addr());
 
     test_main();
     #[expect(clippy::empty_loop)]

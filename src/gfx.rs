@@ -32,21 +32,37 @@ pub const CHAR_WIDTH: usize = 16;
 pub const CHAR_HEIGHT: usize = 16;
 
 // 32-bit XRGB colors (0x00RRGGBB).
+/// Black in 32-bit XRGB format.
 pub const COLOR_BLACK: u32 = 0x000000;
+/// Blue in 32-bit XRGB format.
 pub const COLOR_BLUE: u32 = 0x0000AA;
+/// Green in 32-bit XRGB format.
 pub const COLOR_GREEN: u32 = 0x00AA00;
+/// Cyan in 32-bit XRGB format.
 pub const COLOR_CYAN: u32 = 0x00AAAA;
+/// Red in 32-bit XRGB format.
 pub const COLOR_RED: u32 = 0xAA0000;
+/// Magenta in 32-bit XRGB format.
 pub const COLOR_MAGENTA: u32 = 0xAA00AA;
+/// Brown in 32-bit XRGB format.
 pub const COLOR_BROWN: u32 = 0xAA5500;
+/// Light gray in 32-bit XRGB format.
 pub const COLOR_LIGHT_GRAY: u32 = 0xAAAAAA;
+/// Dark gray in 32-bit XRGB format.
 pub const COLOR_DARK_GRAY: u32 = 0x555555;
+/// Bright blue in 32-bit XRGB format.
 pub const COLOR_BRIGHT_BLUE: u32 = 0x5555FF;
+/// Bright green in 32-bit XRGB format.
 pub const COLOR_BRIGHT_GREEN: u32 = 0x55FF55;
+/// Bright cyan in 32-bit XRGB format.
 pub const COLOR_BRIGHT_CYAN: u32 = 0x55FFFF;
+/// Bright red in 32-bit XRGB format.
 pub const COLOR_BRIGHT_RED: u32 = 0xFF5555;
+/// Bright magenta in 32-bit XRGB format.
 pub const COLOR_BRIGHT_MAGENTA: u32 = 0xFF55FF;
+/// Yellow in 32-bit XRGB format.
 pub const COLOR_YELLOW: u32 = 0xFFFF55;
+/// White in 32-bit XRGB format.
 pub const COLOR_WHITE: u32 = 0xFFFFFF;
 
 /// A 32bpp linear framebuffer with pitch.

@@ -26,20 +26,9 @@ mod grub_boot;
 
 use core::panic::PanicInfo;
 #[cfg(not(feature = "grub"))]
-use self_rust_os::memory::{self, BootInfoFrameAllocator};
-#[cfg(not(feature = "grub"))]
-use self_rust_os::gfx;
-use self_rust_os::{
-    allocator, fs,
-    memory::{self, BootInfoFrameAllocator},
-    println, serial_println,
-    task::keyboard,
-    userspace,
-};
-use x86_64::{
-    structures::paging::{FrameAllocator, OffsetPageTable, Size4KiB},
-    VirtAddr,
-};
+use self_rust_os::memory;
+use self_rust_os::{allocator, println, serial_println};
+use x86_64::{structures::paging::OffsetPageTable, VirtAddr};
 
 /// The embedded flat binary of the user-mode terminal program.
 ///
@@ -189,7 +178,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         }
     }
     // SAFETY: The regions describe usable RAM from the bootloader memory map.
-    let mut frame_allocator = unsafe {
+    let frame_allocator = unsafe {
         memory::RegionFrameAllocator::new(&LEGACY_REGIONS[..region_count])
     };
 

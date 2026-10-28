@@ -18,7 +18,7 @@ use core::arch::naked_asm;
 
 use x86_64::{structures::idt::InterruptStackFrame, VirtAddr};
 
-use crate::{fs, print, println, serial_println, userspace};
+use crate::{print, println, serial_println, userspace};
 
 /// Syscall number for `sys_exit`: terminates the current user process.
 pub const SYS_EXIT: u64 = 0;
@@ -266,26 +266,6 @@ fn user_slice(ptr: u64, len: u64) -> Result<&'static [u8], ()> {
     // kernel has mapped and can access. The caller must not hold the slice
     // across operations that could unmap user memory.
     Ok(unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) })
-}
-
-/// Checks that the range `[ptr, ptr + len)` lies within user-accessible
-/// memory and returns it as a mutable byte slice.
-///
-/// Returns an error without touching memory when the range is invalid.
-fn user_slice_mut(ptr: u64, len: u64) -> Result<&'static mut [u8], ()> {
-    let end = ptr.saturating_add(len);
-    if ptr < userspace::USER_CODE_START || end > userspace::USER_STACK_TOP || end < ptr {
-        return Err(());
-    }
-    if len == 0 {
-        return Ok(&mut []);
-    }
-    // SAFETY:
-    //
-    // The range was validated to lie within the user address space, which the
-    // kernel has mapped and can access. The caller must not hold the slice
-    // across operations that could unmap user memory.
-    Ok(unsafe { core::slice::from_raw_parts_mut(ptr as *mut u8, len as usize) })
 }
 
 /// Writes a buffer from user memory to the VGA text display.

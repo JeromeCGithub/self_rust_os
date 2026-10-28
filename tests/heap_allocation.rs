@@ -13,6 +13,8 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use self_rust_os::allocator::HEAP_SIZE;
 
+mod common;
+
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use self_rust_os::{
@@ -27,7 +29,7 @@ entry_point!(main);
 #[expect(clippy::expect_used)]
 fn main(boot_info: &'static BootInfo) -> ! {
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
-    self_rust_os::init(phys_mem_offset, self_rust_os::gfx::FRAMEBUFFER_PHYS_ADDR, self_rust_os::gfx::WIDTH, self_rust_os::gfx::HEIGHT);
+    self_rust_os::init(phys_mem_offset, common::FRAMEBUFFER_INFO, common::framebuffer_addr());
     let mut mapper = unsafe { memory::init(phys_mem_offset) };
     let mut frame_allocator = unsafe { BootInfoFrameAllocator::new(&boot_info.memory_map) };
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");

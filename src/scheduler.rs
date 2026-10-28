@@ -44,10 +44,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 use x86_64::{
     registers::control::{Cr3, Cr3Flags},
-    structures::paging::{
-        page_table::PageTableEntry, FrameAllocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB,
-    },
-    PhysAddr, VirtAddr,
+    structures::paging::{FrameAllocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB},
+    VirtAddr,
 };
 
 use crate::{gdt, memory::RegionFrameAllocator, userspace};
@@ -116,25 +114,45 @@ pub struct Process {
 /// address), followed by the CPU-pushed interrupt frame.
 #[repr(C)]
 pub struct SavedContext {
+    /// R15 general-purpose register.
     pub r15: u64,
+    /// R14 general-purpose register.
     pub r14: u64,
+    /// R13 general-purpose register.
     pub r13: u64,
+    /// R12 general-purpose register.
     pub r12: u64,
+    /// R11 general-purpose register.
     pub r11: u64,
+    /// R10 general-purpose register.
     pub r10: u64,
+    /// R9 general-purpose register.
     pub r9: u64,
+    /// R8 general-purpose register.
     pub r8: u64,
+    /// Base pointer.
     pub rbp: u64,
+    /// RDI general-purpose register.
     pub rdi: u64,
+    /// RSI general-purpose register.
     pub rsi: u64,
+    /// RDX general-purpose register.
     pub rdx: u64,
+    /// RCX general-purpose register.
     pub rcx: u64,
+    /// RBX general-purpose register.
     pub rbx: u64,
+    /// RAX general-purpose register.
     pub rax: u64,
+    /// Instruction pointer.
     pub rip: u64,
+    /// Code segment selector.
     pub cs: u64,
+    /// CPU flags.
     pub rflags: u64,
+    /// Stack pointer.
     pub rsp: u64,
+    /// Stack segment selector.
     pub ss: u64,
 }
 
@@ -365,14 +383,14 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
         let bin_start = VirtAddr::new(crate::userspace::USER_CODE_START);
         for i in 0..16u64 {
             let page: Page<Size4KiB> = Page::containing_address(bin_start + i * 4096);
-            let _ = unsafe { new_mapper.unmap(page) }.map(|(_, flush)| flush.flush());
+            let _ = new_mapper.unmap(page).map(|(_, flush)| flush.flush());
         }
         // Unmap stack region.
         let stack_bottom = VirtAddr::new(crate::userspace::USER_STACK_BOTTOM);
         let stack_pages = (crate::userspace::USER_STACK_SIZE / 4096) as u64;
         for i in 0..stack_pages {
             let page: Page<Size4KiB> = Page::containing_address(stack_bottom + i * 4096);
-            let _ = unsafe { new_mapper.unmap(page) }.map(|(_, flush)| flush.flush());
+            let _ = new_mapper.unmap(page).map(|(_, flush)| flush.flush());
         }
         // Unmap framebuffer region. The copied P3 still holds the previous
         // process's framebuffer mapping (same physical pages, shared
@@ -382,7 +400,7 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
         let fb_pages = (crate::userspace::FRAMEBUFFER_SIZE / 4096) as u64;
         for i in 0..fb_pages {
             let page: Page<Size4KiB> = Page::containing_address(fb_start + i * 4096);
-            let _ = unsafe { new_mapper.unmap(page) }.map(|(_, flush)| flush.flush());
+            let _ = new_mapper.unmap(page).map(|(_, flush)| flush.flush());
         }
     }
 

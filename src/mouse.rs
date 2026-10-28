@@ -330,7 +330,7 @@ fn wait_read_ready() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{handle_byte, parse_packet, screen_height, screen_width, MouseEvent};
+    use super::{handle_byte, parse_packet, screen_width, MouseEvent};
 
     #[test_case]
     fn test_parse_packet_basic_movement() {

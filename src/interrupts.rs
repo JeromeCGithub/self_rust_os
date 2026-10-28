@@ -112,20 +112,6 @@ pub fn ticks() -> u64 {
     TICKS.load(Ordering::Relaxed)
 }
 
-extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    TICKS.fetch_add(1, Ordering::Relaxed);
-
-    // Notify the PICs that the interrupt has been handled.
-    //
-    // SAFETY:
-    // We are notifying the PIC that the interrupt has been handled.
-    // Can fail if the PIC is not initialized.
-    unsafe {
-        PICS.lock()
-            .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
-    }
-}
-
 /// Naked timer interrupt entry point for preemptive scheduling.
 ///
 /// Saves all GPRs in the canonical order (matching `syscall_entry`, forming

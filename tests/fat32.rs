@@ -16,6 +16,8 @@
 
 extern crate alloc;
 
+mod common;
+
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use self_rust_os::{
@@ -33,7 +35,7 @@ entry_point!(main);
 #[expect(clippy::expect_used)]
 fn main(boot_info: &'static BootInfo) -> ! {
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
-    self_rust_os::init(phys_mem_offset, self_rust_os::gfx::FRAMEBUFFER_PHYS_ADDR, self_rust_os::gfx::WIDTH, self_rust_os::gfx::HEIGHT);
+    self_rust_os::init(phys_mem_offset, common::FRAMEBUFFER_INFO, common::framebuffer_addr());
     let mut mapper = unsafe { memory::init(phys_mem_offset) };
     let mut frame_allocator = unsafe { BootInfoFrameAllocator::new(&boot_info.memory_map) };
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap initialization failed");
@@ -97,12 +99,12 @@ fn when_writing_and_reading_files_then_contents_match() {
     assert_eq!(n, big.len());
     assert_eq!(big_buf, big);
 
-    let names = fs.list_dir().expect("list failed");
+    let names = fs.list_dir(None).expect("list failed");
     assert_eq!(names.len(), 2);
 
     // Delete and verify.
     fs.delete_file("HELLO.TXT").expect("delete failed");
-    assert_eq!(fs.list_dir().expect("list failed").len(), 1);
+    assert_eq!(fs.list_dir(None).expect("list failed").len(), 1);
 
     serial_println!("[fat32] 2 files written+verified (20 KiB multi-cluster OK), delete OK");
     println!("[fat32] files OK: 2 written, 20 KiB verified, delete OK");

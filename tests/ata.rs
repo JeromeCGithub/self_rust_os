@@ -18,6 +18,8 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::missing_assert_message)]
 
+mod common;
+
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use self_rust_os::{
@@ -31,7 +33,7 @@ entry_point!(main);
 #[expect(clippy::undocumented_unsafe_blocks)]
 fn main(boot_info: &'static BootInfo) -> ! {
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
-    self_rust_os::init(phys_mem_offset, self_rust_os::gfx::FRAMEBUFFER_PHYS_ADDR, self_rust_os::gfx::WIDTH, self_rust_os::gfx::HEIGHT);
+    self_rust_os::init(phys_mem_offset, common::FRAMEBUFFER_INFO, common::framebuffer_addr());
 
     test_main();
     #[expect(clippy::empty_loop)]
