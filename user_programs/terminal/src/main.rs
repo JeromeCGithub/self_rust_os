@@ -103,6 +103,7 @@ pub extern "C" fn user_main() {
             println!("  ls         - list files");
             println!("  cat <file> - show file contents");
             println!("  ./<prog>   - run program from disk");
+            println!("  kill <pid> - terminate a process");
             println!("  exit       - exit terminal");
         } else if eq(line, b"exit") {
             println!("Goodbye!");
@@ -124,6 +125,8 @@ pub extern "C" fn user_main() {
         } else if line.len() > 2 && eq(&line[..2], b"./") {
             // Launch a program from disk: ./name -> /NAME.BIN
             run_program(&line[2..]);
+        } else if line.len() > 5 && eq(&line[..5], b"kill ") {
+            kill_program(&line[5..]);
         } else if line.is_empty() {
             // Empty line, just reprompt.
         } else {
@@ -165,12 +168,34 @@ fn run_program(name: &[u8]) {
     
     println!("Spawning {}...", path_str);
     match sys::spawn(path_str) {
-        Ok(()) => {
-            // Should not return on success.
-            println!("spawn returned unexpectedly");
+        Ok(pid) => {
+            println!("started pid {}", pid);
         }
         Err(()) => {
             println!("failed to spawn {}", path_str);
         }
+    }
+}
+
+/// Kills a process by PID.
+fn kill_program(pid_str: &[u8]) {
+    let pid_str = match core::str::from_utf8(pid_str) {
+        Ok(s) => s.trim(),
+        Err(_) => {
+            println!("invalid pid");
+            return;
+        }
+    };
+    let mut pid: u32 = 0;
+    for c in pid_str.bytes() {
+        if !c.is_ascii_digit() {
+            println!("invalid pid");
+            return;
+        }
+        pid = pid * 10 + (c - b'0') as u32;
+    }
+    match sys::kill(pid) {
+        Ok(()) => println!("killed {}", pid),
+        Err(()) => println!("kill failed"),
     }
 }

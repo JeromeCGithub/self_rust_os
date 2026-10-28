@@ -16,7 +16,6 @@
 
 use core::arch::naked_asm;
 
-use spin::Mutex;
 use x86_64::{structures::idt::InterruptStackFrame, VirtAddr};
 
 use crate::{fs, print, println, serial_println, userspace};
@@ -45,43 +44,35 @@ pub const SYS_READ_FILE: u64 = 6;
 /// Syscall number for `sys_write_file`: writes (creates/overwrites) a file by path.
 pub const SYS_WRITE_FILE: u64 = 7;
 
-/// Syscall number for `sys_spawn`: loads and executes a program from disk.
-/// Does not return on success (replaces the current process).
+/// Syscall number for `sys_spawn`: creates a new process from a program on disk.
+/// Returns the new PID.
 pub const SYS_SPAWN: u64 = 8;
 
-/// Pending spawn request: path of the program to load after the current
-/// process exits. Set by `sys_spawn`, consumed by `process::run`.
-static SPAWN_REQUEST: Mutex<Option<[u8; 256]>> = Mutex::new(None);
+/// Syscall number for `sys_kill`: terminates a process by PID.
+pub const SYS_KILL: u64 = 9;
 
-/// Takes the pending spawn request, if any.
-pub fn take_spawn_request() -> Option<[u8; 256]> {
-    SPAWN_REQUEST.lock().take()
-}
+/// Syscall number for `sys_waitpid`: waits for a process to exit, reaps it.
+pub const SYS_WAITPID: u64 = 10;
+
+/// Sentinel: the current process has exited, schedule another (don't save context).
+const PROCESS_EXIT_SENTINEL: u64 = u64::MAX;
+
+/// Sentinel: the current process is blocking, save context and schedule another.
+const PROCESS_BLOCK_SENTINEL: u64 = u64::MAX - 2;
 
 /// Naked entry point for the `int 0x80` syscall interrupt.
 ///
-/// This function saves all general-purpose registers, extracts the syscall
-/// arguments from the saved register state, calls the Rust dispatch function,
-/// and then either returns to user mode via `iretq` or halts if the process
-/// exited.
+/// Saves all general-purpose registers (in the same order as the timer
+/// handler, forming a [`crate::scheduler::SavedContext`]), calls the Rust
+/// dispatcher, then either returns to user mode via `iretq` or performs a
+/// context switch if the syscall blocked or exited the process.
 ///
 /// # Register layout on the stack after all pushes
 ///
 /// ```text
 /// rsp + 0x00 : r15
 /// rsp + 0x08 : r14
-/// rsp + 0x10 : r13
-/// rsp + 0x18 : r12
-/// rsp + 0x20 : r11
-/// rsp + 0x28 : r10
-/// rsp + 0x30 : r9
-/// rsp + 0x38 : r8
-/// rsp + 0x40 : rbp
-/// rsp + 0x48 : rdi  (arg1)
-/// rsp + 0x50 : rsi  (arg2)
-/// rsp + 0x58 : rdx  (arg3)
-/// rsp + 0x60 : rcx
-/// rsp + 0x68 : rbx
+/// ...
 /// rsp + 0x70 : rax  (syscall number)
 /// rsp + 0x78 : RIP  (pushed by CPU)
 /// rsp + 0x80 : CS
@@ -91,15 +82,10 @@ pub fn take_spawn_request() -> Option<[u8; 256]> {
 /// ```
 #[naked]
 pub(crate) extern "x86-interrupt" fn syscall_entry(_frame: InterruptStackFrame) {
-    // SAFETY:
-    //
-    // This naked function manually manages the entire register save/restore
-    // and stack layout. The CPU has already pushed SS, RSP, RFLAGS, CS, RIP
-    // before entering this handler. We save all GPRs, set up the C calling
-    // convention arguments, and call the Rust handler.
+    // SAFETY: Naked function with manual stack management. The CPU has pushed
+    // SS, RSP, RFLAGS, CS, RIP. We push all GPRs in the canonical order.
     unsafe {
         naked_asm!(
-            // Save all general-purpose registers.
             "push rax",
             "push rbx",
             "push rcx",
@@ -116,27 +102,26 @@ pub(crate) extern "x86-interrupt" fn syscall_entry(_frame: InterruptStackFrame) 
             "push r14",
             "push r15",
 
-            // Set up arguments for the Rust syscall dispatcher:
-            //   rdi = syscall number (was in rax)
-            //   rsi = arg1 (was in rdi)
-            //   rdx = arg2 (was in rsi)
-            //   rcx = arg3 (was in rdx)
-            "mov rdi, [rsp + 0x70]",  // saved rax -> syscall number
-            "mov rsi, [rsp + 0x48]",  // saved rdi -> arg1
-            "mov rdx, [rsp + 0x50]",  // saved rsi -> arg2
-            "mov rcx, [rsp + 0x58]",  // saved rdx -> arg3
+            // Args for syscall_dispatch: rdi=num, rsi=arg1, rdx=arg2, rcx=arg3.
+            "mov rdi, [rsp + 0x70]",
+            "mov rsi, [rsp + 0x48]",
+            "mov rdx, [rsp + 0x50]",
+            "mov rcx, [rsp + 0x58]",
 
             "call {dispatch}",
 
-            // Check if the process should exit (magic sentinel value).
-            "mov rcx, {sentinel}",
+            // Check for exit sentinel: current process is dead, switch away.
+            "mov rcx, {exit_sentinel}",
             "cmp rax, rcx",
             "je 2f",
 
-            // Normal return: store result in the saved rax slot.
-            "mov [rsp + 0x70], rax",
+            // Check for block sentinel: save context and switch away.
+            "mov rcx, {block_sentinel}",
+            "cmp rax, rcx",
+            "je 3f",
 
-            // Restore all general-purpose registers.
+            // Normal return: store result in saved rax, restore regs, iretq.
+            "mov [rsp + 0x70], rax",
             "pop r15",
             "pop r14",
             "pop r13",
@@ -154,44 +139,58 @@ pub(crate) extern "x86-interrupt" fn syscall_entry(_frame: InterruptStackFrame) 
             "pop rax",
             "iretq",
 
-            // Process exit path: restore kernel context saved by switch_to_user_mode.
-            //
-            // The current stack (TSS RSP0) is abandoned. We load the kernel RSP
-            // that was saved before iretq, pop the callee-saved registers that
-            // switch_to_user_mode pushed, restore kernel data segments, and ret
-            // back into process::run.
+            // 2: Process exited. rdi=0 (don't save context).
             "2:",
-            "mov rsp, [{kernel_rsp}]",
-
-            // Pop callee-saved registers (reverse of switch_to_user_mode pushes).
+            "xor edi, edi",
+            "call {schedule}",
+            // rax = new kernel RSP. Switch stacks and restore.
+            "mov rsp, rax",
             "pop r15",
             "pop r14",
             "pop r13",
             "pop r12",
+            "pop r11",
+            "pop r10",
+            "pop r9",
+            "pop r8",
             "pop rbp",
+            "pop rdi",
+            "pop rsi",
+            "pop rdx",
+            "pop rcx",
             "pop rbx",
+            "pop rax",
+            "iretq",
 
-            // Restore kernel data segments (long mode typically uses 0).
-            "xor ax, ax",
-            "mov ds, ax",
-            "mov es, ax",
-            "mov fs, ax",
-            "mov gs, ax",
-
-            // Return from switch_to_user_mode back to process::run.
-            "ret",
+            // 3: Process blocked. rdi=rsp (save context).
+            "3:",
+            "mov rdi, rsp",
+            "call {schedule}",
+            "mov rsp, rax",
+            "pop r15",
+            "pop r14",
+            "pop r13",
+            "pop r12",
+            "pop r11",
+            "pop r10",
+            "pop r9",
+            "pop r8",
+            "pop rbp",
+            "pop rdi",
+            "pop rsi",
+            "pop rdx",
+            "pop rcx",
+            "pop rbx",
+            "pop rax",
+            "iretq",
 
             dispatch = sym syscall_dispatch,
-            kernel_rsp = sym super::process::KERNEL_RSP,
-            sentinel = const PROCESS_EXIT_SENTINEL,
+            schedule = sym crate::scheduler::schedule,
+            exit_sentinel = const PROCESS_EXIT_SENTINEL,
+            block_sentinel = const PROCESS_BLOCK_SENTINEL,
         );
     }
 }
-
-/// Sentinel value returned by [`syscall_dispatch`] to signal that the current
-/// process has called `sys_exit` and execution should not return to user mode.
-const PROCESS_EXIT_SENTINEL: u64 = u64::MAX;
-
 /// Error value returned to the user program when a syscall number is unknown.
 const SYSCALL_ERROR: u64 = u64::MAX - 1;
 
@@ -213,8 +212,7 @@ const SYSCALL_ERROR: u64 = u64::MAX - 1;
 extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
     match num {
         SYS_EXIT => {
-            serial_println!("[kernel] user process exited with code: {}", arg1);
-            println!("[kernel] user process exited with code: {}", arg1);
+            crate::scheduler::exit_current(arg1);
             PROCESS_EXIT_SENTINEL
         }
         SYS_WRITE => sys_write(arg1, arg2),
@@ -225,6 +223,8 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
         SYS_READ_FILE => sys_read_file(arg1, arg2, arg3),
         SYS_WRITE_FILE => sys_write_file(arg1, arg2, arg3),
         SYS_SPAWN => sys_spawn(arg1),
+        SYS_KILL => sys_kill(arg1),
+        SYS_WAITPID => sys_waitpid(arg1),
         _ => {
             serial_println!("[kernel] unknown syscall number: {}", num);
             println!("[kernel] unknown syscall number: {}", num);
@@ -354,22 +354,24 @@ fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
         HandleControl::Ignore,
     );
 
-    let mut read = 0;
-    // The syscall handler is an interrupt gate, so IF is clear here. hlt()
-    // needs interrupts enabled to wake on the keyboard IRQ, so enable them
-    // for the wait loop. This doesn't leak: iretq restores the userspace
-    // RFLAGS (IF=1) when the syscall returns.
-    x86_64::instructions::interrupts::enable();
-    while read < len {
-        // Try to get a scancode; halt the CPU while waiting to avoid busy-looping.
-        let scancode = loop {
-            if let Some(sc) = crate::task::keyboard::try_pop_scancode() {
-                break sc;
-            }
-            x86_64::instructions::hlt();
+    // Try to read without blocking. If no input is available, block this
+    // process via the scheduler (instead of hlt-looping in the kernel, which
+    // would prevent preemption). The keyboard IRQ will wake us.
+    // Drain queued scancodes (including key releases) until we get a character.
+    loop {
+        let scancode = match crate::task::keyboard::try_pop_scancode() {
+            Some(sc) => sc,
+            None => return crate::scheduler::block_on_keyboard(),
         };
 
-        // Decode the scancode; ignore non-character keys.
+        // Skip key release scancodes (high bit set); they never produce characters.
+        // Also skip 0x61 (spurious code from QEMU sendkey, not a valid scancode).
+        if scancode & 0x80 != 0 || scancode == 0x61 {
+            continue;
+        }
+
+        let mut read = 0;
+        // Decode the scancode; ignore non-character keys (including releases).
         if let Ok(Some(event)) = keyboard.add_byte(scancode) {
             if let Some(key) = keyboard.process_keyevent(event) {
                 use pc_keyboard::DecodedKey;
@@ -384,17 +386,17 @@ fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
                                 read += 1;
                             }
                         }
-                        // Return after the first character for interactive input.
-                        // The terminal handles line buffering and echo.
-                        break;
                     }
                     DecodedKey::RawKey(_) => {}
                 }
             }
         }
-    }
 
-    read as u64
+        if read > 0 {
+            return read as u64;
+        }
+        // No character from this scancode (e.g., key release); try next.
+    }
 }
 
 /// Non-blocking read: tries to read one byte without blocking.
@@ -535,14 +537,14 @@ fn sys_write_file(path_ptr: u64, buf_ptr: u64, buf_len: u64) -> u64 {
     }
 }
 
-/// Loads and executes a program from disk, replacing the current process.
+/// Creates a new process running the program at the given path.
 ///
-/// Takes a null-terminated path (max 255 chars) in `path_ptr`. On success,
-/// records the spawn request and returns `PROCESS_EXIT_SENTINEL`, causing
-/// the current process to exit. `process::run` will then load and execute
-/// the requested program. Does not return to the caller on success.
+/// Takes a null-terminated path (max 255 chars) in `path_ptr`. Loads the
+/// binary from disk, creates a new address space and PCB, and enqueues the
+/// process. Returns the new PID. The caller keeps running; the timer will
+/// preempt to the new process.
 ///
-/// Returns `SYSCALL_ERROR` if the path is invalid.
+/// Returns `SYSCALL_ERROR` if the path is invalid or the program can't be loaded.
 fn sys_spawn(path_ptr: u64) -> u64 {
     if !validate_user_buffer(path_ptr, 256) {
         return SYSCALL_ERROR;
@@ -554,14 +556,53 @@ fn sys_spawn(path_ptr: u64) -> u64 {
     if path_len == 0 || path_len >= 255 {
         return SYSCALL_ERROR;
     }
+    let path = match core::str::from_utf8(&path_buf[..path_len]) {
+        Ok(s) => s,
+        Err(_) => return SYSCALL_ERROR,
+    };
 
-    let mut request = [0u8; 256];
-    request[..path_len].copy_from_slice(&path_buf[..path_len]);
+    // Load the binary from disk.
+    let binary = match crate::scheduler::load_program_from_disk(path) {
+        Ok(b) => b,
+        Err(e) => {
+            serial_println!("[kernel] sys_spawn: failed to load '{}': {}", path, e);
+            return SYSCALL_ERROR;
+        }
+    };
 
-    *SPAWN_REQUEST.lock() = Some(request);
+    // Create the process (read-only size 0 = all writable for now).
+    match crate::scheduler::spawn_process(&binary, 0) {
+        Ok(pid) => {
+            serial_println!("[kernel] sys_spawn: '{}' -> pid {}", path, pid);
+            pid as u64
+        }
+        Err(e) => {
+            serial_println!("[kernel] sys_spawn: failed to create process: {}", e);
+            SYSCALL_ERROR
+        }
+    }
+}
 
-    // Exit the current process; process::run will load the new program.
-    PROCESS_EXIT_SENTINEL
+/// Terminates the process with the given PID.
+///
+/// Returns 0 on success, `SYSCALL_ERROR` if the PID is invalid.
+/// If killing the current process, returns `PROCESS_EXIT_SENTINEL` so the
+/// syscall handler schedules away (never returns to user).
+fn sys_kill(pid: u64) -> u64 {
+    match crate::scheduler::kill(pid as u32) {
+        Some(crate::scheduler::PROCESS_BLOCK_SENTINEL) => PROCESS_EXIT_SENTINEL,
+        Some(_) => 0,
+        None => SYSCALL_ERROR,
+    }
+}
+
+/// Waits for the process with the given PID to exit.
+///
+/// If the target is already a zombie, reaps it and returns its exit code.
+/// Otherwise blocks the current process until the target exits.
+/// Returns `SYSCALL_ERROR` for an invalid PID.
+fn sys_waitpid(pid: u64) -> u64 {
+    crate::scheduler::waitpid(pid as u32)
 }
 
 /// Registers the syscall interrupt handler in the IDT.
