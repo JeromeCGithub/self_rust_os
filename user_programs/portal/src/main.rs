@@ -10,7 +10,7 @@ use font8x8::{UnicodeFonts, BASIC_FONTS};
 use userlib::{println, sys};
 
 /// Framebuffer base address (mapped by kernel).
-const FB_ADDR: usize = 0x90_0000;
+const FB_ADDR: usize = sys::FRAMEBUFFER_ADDR;
 
 /// Global framebuffer geometry (set at startup).
 static mut FB_WIDTH: i32 = 1280;

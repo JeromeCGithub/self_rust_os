@@ -29,7 +29,11 @@ entry_point!(test_kernel_main);
 
 fn test_kernel_main(boot_info: &'static BootInfo) -> ! {
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
-    self_rust_os::init(phys_mem_offset, common::FRAMEBUFFER_INFO, common::framebuffer_addr());
+    self_rust_os::init(
+        phys_mem_offset,
+        common::FRAMEBUFFER_INFO,
+        common::framebuffer_addr(),
+    );
 
     // SAFETY: Physical memory offset is valid as guaranteed by the bootloader.
     let mut mapper = unsafe { memory::init(phys_mem_offset) };
@@ -97,6 +101,96 @@ fn test_syscall_interrupt_index_is_0x80() {
         userspace::SYSCALL_INTERRUPT_INDEX,
         0x80,
         "Syscall interrupt vector must be 0x80.",
+    );
+}
+
+#[test_case]
+fn compositor_buffers_do_not_overlap_stack_or_display() {
+    let compositor_end = userspace::USER_CODE_START + 2 * 1920 * 1080 * 4 + 65536;
+    assert!(
+        compositor_end < userspace::USER_STACK_BOTTOM,
+        "1080p compositor buffers overlap the user stack"
+    );
+    assert!(
+        userspace::USER_STACK_TOP < userspace::USER_FRAMEBUFFER,
+        "display mapping must follow the user stack"
+    );
+}
+
+#[test_case]
+fn surface_pages_cover_pitch_and_reject_invalid_geometry() {
+    use self_rust_os::gfx::FbInfo;
+    let info = FbInfo {
+        addr: 0xe0000000,
+        width: 1920,
+        height: 1080,
+        pitch: 1920 * 4,
+        bpp: 32,
+    };
+    assert_eq!(userspace::framebuffer_pages(&info), Ok(2025));
+    assert_eq!(
+        userspace::framebuffer_pages(&FbInfo {
+            pitch: 7744,
+            ..info
+        }),
+        Ok(2042)
+    );
+    let capacity = (userspace::USER_REGION_END - userspace::USER_FRAMEBUFFER) as usize;
+    assert_eq!(
+        userspace::framebuffer_pages(&FbInfo {
+            width: 1,
+            height: 1,
+            pitch: capacity,
+            ..info
+        }),
+        Ok(capacity as u64 / 4096)
+    );
+    for invalid in [
+        FbInfo { width: 0, ..info },
+        FbInfo { height: 0, ..info },
+        FbInfo { bpp: 24, ..info },
+        FbInfo {
+            pitch: 7676,
+            ..info
+        },
+        FbInfo {
+            pitch: 7681,
+            ..info
+        },
+        FbInfo {
+            addr: 0xe0000001,
+            ..info
+        },
+        FbInfo {
+            width: usize::MAX,
+            ..info
+        },
+        FbInfo {
+            height: usize::MAX,
+            ..info
+        },
+        FbInfo {
+            width: 1,
+            height: 1,
+            pitch: capacity + 4,
+            ..info
+        },
+    ] {
+        assert!(
+            userspace::framebuffer_pages(&invalid).is_err(),
+            "accepted invalid layout: {:?}",
+            invalid
+        );
+    }
+}
+
+#[test_case]
+fn oversized_image_is_rejected_before_allocating_process_resources() {
+    let capacity = (userspace::USER_STACK_BOTTOM - userspace::USER_CODE_START) as usize;
+    let image = alloc::vec![0u8; capacity + 1];
+    assert_eq!(
+        self_rust_os::scheduler::spawn_process(&image, 0),
+        Err("user binary overlaps stack")
     );
 }
 

@@ -46,6 +46,7 @@ cargo build --release --features grub
 cargo test --no-run
 cargo test --lib
 cargo test --test basic_boot --test gfx --test heap_allocation --test userspace
+cargo test --test display_mapping
 cargo test --test should_panic --test stack_overflow
 cargo test --test keyboard_timer
 ./e2e/ata.sh
@@ -88,6 +89,12 @@ concurrent Snake, focus restoration, drag/close interactions, and launching Forg
 Hello and Spin. Review the actual assertions before making stronger coverage claims.
 For example, an echoed command does not by itself verify successful execution.
 Screenshots go to `docs/screenshots/desktop*.png`; inspect changes before committing.
+The desktop test also asserts a 1920×1080 framebuffer, full-width panels, edge
+pointer coordinates and dragging to the far display edge. `display_mapping` checks
+large compositor mappings, padded pitch, final partial pages, independent snapshots,
+preserved parent code and three pairs of spawn/kill/reap operations. Existing frame/stack leaks
+remain; a bounded repetition test does not establish resource reclamation.
+See [1080p validation](1080p-validation.md) for recorded red/green evidence and limits.
 The test writes files inside the development disk. It needs Pillow and permission to
 create local QEMU monitor/QMP sockets.
 

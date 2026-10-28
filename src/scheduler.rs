@@ -13,7 +13,7 @@
 //! On process creation, we allocate a new P4 frame, copy all entries from the
 //! current P4 (sharing kernel mappings), then clear P4 index 0 (the 512GB
 //! region containing all user mappings: binary at 0x400000, stack at
-//! 0x800000, framebuffer at 0x900000). Fresh user pages are then mapped.
+//! 0x2000000, framebuffer at 0x2100000). Fresh user pages are then mapped.
 //! The heap (at P4 index 136) is preserved, so kernel heap allocations work
 //! in any address space.
 //!
@@ -245,17 +245,14 @@ fn deep_copy_p3_subtree(
     }
 
     for j in 0..512 {
-        // For user-space P2 entries (indices 2-6 covering 0x400000-0xE00000:
-        // user code, stack, and framebuffer), always use a fresh EMPTY P1 table.
-        // Under GRUB, these are 2MiB huge pages (identity-mapped); copying them
-        // would cause map_to to fail with ParentEntryHugePage. Under the legacy
-        // bootloader, they might contain stale user mappings. A fresh P1 gives
-        // a clean slate for the new process's user mappings.
-        // P2[0] and P2[1] (0-4MiB, kernel low-memory) are deep-copied below to
-        // preserve kernel mappings.
-        const USER_P2_START: usize = 2;
-        const USER_P2_END: usize = 6;
-        let is_user_p2 = (USER_P2_START..=USER_P2_END).contains(&j);
+        // Replace the entire reserved user region with private, empty P1
+        // tables. This removes GRUB identity huge pages and all inherited
+        // application mappings, including the larger 1080p buffers. Entries
+        // below USER_CODE_START retain supervisor kernel mappings.
+        const PAGE_2MIB: u64 = 2 * 1024 * 1024;
+        let user_start = (userspace::USER_CODE_START / PAGE_2MIB) as usize;
+        let user_end = (userspace::USER_REGION_END / PAGE_2MIB) as usize;
+        let is_user_p2 = (user_start..user_end).contains(&j);
 
         if is_user_p2 {
             // Allocate a fresh empty P1 table for user regions.
@@ -318,6 +315,9 @@ pub fn spawn_process(binary: &[u8], readonly_size: usize) -> Result<Pid, &'stati
 }
 
 fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'static str> {
+    if binary.len() as u64 > userspace::USER_STACK_BOTTOM - userspace::USER_CODE_START {
+        return Err("user binary overlaps stack");
+    }
     let mut sched = SCHEDULER.lock();
     let phys_offset = VirtAddr::new(sched.phys_offset);
     // Read next_pid before the mutable borrow of allocator.
@@ -377,38 +377,6 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
     // 2. Create a mapper for the new address space.
     // SAFETY: p4_table is a valid, freshly allocated P4.
     let mut new_mapper = unsafe { OffsetPageTable::new(p4_table, phys_offset) };
-
-    // 2b. For PID 0 (first process), the copied P3 has no user mappings yet
-    // (boot P4's P3 is clean), so we skip the unmap. For PID > 0, unmap the
-    // old process's user regions to get a clean slate.
-    if !is_first_process {
-        use x86_64::structures::paging::mapper::Mapper;
-        use x86_64::structures::paging::page::Page;
-        use x86_64::structures::paging::Size4KiB;
-        // Unmap binary region (0x400000.., up to 16 pages).
-        let bin_start = VirtAddr::new(crate::userspace::USER_CODE_START);
-        for i in 0..16u64 {
-            let page: Page<Size4KiB> = Page::containing_address(bin_start + i * 4096);
-            let _ = new_mapper.unmap(page).map(|(_, flush)| flush.flush());
-        }
-        // Unmap stack region.
-        let stack_bottom = VirtAddr::new(crate::userspace::USER_STACK_BOTTOM);
-        let stack_pages = (crate::userspace::USER_STACK_SIZE / 4096) as u64;
-        for i in 0..stack_pages {
-            let page: Page<Size4KiB> = Page::containing_address(stack_bottom + i * 4096);
-            let _ = new_mapper.unmap(page).map(|(_, flush)| flush.flush());
-        }
-        // Unmap framebuffer region. The copied P3 still holds the previous
-        // process's framebuffer mapping (same physical pages, shared
-        // display); without this, map_user_framebuffer fails with
-        // PageAlreadyMapped when spawning any second process.
-        let fb_start = VirtAddr::new(crate::userspace::USER_FRAMEBUFFER);
-        let fb_pages = (crate::userspace::FRAMEBUFFER_SIZE / 4096) as u64;
-        for i in 0..fb_pages {
-            let page: Page<Size4KiB> = Page::containing_address(fb_start + i * 4096);
-            let _ = new_mapper.unmap(page).map(|(_, flush)| flush.flush());
-        }
-    }
 
     // 3. Map user binary, stack, and framebuffer into the new P4.
     // We do NOT switch CR3 here. The mapper writes page tables via p4_table

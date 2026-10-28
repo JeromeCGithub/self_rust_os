@@ -11,7 +11,8 @@ use x86_64::{
 /// Start address of the heap.
 pub const HEART_START: usize = 0x_4444_4444_0000;
 /// Size of the heap in bytes.
-pub const HEAP_SIZE: usize = 16 * 1024 * 1024; // 16 MiB
+// Loading a flat 1080p compositor image stages both full-screen buffers here.
+pub const HEAP_SIZE: usize = 32 * 1024 * 1024;
 
 /// Initialize the heap.
 ///

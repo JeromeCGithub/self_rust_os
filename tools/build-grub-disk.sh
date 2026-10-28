@@ -39,7 +39,7 @@ cat > /tmp/grub-early.cfg <<'EOF'
 serial --unit=0 --speed=115200
 terminal_output serial
 insmod all_video
-set gfxmode=640x480x32
+set gfxmode=1920x1080x32
 set gfxpayload=keep
 terminal_output gfxterm serial
 echo GRUB starting

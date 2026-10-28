@@ -31,7 +31,7 @@ is a separate Cargo crate; the root manifest is not a multi-crate workspace.
 
 [The runner](../tools/run-desktop.sh) routes ordinary `cargo run` to a GRUB disk
 build and QEMU, and routes test executables to `bootimage runner`. GRUB supplies a
-640×480×32 framebuffer. The kernel establishes memory mappings, GDT/IDT/PICs, heap,
+1920×1080×32 framebuffer. The kernel establishes memory mappings, GDT/IDT/PICs, heap,
 input queues, and the FAT32 root mount. It loads `/BIN/WM.BIN`, creates the initial
 PID 0 process, and enters Ring 3 through the scheduler. See [boot details](grub-boot.md).
 
@@ -46,8 +46,9 @@ Current virtual layout, defined in [kernel constants](../src/userspace/mod.rs):
 | Region | Current address |
 | --- | --- |
 | Flat user binary entry | `0x400000` |
-| User stack bottom/top | `0x7fc000` / `0x800000` (16 KiB) |
-| Application framebuffer/surface | `0x900000`, currently `640 * 480 * 4` bytes |
+| User stack bottom/top | `0x1ffc000` / `0x2000000` (16 KiB) |
+| Application framebuffer/surface | `0x2100000`, `pitch * height` bytes rounded up to pages |
+| Private user page-table region | `0x400000` through `0x4000000` (exclusive); gaps stay unmapped |
 | GRUB physical-memory offset | `0xffff800000000000` |
 | GRUB kernel framebuffer mapping | `0xffff900000000000` |
 
@@ -87,7 +88,9 @@ or application-specific filename handling to a generic driver or syscall.
 - Initial WM path and PID 0 compositor privileges are explicit boot/protocol
   exceptions, not general capability or session management. Other process-control
   syscalls are not a full permissions model.
-- Desktop rendering currently assumes 640×480 and allows six simultaneous windows.
+- Desktop rendering supports 640×480 through 1920×1080 at 32 bpp, with pitch up to
+  8192 bytes, and allows six simultaneous windows. The default boot requests 1080p.
+  Window content remains 488×288 pixels; more display pixels provide workspace.
 - Address-space frames and leaked kernel stacks are not reclaimed on process exit;
   repeated launch/close can exhaust memory. Reaping a PCB does not reclaim all resources.
 - User-pointer checks include numerical range checks; these do not prove every page

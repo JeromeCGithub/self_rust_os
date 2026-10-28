@@ -23,7 +23,7 @@ use self_rust_os::{
 };
 
 // Multiboot2 header: must sit within the first 32 KiB of the image (the
-// linker script places `.boot` first). Requests a 1280x720x32 framebuffer.
+// linker script places `.boot` first). Requests a 1920x1080x32 framebuffer.
 global_asm!(
     r#"
     .section .multiboot2_header, "a"
@@ -33,13 +33,13 @@ mb2_header_start:
     .long 0                       /* architecture: i386 */
     .long mb2_header_end - mb2_header_start
     .long -(0xE85250D6 + 0 + (mb2_header_end - mb2_header_start))  /* checksum */
-    /* framebuffer tag (type 5): request 640x480x32 (stable, avoids P2[6]) */
+    /* framebuffer tag (type 5): request 1920x1080x32 */
     .align 8
     .short 5                      /* type */
     .short 0                      /* flags */
     .long 20                      /* size */
-    .long 640                     /* width */
-    .long 480                     /* height */
+    .long 1920                    /* width */
+    .long 1080                    /* height */
     .long 32                      /* depth (bpp) */
     /* end tag */
     .align 8
@@ -292,7 +292,7 @@ pub extern "C" fn grub_entry_rust(magic: u64, info_ptr: u64) -> ! {
 
     // Explicitly map the linear framebuffer. It's at a high MMIO address
     // (e.g. 0xE0000000), not covered by the RAM mapping above.
-    // Size: width * height * 4 bytes (32bpp). For 1280x720: 3,686,400 bytes.
+    // Include scanline padding and the final partial page.
     let fb_size = (fb_info.height * fb_info.pitch) as u64;
     let fb_pages = (fb_size + 4095) / 4096;
     serial_println!(

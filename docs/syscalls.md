@@ -63,8 +63,16 @@ are incomplete hardening, as noted in [architecture](architecture.md).
 Mouse packing is x in bits 0–15, y in bits 16–31, buttons above bit 31. Button bits
 0/1/2 mean left/right/middle. Coordinates are clamped to current display dimensions,
 not historical 320×200 values found in some source comments. Query `fb_info`; honor
-pitch, bounds and 32-bit XRGB format. Mapping at `0x900000` is physical display memory
+pitch, bounds and 32-bit XRGB format. Mapping at `0x2100000` is physical display memory
 only for the compositor; other processes see private surface frames.
+
+The 1080p layout moves the stack top from `0x800000` to `0x2000000` and the drawing
+surface from `0x900000` to `0x2100000`, making room for compositor buffers below the
+stack. Apps use `userlib::sys::FRAMEBUFFER_ADDR`; rebuild all apps with
+`tools/build-user.sh` when migrating from the old layout. Syscall numbers and
+`fb_info`/`snapshot` formats are unchanged. Surfaces cover `pitch * height`, including
+padding and the final partial page. User mappings occupy private page tables below
+`0x4000000`; unused gaps are unmapped. The kernel heap is 32 MiB to stage flat images.
 
 ## Changing the interface
 
