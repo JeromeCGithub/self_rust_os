@@ -30,6 +30,7 @@ pub mod gdt;
 pub mod gfx;
 pub mod interrupts;
 pub mod memory;
+pub mod mouse;
 pub mod scheduler;
 pub mod serial;
 pub mod task;
@@ -51,9 +52,10 @@ pub fn init(phys_mem_offset: x86_64::VirtAddr) {
     // Initialize the Programmable Interrupt Controller (PIC).
     unsafe {
         interrupts::PICS.lock().initialize();
-        // Unmask timer (IRQ0) and keyboard (IRQ1); keep others masked.
-        // The firmware may have IRQ1 masked, which would break keyboard input.
-        interrupts::PICS.lock().write_masks(0xFC, 0xFF);
+        // Unmask timer (IRQ0), keyboard (IRQ1), and the PIC2 cascade (IRQ2);
+        // on the slave, unmask the mouse (IRQ12). The firmware may have these
+        // masked, which would break input.
+        interrupts::PICS.lock().write_masks(0xF8, 0xEF);
     }
     // Enable interrupts.
     instructions::interrupts::enable();

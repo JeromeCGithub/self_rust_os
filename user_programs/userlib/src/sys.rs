@@ -26,6 +26,8 @@ pub const SYS_WRITE_FILE: u64 = 7;
 pub const SYS_SPAWN: u64 = 8;
 pub const SYS_KILL: u64 = 9;
 pub const SYS_WAITPID: u64 = 10;
+pub const SYS_MOUSE: u64 = 11;
+pub const SYS_MKDIR: u64 = 12;
 
 /// Return value indicating a failed syscall.
 pub const SYSCALL_ERROR: u64 = u64::MAX - 1;
@@ -112,15 +114,18 @@ fn path_buf(path: &str) -> Option<[u8; 256]> {
     Some(buf)
 }
 
-/// Lists directory entries into `buf` (12 bytes per entry, 8.3 format).
+/// Lists directory entries into `buf` (12 bytes per entry: 11-byte 8.3 name
+/// + 1 byte attribute, `0x10` = directory).
+/// `path` selects the directory ("" or "/" = root).
 /// Returns the number of entries, or `None` on error.
-pub fn ls(buf: &mut [u8], max_entries: usize) -> Option<usize> {
+pub fn ls(path: &str, buf: &mut [u8], max_entries: usize) -> Option<usize> {
+    let path_buf = path_buf(path)?;
     let n = unsafe {
         syscall(
             SYS_LS,
+            path_buf.as_ptr() as u64,
             buf.as_mut_ptr() as u64,
             max_entries as u64,
-            0,
         )
     };
     if n == SYSCALL_ERROR {
@@ -167,6 +172,18 @@ pub fn write_file(path: &str, data: &[u8]) -> Option<usize> {
     }
 }
 
+/// Creates a directory at `path`, creating missing parents (`mkdir -p`).
+/// Returns `Ok` on success, `Err` on error (bad path, already a file, etc.).
+pub fn mkdir(path: &str) -> Result<(), ()> {
+    let path_buf = path_buf(path).ok_or(())?;
+    let n = unsafe { syscall(SYS_MKDIR, path_buf.as_ptr() as u64, 0, 0) };
+    if n == SYSCALL_ERROR {
+        Err(())
+    } else {
+        Ok(())
+    }
+}
+
 /// Creates a new process running the program at the given path.
 ///
 /// Takes a path like `/SNAKE.BIN`. Returns the new process's PID.
@@ -210,4 +227,16 @@ pub fn waitpid(pid: u32) -> Result<u64, ()> {
     } else {
         Ok(n)
     }
+}
+
+/// Returns the current mouse state as `(x, y, buttons)`.
+///
+/// `x` in `[0, 320)`, `y` in `[0, 200)`, `buttons`: bit 0 = left,
+/// bit 1 = right, bit 2 = middle.
+pub fn mouse() -> (i32, i32, u8) {
+    let packed = unsafe { syscall(SYS_MOUSE, 0, 0, 0) };
+    let x = (packed & 0xFFFF) as i32;
+    let y = ((packed >> 16) & 0xFFFF) as i32;
+    let buttons = ((packed >> 32) & 0xFF) as u8;
+    (x, y, buttons)
 }

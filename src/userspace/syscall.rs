@@ -35,7 +35,8 @@ pub const SYS_TICKS: u64 = 3;
 /// Syscall number for non-blocking `sys_read`: returns 0 if no input, else bytes read.
 pub const SYS_READ_NB: u64 = 4;
 
-/// Syscall number for `sys_ls`: lists root directory entries.
+/// Syscall number for `sys_ls`: lists directory entries.
+/// Takes a null-terminated path ("" or "/" = root).
 pub const SYS_LS: u64 = 5;
 
 /// Syscall number for `sys_read_file`: reads a file by path.
@@ -53,6 +54,13 @@ pub const SYS_KILL: u64 = 9;
 
 /// Syscall number for `sys_waitpid`: waits for a process to exit, reaps it.
 pub const SYS_WAITPID: u64 = 10;
+
+/// Syscall number for `sys_mouse`: returns packed mouse state.
+/// Bits: `[63:32]` = buttons, `[31:16]` = y, `[15:0]` = x.
+pub const SYS_MOUSE: u64 = 11;
+
+/// Syscall number for `sys_mkdir`: creates a directory (with parents).
+pub const SYS_MKDIR: u64 = 12;
 
 /// Sentinel: the current process has exited, schedule another (don't save context).
 const PROCESS_EXIT_SENTINEL: u64 = u64::MAX;
@@ -219,12 +227,14 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
         SYS_READ => sys_read(arg1, arg2, arg3),
         SYS_TICKS => crate::interrupts::ticks(),
         SYS_READ_NB => sys_read_nb(arg1, arg2, arg3),
-        SYS_LS => sys_ls(arg1, arg2),
+        SYS_LS => sys_ls(arg1, arg2, arg3),
         SYS_READ_FILE => sys_read_file(arg1, arg2, arg3),
         SYS_WRITE_FILE => sys_write_file(arg1, arg2, arg3),
         SYS_SPAWN => sys_spawn(arg1),
         SYS_KILL => sys_kill(arg1),
         SYS_WAITPID => sys_waitpid(arg1),
+        SYS_MOUSE => sys_mouse(),
+        SYS_MKDIR => sys_mkdir(arg1),
         _ => {
             serial_println!("[kernel] unknown syscall number: {}", num);
             println!("[kernel] unknown syscall number: {}", num);
@@ -454,20 +464,39 @@ fn validate_user_buffer(ptr: u64, len: u64) -> bool {
     ptr >= userspace::USER_CODE_START && end <= userspace::USER_STACK_TOP && end >= ptr
 }
 
-/// Lists root directory entries into a user buffer.
+/// Runs `f` with the null-terminated path string at `path_ptr`.
 ///
-/// Each entry is 12 bytes: 11-byte 8.3 name + 1 byte attribute.
+/// Returns `None` if the pointer/length is invalid or the bytes are not UTF-8.
+fn with_user_path<R>(path_ptr: u64, f: impl FnOnce(&str) -> R) -> Option<R> {
+    if !validate_user_buffer(path_ptr, 256) {
+        return None;
+    }
+    // SAFETY: Buffer was validated to lie in the user address space, and the
+    // slice is only used synchronously inside `f` during this syscall.
+    let path_buf = unsafe { core::slice::from_raw_parts(path_ptr as *const u8, 256) };
+    let path_len = path_buf.iter().position(|&b| b == 0).unwrap_or(256);
+    let path = core::str::from_utf8(&path_buf[..path_len]).ok()?;
+    Some(f(path))
+}
+
+/// Lists directory entries into a user buffer.
+///
+/// `path_ptr` is a null-terminated path ("" or "/" = root).
+/// Each entry is 12 bytes: 11-byte 8.3 name + 1 byte attribute
+/// (`0x10` = directory, `0x20` = file).
 /// Returns the number of entries, or SYSCALL_ERROR.
-fn sys_ls(buf_ptr: u64, max_entries: u64) -> u64 {
+fn sys_ls(path_ptr: u64, buf_ptr: u64, max_entries: u64) -> u64 {
     let max_entries = max_entries as usize;
     let buf_len = (max_entries as u64).saturating_mul(12);
     if !validate_user_buffer(buf_ptr, buf_len) {
         return SYSCALL_ERROR;
     }
 
-    let result = crate::fs::with_fs(|fs| fs.list_dir());
+    let result = with_user_path(path_ptr, |path| {
+        crate::fs::with_fs(|fs| fs.list_dir(Some(path)))
+    });
     let entries = match result {
-        Some(Ok(entries)) => entries,
+        Some(Some(Ok(entries))) => entries,
         _ => return SYSCALL_ERROR,
     };
 
@@ -476,11 +505,30 @@ fn sys_ls(buf_ptr: u64, max_entries: u64) -> u64 {
     let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, buf_len as usize) };
 
     for (i, entry) in entries.iter().take(count).enumerate() {
-        buf[i * 12..i * 12 + 11].copy_from_slice(entry);
-        buf[i * 12 + 11] = 0; // Attribute placeholder.
+        buf[i * 12..i * 12 + 11].copy_from_slice(&entry.name);
+        buf[i * 12 + 11] = entry.attr;
     }
 
     count as u64
+}
+
+/// Creates a directory (with missing parents, like `mkdir -p`).
+///
+/// Takes a null-terminated path in `path_ptr`. Returns 0 on success,
+/// or SYSCALL_ERROR.
+fn sys_mkdir(path_ptr: u64) -> u64 {
+    let result = with_user_path(path_ptr, |path| {
+        crate::fs::with_fs(|fs| fs.create_dir(path))
+    });
+    match result {
+        Some(Some(Ok(()))) => 0,
+        _ => {
+            if let Some(Some(Err(e))) = result {
+                serial_println!("[kernel] sys_mkdir failed: {:?}", e);
+            }
+            SYSCALL_ERROR
+        }
+    }
 }
 
 /// Reads a file by path into a user buffer.
@@ -562,6 +610,9 @@ fn sys_spawn(path_ptr: u64) -> u64 {
     };
 
     // Load the binary from disk.
+    // The kernel takes the path as-is. It does NOT do PATH resolution —
+    // that is the shell's job (policy, not mechanism). Callers must pass
+    // a full path like "/bin/SNAKE.BIN".
     let binary = match crate::scheduler::load_program_from_disk(path) {
         Ok(b) => b,
         Err(e) => {
@@ -603,6 +654,19 @@ fn sys_kill(pid: u64) -> u64 {
 /// Returns `SYSCALL_ERROR` for an invalid PID.
 fn sys_waitpid(pid: u64) -> u64 {
     crate::scheduler::waitpid(pid as u32)
+}
+
+/// Returns the packed mouse state.
+///
+/// Bits: `[63:32]` = buttons (bit 0 = left, 1 = right, 2 = middle),
+/// `[31:16]` = y (0-199), `[15:0]` = x (0-319).
+fn sys_mouse() -> u64 {
+    let (x, y) = crate::mouse::position();
+    let buttons = crate::mouse::buttons();
+    // Clamp to u16 ranges (driver already clamps to screen, but be safe).
+    let x = x.clamp(0, 0xFFFF) as u64;
+    let y = y.clamp(0, 0xFFFF) as u64;
+    ((buttons as u64) << 32) | (y << 16) | x
 }
 
 /// Registers the syscall interrupt handler in the IDT.
@@ -715,6 +779,15 @@ mod tests {
         assert_eq!(
             result, SYSCALL_ERROR,
             "sys_ls with out-of-bounds buffer should fail validation.",
+        );
+    }
+
+    #[test_case]
+    fn test_sys_mkdir_rejects_invalid_path() {
+        let result = syscall_dispatch(SYS_MKDIR, userspace::USER_STACK_TOP + 1, 0, 0);
+        assert_eq!(
+            result, SYSCALL_ERROR,
+            "sys_mkdir with out-of-bounds path should fail validation.",
         );
     }
 
