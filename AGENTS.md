@@ -108,6 +108,13 @@ compatibility. All of `src/`, including `src/userspace/`, is privileged kernel c
 - Validate changes, then inspect `git diff --check`, `git diff`, and `git status`.
   Never silently reset user work, rewrite shared history, merge, or publish beyond
   the user's request. Local reversible investigation does not require repeated approval.
+- **Every PR must include concrete evidence that the change works.** Include a
+  screenshot whenever practical, especially for desktop/UI, graphics, input, and
+  visible boot behavior. Capture it from the tested build, identify what it shows,
+  and link or attach it in the PR. Never reuse an unrelated image or invent evidence.
+  If a screenshot cannot demonstrate the change or cannot be captured, explain why
+  and supply suitable evidence (test output, serial logs, a trace, or a reproducible
+  before/after example). Screenshots supplement automated assertions, not replace them.
 - Completion/PR reports must include: behavior changed, red test and observed failure,
   green checks actually run, remaining failures/limitations, and manual checks still
   needed. Distinguish commands run now from evidence inherited from previous work.

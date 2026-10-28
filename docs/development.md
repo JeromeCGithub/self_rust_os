@@ -76,8 +76,14 @@ layout, `userlib`, and a rebuilt disk. `/BIN` discovery provides its launcher.
 A PR should explain the trigger/problem, changed observable behavior, privilege
 boundary effects, and validation. For unsafe/assembly changes include the invariant
 and why it remains valid. For ABI changes include compatibility and migration details.
-For graphics include a screenshot and input assertions; for resource ownership include
-failure/cleanup evidence. Link the relevant test/log instead of claiming hypothetical coverage.
+Every PR must include concrete evidence that the change works, with screenshots
+whenever practical. For graphics/UI/input or visible boot changes, capture a screenshot
+from the tested build and explain what it demonstrates, alongside automated assertions.
+For resource ownership include failure/cleanup evidence. If a screenshot would not
+establish correctness (for example, a documentation-only or internal algorithm change),
+or cannot be captured, state why and provide actual test output, serial logs, traces,
+or a reproducible before/after example. Do not fabricate images or reuse unrelated
+artifacts. Link or attach evidence in the PR instead of claiming hypothetical coverage.
 
 Before requesting review, run the applicable tests, `git diff --check`, inspect
 `git diff`/`git status`, and verify the branch base. Do not commit build caches, logs,

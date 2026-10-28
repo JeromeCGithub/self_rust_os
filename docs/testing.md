@@ -122,6 +122,13 @@ missing regression coverage and resolve or explicitly report outstanding blocker
 
 ## Evidence to include before saying done
 
+Every PR needs concrete evidence that it works. Include a screenshot whenever
+practical; for visible behavior, capture it from the build under review and identify
+the acceptance criterion shown. Link/attach it in the PR alongside test evidence.
+If a screenshot is inappropriate or unavailable, explain why and include suitable
+actual output, logs, traces, or a reproducible example. A screenshot never replaces
+behavioral assertions, and passing output must not be invented.
+
 Report the failing regression and why it failed, then the exact green commands and
 behaviors tested. List required checks that failed/could not run, unexpected warnings,
 manual checks still needed, and remaining risks. Do not claim exhaustive security,

@@ -106,7 +106,7 @@ cleanup, Ring 3 execution, or manual host GUI verification.
 ## Contributing
 
 Use red → green → refactor, preserve the kernel/userspace boundary, and include
-actual test evidence and limitations in PRs. Questions and learning-oriented
+actual test evidence and limitations in every PR, with screenshots whenever practical. Questions and learning-oriented
 contributions are welcome. See [development workflow](docs/development.md).
 
 ## License
