@@ -1,7 +1,7 @@
 //! Main for little self made rust OS.
 //!
 //! This is the kernel entry point. It initializes all subsystems (GDT, IDT, PICs,
-//! paging, heap) and then loads and executes the embedded user-mode binary.
+//! paging, heap) and then loads the desktop compositor from the boot disk.
 //!
 //! Two boot paths are supported:
 //! - legacy (default): the `bootloader` crate's `entry_point!` via `cargo bootimage`;
@@ -29,21 +29,6 @@ use core::panic::PanicInfo;
 use self_rust_os::memory;
 use self_rust_os::{allocator, println, serial_println};
 use x86_64::{structures::paging::OffsetPageTable, VirtAddr};
-
-/// The embedded flat binary of the user-mode terminal program.
-///
-/// This binary is built from `user_programs/wm/` and converted to a flat
-/// binary with `llvm-objcopy -O binary`. See `tools/build-user.sh`
-/// for build instructions.
-static USER_WM_BIN: &[u8] = include_bytes!("../user_programs/wm/wm.bin");
-
-/// Auto-generated metadata about the WM binary layout (section boundaries).
-///
-/// Provides `READONLY_SIZE`: the page-aligned byte count of the read-only
-/// region (`.text` + `.rodata`) so the kernel can enforce W^X permissions.
-mod wm_meta {
-    include!("../user_programs/wm/wm_meta.rs");
-}
 
 /// Shared kernel bring-up used by both boot paths.
 ///
@@ -81,7 +66,6 @@ fn run_kernel(
     // Initialize the keyboard scancode queue (needs heap).
     self_rust_os::task::keyboard::init_scancode_queue();
     serial_println!("[kernel] Keyboard queue OK");
-    self_rust_os::task::keyboard::init_scancode_queue();
 
     // Initialize the PS/2 mouse (IRQ12). Non-fatal if absent.
     self_rust_os::mouse::init();
@@ -125,7 +109,7 @@ fn run_kernel(
     // This never returns; the timer IRQ drives preemptive multitasking.
     self_rust_os::scheduler::init(phys_mem_offset, frame_allocator);
     #[expect(clippy::expect_used)]
-    self_rust_os::scheduler::spawn_process(USER_WM_BIN, wm_meta::READONLY_SIZE)
+    self_rust_os::scheduler::spawn_process(&self_rust_os::scheduler::load_program_from_disk("/bin/WM.BIN").expect("WM.BIN missing from boot disk"), 0)
         .expect("Failed to spawn initial process. Reboot required.");
     // Now that the scheduler has a runnable process, unmask the timer IRQ.
     // The timer was kept masked since lib::init() to prevent timer_entry from

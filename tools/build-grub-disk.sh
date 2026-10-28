@@ -24,6 +24,8 @@ SIZE_MB=128
 PART_START_SECTOR=2048          # 1 MiB aligned; room for core.img before it
 SECTOR=512
 
+"${ROOT}/tools/build-user.sh"
+
 echo "[grub-disk] Building kernel ELF (grub feature)..."
 cargo build --features grub
 KERNEL_ELF="${ROOT}/target/x86_64-self-rust-os/debug/self_rust_os"
@@ -36,17 +38,19 @@ echo "[grub-disk] Generating GRUB core.img with embedded boot config..."
 cat > /tmp/grub-early.cfg <<'EOF'
 serial --unit=0 --speed=115200
 terminal_output serial
+insmod all_video
+set gfxmode=640x480x32
+set gfxpayload=keep
+terminal_output gfxterm serial
 echo GRUB starting
 search --set=root --file /kernel.elf
 multiboot2 /kernel.elf
 boot
 EOF
-# Modules: biosdisk (disk), part_msdos (MBR), fat (fs), search, serial+echo
-# (debug), multiboot2. No video modules needed: the kernel programs VGA
-# mode 13h directly via I/O ports.
+# GRUB configures a true 32-bit linear framebuffer before entering the kernel.
 grub-mkimage -O i386-pc -o /tmp/grub-core.img \
     -p "(hd0,msdos1)/boot/grub" -c /tmp/grub-early.cfg \
-    biosdisk part_msdos fat search serial echo multiboot2
+    biosdisk part_msdos fat search serial echo multiboot2 all_video gfxterm
 CORE_SECTORS=$(( ($(stat -c%s /tmp/grub-core.img) + SECTOR - 1) / SECTOR ))
 echo "[grub-disk] core.img is ${CORE_SECTORS} sectors"
 
@@ -99,3 +103,11 @@ printf 'Welcome to self_rust_os!\r\nThis file lives on the FAT32 boot disk.\r\nT
 
 echo "[grub-disk] Disk image ready: ${IMG}"
 ls -la "${IMG}"
+
+# Desktop assets and every available user application.
+mmd -i "${IMG}@@${PART_OFFSET}" ::/BIN ::/ETC ::/HOME ::/TMP
+for binary in "${ROOT}"/user_programs/*/*.bin; do
+    base="$(basename "${binary}")"
+    mcopy -i "${IMG}@@${PART_OFFSET}" "${binary}" "::/BIN/${base^^}"
+done
+mcopy -i "${IMG}@@${PART_OFFSET}" "${ROOT}/user_programs/wm/wallpaper.ppm" ::/ETC/WALL.PPM

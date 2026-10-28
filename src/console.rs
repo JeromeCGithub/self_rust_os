@@ -158,6 +158,7 @@ macro_rules! println {
 /// the console before printing).
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
+    if DESKTOP_ACTIVE.load(core::sync::atomic::Ordering::Relaxed) { return; }
     use core::fmt::Write;
     if let Ok(writer) = WRITER.try_get() {
         #[expect(
@@ -217,3 +218,6 @@ mod tests {
         assert_eq!(console.col, 9);
     }
 }
+
+/// Stops boot console writes once the compositor owns the display.
+pub static DESKTOP_ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);

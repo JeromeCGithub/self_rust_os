@@ -240,6 +240,19 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
         SYS_MOUSE => sys_mouse(),
         SYS_MKDIR => sys_mkdir(arg1),
         SYS_FB_INFO => sys_fb_info(arg1),
+        14 => {
+            let size = crate::gfx::fb_info().pitch * crate::gfx::fb_info().height;
+            if crate::scheduler::current_pid() != Some(0) || arg3 != size as u64 || !validate_user_buffer(arg2, arg3) { return SYSCALL_ERROR; }
+            // SAFETY: Caller and buffer were validated above.
+            let dest = unsafe { core::slice::from_raw_parts_mut(arg2 as *mut u8, size) };
+            crate::scheduler::snapshot(arg1 as u32, dest)
+        }
+        16 => { crate::scheduler::graphics_mode(); 0 }
+        15 => {
+            if crate::scheduler::current_pid() != Some(0) { return SYSCALL_ERROR; }
+            crate::scheduler::INPUT_FOCUS.store(arg1, core::sync::atomic::Ordering::Relaxed);
+            0
+        }
         _ => {
             serial_println!("[kernel] unknown syscall number: {}", num);
             println!("[kernel] unknown syscall number: {}", num);
@@ -287,6 +300,7 @@ fn sys_write(buf_ptr: u64, len: u64) -> u64 {
         }
     };
 
+    crate::scheduler::surface_write(buf);
     match core::str::from_utf8(buf) {
         Ok(s) => {
             serial_println!("[kernel] sys_write: \"{}\"", s);
@@ -318,6 +332,7 @@ fn sys_write(buf_ptr: u64, len: u64) -> u64 {
 /// * `buf_ptr` - Virtual address of the user buffer.
 /// * `len` - Maximum bytes to read.
 fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
+    if !crate::scheduler::has_input_focus() { return crate::scheduler::block_on_keyboard(); }
     // Only stdin (fd 0) is supported.
     if fd != 0 {
         return SYSCALL_ERROR;
@@ -342,12 +357,7 @@ fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
 
     // Keyboard decoder state. We create a fresh decoder per call; scancode
     // streams are self-synchronizing for simple key presses.
-    use pc_keyboard::{layouts, HandleControl, Keyboard, ScancodeSet1};
-    let mut keyboard = Keyboard::new(
-        ScancodeSet1::new(),
-        layouts::Us104Key,
-        HandleControl::Ignore,
-    );
+    let mut keyboard = INPUT_DECODER.lock();
 
     // Try to read without blocking. If no input is available, block this
     // process via the scheduler (instead of hlt-looping in the kernel, which
@@ -361,7 +371,7 @@ fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
 
         // Skip key release scancodes (high bit set); they never produce characters.
         // Also skip 0x61 (spurious code from QEMU sendkey, not a valid scancode).
-        if scancode & 0x80 != 0 || scancode == 0x61 {
+        if scancode == 0x61 {
             continue;
         }
 
@@ -399,6 +409,7 @@ fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
 /// Returns 1 and fills the buffer if a key is available, 0 if not.
 /// Used by games for polling input without blocking the game loop.
 fn sys_read_nb(fd: u64, buf_ptr: u64, len: u64) -> u64 {
+    if !crate::scheduler::has_input_focus() { return 0; }
     if fd != 0 || len == 0 {
         return 0;
     }
@@ -417,12 +428,7 @@ fn sys_read_nb(fd: u64, buf_ptr: u64, len: u64) -> u64 {
         None => return 0,
     };
 
-    use pc_keyboard::{layouts, HandleControl, Keyboard, ScancodeSet1};
-    let mut keyboard = Keyboard::new(
-        ScancodeSet1::new(),
-        layouts::Us104Key,
-        HandleControl::Ignore,
-    );
+    let mut keyboard = INPUT_DECODER.lock();
 
     if let Ok(Some(event)) = keyboard.add_byte(scancode) {
         if let Some(key) = keyboard.process_keyevent(event) {
@@ -823,4 +829,10 @@ mod tests {
             "sys_write_file with out-of-bounds buffer should fail.",
         );
     }
+}
+
+// Preserve modifier and extended-key state across read syscalls, including releases.
+lazy_static::lazy_static! {
+    static ref INPUT_DECODER: spin::Mutex<pc_keyboard::Keyboard<pc_keyboard::layouts::Us104Key, pc_keyboard::ScancodeSet1>> =
+        spin::Mutex::new(pc_keyboard::Keyboard::new(pc_keyboard::ScancodeSet1::new(), pc_keyboard::layouts::Us104Key, pc_keyboard::HandleControl::Ignore));
 }

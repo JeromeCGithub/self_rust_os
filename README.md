@@ -36,10 +36,36 @@ $ rustup component add llvm-tools-preview
 $ cargo run
 ```
 
-The kernel boots, initializes all subsystems, loads the embedded user-mode binary,
-switches the CPU to Ring 3, and executes the user program. The user program prints
-messages to the VGA text buffer via syscalls and then exits cleanly back to the
-kernel.
+`cargo run` builds the user applications and a bootable GRUB/FAT32 disk, then
+starts QEMU with a 640×480, 32-bit desktop. Install `grub-pc-bin`, `mtools`,
+and `qemu-system-x86` in addition to the Rust toolchain. The image is generated
+at `target/grub-disk.img`; rebuilding replaces this development disk.
+
+The desktop loads `/ETC/WALL.PPM` and discovers application icons from `/BIN`.
+QEMU absolute pointer integration makes the desktop cursor follow the host
+pointer without capture, including on Wayland desktops. A PS/2 fallback is
+retained for other machines. **Ctrl+Alt+G** toggles capture if needed.
+Click an icon to launch it, click a window to focus it, drag its title bar, and
+use its **x** button to close it. Up to six windows can be open. Each application
+has a private drawing surface; the compositor combines them into a complete
+frame before updating the display. Keyboard input goes to the focused window.
+Exited applications remain visible until closed.
+
+**Terminal** opens the Portal shell. Commands include `help`, `echo`, `clear`,
+`pwd`, `ls [path]`, `cat /file.txt`, `write /file.txt text`, `mkdir /directory`,
+`time`, and `exit`. Paths are relative to `/`; filenames use FAT32 8.3 names.
+Forge provides a second text shell; Hello, Snake, and Spin are also launchable.
+For repeatable desktop interaction checks and screenshots:
+
+```bash
+./tools/build-grub-disk.sh
+python3 e2e/desktop.py  # also requires Pillow
+```
+
+The default development runner uses GRUB because the legacy bootloader's 8-bit
+VGA mode cannot display the 32-bit desktop. Integration tests still use bootimage.
+The current process allocator does not reclaim address-space frames on exit, so
+long sessions with repeated launches will eventually require a reboot.
 
 ## How to run the tests
 

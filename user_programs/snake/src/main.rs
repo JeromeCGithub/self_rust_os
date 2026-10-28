@@ -19,8 +19,8 @@ static mut FB_HEIGHT: usize = 720;
 static mut FB_PITCH: usize = 1280 * 4;
 
 /// Game grid: scaled for 720p. 80x45 cells of 16x16 pixels.
-const GRID_W: usize = 80;
-const GRID_H: usize = 45;
+const GRID_W: usize = 40;
+const GRID_H: usize = 30;
 const CELL: usize = 16;
 
 /// Colors (32-bit XRGB).
@@ -223,6 +223,7 @@ impl Game {
 /// Entry point called by `userlib`'s runtime after `_start`.
 #[no_mangle]
 pub extern "C" fn user_main() {
+    sys::graphics_mode();
     println!("Snake game starting (720p)...");
     println!("Controls: WASD / Arrows, Q to quit");
 

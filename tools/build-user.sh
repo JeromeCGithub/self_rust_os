@@ -67,7 +67,7 @@ build_one() {
     fi
 
     echo "[user_programs/${prog}] Converting ELF to flat binary..."
-    "${llvm_objcopy}" -O binary "${elf_path}" "${output}"
+    "${llvm_objcopy}" --set-section-flags .bss=alloc,load,contents -O binary "${elf_path}" "${output}"
 
     local size
     size=$(wc -c < "${output}")

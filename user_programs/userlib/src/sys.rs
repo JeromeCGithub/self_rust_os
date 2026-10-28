@@ -271,3 +271,19 @@ pub fn mouse() -> (i32, i32, u8) {
     let buttons = ((packed >> 32) & 0xFF) as u8;
     (x, y, buttons)
 }
+
+/// Copies an application's private drawing surface into the compositor's buffer.
+/// Only PID 0 may call this. Returns whether the application has exited.
+pub fn snapshot(pid: u32, pixels: &mut [u32]) -> Result<bool, ()> {
+    let result = unsafe { syscall(14, u64::from(pid), pixels.as_mut_ptr() as u64, core::mem::size_of_val(pixels) as u64) };
+    if result == SYSCALL_ERROR { Err(()) } else { Ok(result == 1) }
+}
+
+/// Gives a desktop application keyboard focus. Only PID 0 may call this.
+pub fn focus(pid: u32) -> Result<(), ()> {
+    if unsafe { syscall(15, u64::from(pid), 0, 0) } == SYSCALL_ERROR { Err(()) } else { Ok(()) }
+}
+
+/// Uses client-side rendering for this application's surface; console writes
+/// continue to reach the serial log without drawing over graphical content.
+pub fn graphics_mode() { unsafe { syscall(16, 0, 0, 0); } }

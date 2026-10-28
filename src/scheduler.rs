@@ -104,6 +104,12 @@ pub struct Process {
     pub p4_frame: PhysFrame,
     /// Exit code (valid when Zombie).
     pub exit_code: u64,
+    /// Private application drawing surface (empty for the display owner).
+    pub surface: Vec<PhysFrame>,
+    /// Text output cursor in pixels.
+    pub text_cursor: (usize, usize),
+    /// Whether console writes are rendered on this surface.
+    pub console_enabled: bool,
 }
 
 /// Saved CPU context layout.
@@ -419,11 +425,11 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
         .map_err(|_| "failed to map user binary")?;
         crate::userspace::process::map_user_stack_via_phys(&mut new_mapper, allocator, phys_offset)
             .map_err(|_| "failed to map user stack")?;
-        crate::userspace::process::map_user_framebuffer(&mut new_mapper, allocator)
+        let surface = crate::userspace::process::map_user_framebuffer(&mut new_mapper, allocator, is_first_process, phys_offset)
             .map_err(|_| "failed to map framebuffer")?;
-        Ok::<(), &'static str>(())
+        Ok::<Vec<PhysFrame>, &'static str>(surface)
     })();
-    map_result?;
+    let surface = map_result?;
 
     // 4. Allocate a kernel stack from the heap.
     // The heap is mapped in the kernel half, shared by all address spaces.
@@ -470,6 +476,9 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
         kernel_stack_top: kstack_top,
         p4_frame,
         exit_code: 0,
+        surface,
+        text_cursor: (8, 8),
+        console_enabled: true,
     };
     // Ensure the vector is large enough.
     while sched.processes.len() <= pid as usize {
@@ -486,6 +495,7 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
 ///
 /// Never returns.
 pub fn start() -> ! {
+    crate::console::DESKTOP_ACTIVE.store(true, Ordering::Relaxed);
     let new_rsp = {
         let mut sched = SCHEDULER.lock();
         let pid = sched
@@ -831,8 +841,8 @@ pub fn current_pid() -> Option<Pid> {
 ///
 /// Returns the binary bytes, or an error string.
 pub fn load_program_from_disk(path: &str) -> Result<Vec<u8>, &'static str> {
-    // Max program size: 64 KiB.
-    let mut buf = alloc::vec![0u8; 65536];
+    // Flat binaries include zero-filled storage; bound them below the user stack.
+    let mut buf = alloc::vec![0u8; (userspace::USER_STACK_BOTTOM - userspace::USER_CODE_START) as usize];
     let n = crate::fs::with_fs(|fs| fs.read_file(path, &mut buf))
         .ok_or("filesystem not initialized")?
         .map_err(|_| "failed to read program file")?;
@@ -841,4 +851,64 @@ pub fn load_program_from_disk(path: &str) -> Result<Vec<u8>, &'static str> {
     }
     buf.truncate(n);
     Ok(buf)
+}
+
+/// PID receiving keyboard input; only the compositor can change it.
+pub static INPUT_FOCUS: AtomicU64 = AtomicU64::new(0);
+
+/// Whether this process owns keyboard focus.
+pub fn has_input_focus() -> bool {
+    current_pid().map(u64::from) == Some(INPUT_FOCUS.load(Ordering::Relaxed))
+}
+
+/// Copies a private surface to the compositor. Returns 1 for an exited process.
+/// The caller validates the destination and restricts access to PID 0.
+pub fn snapshot(pid: Pid, dest: &mut [u8]) -> u64 {
+    let sched = SCHEDULER.lock();
+    let Some(proc) = sched.processes.get(pid as usize).and_then(Option::as_ref) else { return u64::MAX - 1; };
+    if proc.surface.len() * 4096 < dest.len() { return u64::MAX - 1; }
+    for (chunk, frame) in dest.chunks_mut(4096).zip(&proc.surface) {
+        // SAFETY: Surface frames belong to this live PCB; destination is validated user memory.
+        unsafe { core::ptr::copy_nonoverlapping((sched.phys_offset + frame.start_address().as_u64()) as *const u8, chunk.as_mut_ptr(), chunk.len()); }
+    }
+    u64::from(proc.state == ProcessState::Zombie)
+}
+
+/// Renders console output into the calling application's private surface.
+pub fn surface_write(bytes: &[u8]) {
+    use font8x8::{UnicodeFonts, BASIC_FONTS};
+    let mut sched = SCHEDULER.lock();
+    let offset = sched.phys_offset;
+    let Some(pid) = sched.current else { return; };
+    let Some(proc) = sched.processes[pid as usize].as_mut() else { return; };
+    if proc.surface.is_empty() || !proc.console_enabled { return; }
+    let info = crate::gfx::fb_info();
+    for &byte in bytes {
+        if byte == b'\n' || proc.text_cursor.0 + 8 > info.width {
+            proc.text_cursor.0 = 8;
+            proc.text_cursor.1 += 10;
+        }
+        if proc.text_cursor.1 + 8 > info.height { proc.text_cursor.1 = 8; }
+        if byte == b'\n' { continue; }
+        if let Some(glyph) = BASIC_FONTS.get(char::from(byte)) {
+            for (y, bits) in glyph.iter().enumerate() {
+                for x in 0..8 {
+                    let index = (proc.text_cursor.1 + y) * info.pitch + (proc.text_cursor.0 + x) * 4;
+                    let frame = proc.surface[index / 4096];
+                    let ptr = (offset + frame.start_address().as_u64() + (index % 4096) as u64) as *mut u32;
+                    // SAFETY: Coordinates are within the private surface frames.
+                    unsafe { ptr.write(if bits & (1 << x) != 0 { 0xe1eaf5 } else { 0x101827 }); }
+                }
+            }
+        }
+        proc.text_cursor.0 += 8;
+    }
+}
+
+/// Transfers an application surface from console text to client-side drawing.
+pub fn graphics_mode() {
+    let mut sched = SCHEDULER.lock();
+    if let Some(pid) = sched.current {
+        if let Some(proc) = sched.processes[pid as usize].as_mut() { proc.console_enabled = false; }
+    }
 }

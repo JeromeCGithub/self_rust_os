@@ -29,8 +29,3 @@ pub mod io;
 pub mod sys;
 
 mod rt;
-
-// Entry point implemented by the program. Called once from `rt::_start`.
-extern "C" {
-    fn user_main();
-}

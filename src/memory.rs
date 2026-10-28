@@ -91,12 +91,7 @@ impl RegionFrameAllocator {
         Self { regions, next: 0 }
     }
 
-    fn usable_frames(&self) -> impl Iterator<Item = PhysFrame> + '_ {
-        self.regions
-            .iter()
-            .flat_map(|r| (r.start..r.end).step_by(4096))
-            .map(|addr| PhysFrame::containing_address(PhysAddr::new(addr)))
-    }
+
 }
 
 /// Implement the `FrameAllocator` trait for `RegionFrameAllocator`.
@@ -106,9 +101,18 @@ impl RegionFrameAllocator {
 /// Unsafe because the caller must guarantee that the regions are valid.
 unsafe impl FrameAllocator<Size4KiB> for RegionFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
-        let frame = self.usable_frames().nth(self.next)?;
-        self.next += 1;
-        Some(frame)
+        // Skip whole regions arithmetically instead of walking all previous
+        // frames on every allocation (desktop surfaces require thousands).
+        let mut index = self.next as u64;
+        for region in self.regions {
+            let frames = region.len().div_ceil(4096);
+            if index < frames {
+                self.next += 1;
+                return Some(PhysFrame::containing_address(PhysAddr::new(region.start + index * 4096)));
+            }
+            index -= frames;
+        }
+        None
     }
 }
 

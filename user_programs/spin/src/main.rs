@@ -6,7 +6,7 @@
 #![no_std]
 #![no_main]
 
-use userlib::{println, sys};
+use userlib::println;
 
 #[no_mangle]
 pub extern "C" fn user_main() {

@@ -193,11 +193,7 @@ extern "C" fn timer_dispatch(saved_rsp: u64) -> u64 {
         return 0;
     }
 
-    // From user mode: maybe preempt.
-    // DEBUG-BISECT: preemption disabled to isolate the timer switch path.
-    let _ = saved_rsp;
-    return 0;
-    #[allow(unreachable_code)]
+    // Preempt user code so the compositor and applications stay responsive.
     crate::scheduler::on_timer(saved_rsp)
 }
 
