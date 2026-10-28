@@ -18,7 +18,7 @@ use self_rust_os::{
     allocator, fs,
     memory::{self, BootInfoFrameAllocator},
     println, serial_println,
-    task::{executor::Executor, keyboard, Task},
+    task::keyboard,
     userspace,
 };
 use x86_64::VirtAddr;
@@ -83,27 +83,17 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     #[cfg(test)]
     test_main();
 
-    serial_println!("[kernel] Heap initialized, starting user space demo...");
-    println!("--- User Space Demo ---");
+    serial_println!("[kernel] Heap initialized, starting scheduler...");
+    println!("--- Starting Scheduler ---");
 
-    // Load and execute the embedded user binary.
-    // The CPU switches to Ring 3 and the user program runs until it calls
-    // `sys_exit`, at which point the syscall handler restores the kernel
-    // context and process::run returns here.
+    // Initialize the preemptive scheduler and spawn the initial process
+    // (the terminal). The scheduler takes ownership of the frame allocator.
+    // This never returns; the timer IRQ drives preemptive multitasking.
+    self_rust_os::scheduler::init(phys_mem_offset, frame_allocator);
     #[expect(clippy::expect_used)]
-    userspace::process::run(
-        USER_TERMINAL_BIN,
-        terminal_meta::READONLY_SIZE,
-        &mut mapper,
-        &mut frame_allocator,
-    )
-    .expect("Failed to launch user process. Reboot required.");
-
-    println!("--- Returning to kernel async executor ---");
-
-    let mut executor = Executor::new();
-    executor.spawn(Task::new(keyboard::print_keypresses()));
-    executor.run();
+    self_rust_os::scheduler::spawn_process(USER_TERMINAL_BIN, terminal_meta::READONLY_SIZE)
+        .expect("Failed to spawn initial process. Reboot required.");
+    self_rust_os::scheduler::start();
 }
 
 #[cfg(not(test))]

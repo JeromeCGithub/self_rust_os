@@ -30,6 +30,7 @@ pub mod gdt;
 pub mod gfx;
 pub mod interrupts;
 pub mod memory;
+pub mod scheduler;
 pub mod serial;
 pub mod task;
 pub mod userspace;

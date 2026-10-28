@@ -9,6 +9,7 @@ use spin::Mutex;
 use x86_64::{
     instructions::port::Port,
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame},
+    VirtAddr,
 };
 
 use crate::{gdt, println, task::keyboard, userspace};
@@ -59,8 +60,14 @@ lazy_static! {
                 .set_handler_fn(double_fault_handler)
                 .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
         }
-        idt[InterruptIndex::Timer.as_usize()]
-            .set_handler_fn(timer_interrupt_handler);
+        // Timer uses a naked handler for preemptive context switches.
+        // SAFETY: timer_entry is a naked function that preserves the
+        // interrupt frame layout and returns via iretq.
+        unsafe {
+            idt[InterruptIndex::Timer.as_usize()].set_handler_addr(VirtAddr::new(
+                timer_entry as *const () as u64,
+            ));
+        }
         idt[InterruptIndex::Keyboard.as_usize()]
             .set_handler_fn(keyboard_interrupt_handler);
 
@@ -116,6 +123,91 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
     }
 }
 
+/// Naked timer interrupt entry point for preemptive scheduling.
+///
+/// Saves all GPRs in the canonical order (matching `syscall_entry`, forming
+/// a `scheduler::SavedContext`), then calls [`timer_dispatch`]. If the
+/// scheduler decides to preempt, the stack pointer is switched to the next
+/// process before restoring registers and `iretq`.
+///
+/// Preemption only occurs when the interrupt came from user mode (checked
+/// via the saved CS in `timer_dispatch`). Kernel-mode interrupts just
+/// increment the tick counter, avoiding preemption of lock-holding code.
+#[naked]
+extern "x86-interrupt" fn timer_entry(_frame: InterruptStackFrame) {
+    // SAFETY: Naked function with manual stack management.
+    unsafe {
+        core::arch::naked_asm!(
+            "push rax",
+            "push rbx",
+            "push rcx",
+            "push rdx",
+            "push rsi",
+            "push rdi",
+            "push rbp",
+            "push r8",
+            "push r9",
+            "push r10",
+            "push r11",
+            "push r12",
+            "push r13",
+            "push r14",
+            "push r15",
+            // rdi = rsp (points to SavedContext)
+            "mov rdi, rsp",
+            "call {dispatch}",
+            // rax = new rsp (0 = no switch)
+            "test rax, rax",
+            "jz 2f",
+            "mov rsp, rax",
+            "2:",
+            "pop r15",
+            "pop r14",
+            "pop r13",
+            "pop r12",
+            "pop r11",
+            "pop r10",
+            "pop r9",
+            "pop r8",
+            "pop rbp",
+            "pop rdi",
+            "pop rsi",
+            "pop rdx",
+            "pop rcx",
+            "pop rbx",
+            "pop rax",
+            "iretq",
+            dispatch = sym timer_dispatch,
+        );
+    }
+}
+
+/// Rust timer dispatch, called from [`timer_entry`] with the saved context.
+///
+/// # Returns
+/// New kernel RSP to switch to, or 0 to resume the interrupted context.
+extern "C" fn timer_dispatch(saved_rsp: u64) -> u64 {
+    TICKS.fetch_add(1, Ordering::Relaxed);
+
+    // Notify the PIC that the interrupt has been handled.
+    // SAFETY: We are in the timer IRQ handler.
+    unsafe {
+        PICS.lock()
+            .notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
+    }
+
+    // Check if we interrupted user mode: CS is at saved_rsp + 0x80.
+    // (15 saved regs * 8 = 0x78, then RIP at +0x78, CS at +0x80)
+    let cs = unsafe { *((saved_rsp + 0x80) as *const u64) };
+    if cs & 3 != 3 {
+        // From kernel mode: no preemption.
+        return 0;
+    }
+
+    // From user mode: maybe preempt.
+    crate::scheduler::on_timer(saved_rsp)
+}
+
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
     lazy_static! {
         static ref KEYBOARD: spin::Mutex<pc_keyboard::Keyboard<layouts::Us104Key, ScancodeSet1>> =
@@ -133,6 +225,9 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     // We are reading from the keyboard port which is known to be safe.
     let scancode: u8 = unsafe { port.read() };
     keyboard::add_scancode(scancode);
+
+    // Wake any processes blocked waiting for keyboard input.
+    crate::scheduler::wake_keyboard_waiters();
 
     // Notify the PICs that the interrupt has been handled.
     //

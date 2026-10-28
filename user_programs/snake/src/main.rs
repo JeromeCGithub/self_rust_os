@@ -1,21 +1,14 @@
-//! Snake game for `self_rust_os`.
+//! Snake game for `self_rust_os`, built on `userlib`.
 //!
 //! Runs in Ring 3, draws directly to the framebuffer mapped at 0x90_0000.
-//! Uses SYS_TICKS for timing and SYS_READ_NB for non-blocking input.
+//! Uses `sys::ticks` for timing and `sys::read_nb` for non-blocking input.
 //!
 //! Controls: WASD or Arrow keys to move, Q to quit.
 
 #![no_std]
 #![no_main]
 
-use core::arch::asm;
-use core::panic::PanicInfo;
-
-/// Syscall numbers.
-const SYS_EXIT: u64 = 0;
-const SYS_WRITE: u64 = 1;
-const SYS_TICKS: u64 = 3;
-const SYS_READ_NB: u64 = 4;
+use userlib::{println, sys};
 
 /// Framebuffer mapped at 0x90_0000 (320x200, 8-bit color).
 const FB_ADDR: usize = 0x90_0000;
@@ -37,48 +30,12 @@ const DARK_GREEN: u8 = 10;
 /// Ticks per move (PIT at ~18.2 Hz; 4 ticks ≈ 220ms).
 const MOVE_TICKS: u64 = 4;
 
-#[inline(always)]
-unsafe fn syscall(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
-    let result: u64;
-    asm!(
-        "int 0x80",
-        inlateout("rax") num => result,
-        in("rdi") arg1,
-        in("rsi") arg2,
-        in("rdx") arg3,
-        lateout("rcx") _,
-        lateout("r11") _,
-        options(nostack),
-    );
-    result
-}
-
-fn write(buf: &[u8]) {
-    unsafe {
-        syscall(SYS_WRITE, buf.as_ptr() as u64, buf.len() as u64, 0);
-    }
-}
-
-fn ticks() -> u64 {
-    unsafe { syscall(SYS_TICKS, 0, 0, 0) }
-}
-
 fn read_nb() -> Option<u8> {
     let mut buf = [0u8; 1];
-    let n = unsafe { syscall(SYS_READ_NB, 0, buf.as_mut_ptr() as u64, 1) };
-    if n == 1 {
+    if sys::read_nb(sys::STDIN_FD, &mut buf) == 1 {
         Some(buf[0])
     } else {
         None
-    }
-}
-
-fn exit(code: u64) -> ! {
-    unsafe {
-        syscall(SYS_EXIT, code, 0, 0);
-    }
-    loop {
-        unsafe { asm!("hlt", options(nomem, nostack)) };
     }
 }
 
@@ -264,14 +221,14 @@ impl Game {
     }
 }
 
+/// Entry point called by `userlib`'s runtime after `_start`.
 #[no_mangle]
-#[link_section = ".text.start"]
-pub extern "C" fn _start() -> ! {
-    write(b"Snake game starting...\n");
-    write(b"Controls: WASD / Arrows, Q to quit\n");
+pub extern "C" fn user_main() {
+    println!("Snake game starting...");
+    println!("Controls: WASD / Arrows, Q to quit");
 
     let mut game = Game::new();
-    let mut last_move = ticks();
+    let mut last_move = sys::ticks();
 
     loop {
         // Non-blocking input.
@@ -298,55 +255,27 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 b'q' | b'Q' => {
-                    write(b"Quitting...\n");
-                    exit(0);
+                    println!("Quitting...");
+                    sys::exit(0);
                 }
                 _ => {}
             }
         }
 
         // Game tick.
-        let now = ticks();
+        let now = sys::ticks();
         if now.wrapping_sub(last_move) >= MOVE_TICKS {
             last_move = now;
             if !game.update() {
                 // Game over.
                 clear(BLACK);
-                write(b"Game Over! Score: ");
-                // Simple score output via serial/write.
-                let mut score_buf = [0u8; 10];
-                let mut s = game.score;
-                let mut i = 0;
-                if s == 0 {
-                    score_buf[0] = b'0';
-                    i = 1;
-                } else {
-                    let mut digits = [0u8; 10];
-                    let mut d = 0;
-                    while s > 0 {
-                        digits[d] = b'0' + (s % 10) as u8;
-                        s /= 10;
-                        d += 1;
-                    }
-                    for j in (0..d).rev() {
-                        score_buf[i] = digits[j];
-                        i += 1;
-                    }
-                }
-                write(&score_buf[..i]);
-                write(b"\n");
+                println!("Game Over! Score: {}", game.score);
                 // Wait a bit then exit.
-                let end = ticks() + 36; // ~2 seconds.
-                while ticks() < end {}
-                exit(0);
+                let end = sys::ticks() + 36; // ~2 seconds.
+                while sys::ticks() < end {}
+                sys::exit(0);
             }
             game.draw();
         }
     }
-}
-
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    write(b"PANIC in snake!\n");
-    exit(1);
 }
