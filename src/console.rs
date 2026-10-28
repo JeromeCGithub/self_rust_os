@@ -1,8 +1,9 @@
 //! Framebuffer text console.
 //!
-//! Replaces the VGA text-mode buffer: in graphics mode (mode 13h) there is no
-//! text buffer, so characters are rendered as 8x8 glyphs into the framebuffer
-//! by [`gfx`](crate::gfx). The console is 40x25 characters and scrolls.
+//! Replaces the VGA text-mode buffer: in graphics mode there is no text
+//! buffer, so characters are rendered as 8x8 glyphs into the framebuffer by
+//! [`gfx`](crate::gfx). The console scrolls; its size in characters is
+//! derived from the framebuffer dimensions at init time.
 //!
 //! The [`print!`] and [`println!`] macros write here; [`serial_println!`]
 //! still goes to the serial port.
@@ -13,21 +14,22 @@ use conquer_once::spin::OnceCell;
 use spin::Mutex;
 use x86_64::instructions::interrupts;
 
-use crate::gfx::{
-    self, CHAR_HEIGHT, CHAR_WIDTH, COLOR_BLACK, COLOR_LIGHT_GRAY, COLS, ROWS,
-};
+use crate::gfx::{self, CHAR_HEIGHT, CHAR_WIDTH, COLOR_BLACK, COLOR_LIGHT_GRAY};
 
 /// A text console rendered into the graphics framebuffer.
 #[derive(Debug)]
 pub struct Console {
     col: usize,
     row: usize,
-    fg: u8,
-    bg: u8,
+    fg: u32,
+    bg: u32,
+    cols: usize,
+    rows: usize,
 }
 
 impl Console {
     /// Creates a console with the default colors.
+    /// Dimensions are set by [`for_framebuffer`]; this is for tests only.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -35,6 +37,20 @@ impl Console {
             row: 0,
             fg: COLOR_LIGHT_GRAY,
             bg: COLOR_BLACK,
+            // Default 80x25 for tests; real size comes from for_framebuffer().
+            cols: 80,
+            rows: 25,
+        }
+    }
+
+    /// Creates a console sized for the currently initialized framebuffer.
+    #[must_use]
+    pub fn for_framebuffer() -> Self {
+        let info = gfx::fb_info();
+        Self {
+            cols: info.width / CHAR_WIDTH,
+            rows: info.height / CHAR_HEIGHT,
+            ..Self::new()
         }
     }
 
@@ -43,12 +59,13 @@ impl Console {
         match byte {
             b'\n' => self.new_line(),
             byte => {
-                if self.col >= COLS {
+                if self.col >= self.cols {
                     self.new_line();
                 }
-                let x = self.col * CHAR_WIDTH;
-                let y = self.row * CHAR_HEIGHT;
-                gfx::with_framebuffer(|fb| fb.draw_char(x, y, byte, self.fg, Some(self.bg)));
+                let c = byte as char;
+                gfx::with_framebuffer(|fb| {
+                    fb.draw_char(c, self.col, self.row, self.fg, self.bg)
+                });
                 self.col += 1;
             }
         }
@@ -56,7 +73,7 @@ impl Console {
 
     fn new_line(&mut self) {
         self.col = 0;
-        if self.row + 1 >= ROWS {
+        if self.row + 1 >= self.rows {
             self.scroll();
         } else {
             self.row += 1;
@@ -65,27 +82,23 @@ impl Console {
 
     /// Scrolls the console up by one text row.
     fn scroll(&mut self) {
+        // For 32bpp with pitch, we need to copy line by line.
+        // Simpler: clear and redraw is expensive. For now, do a naive
+        // pixel-by-pixel scroll using the framebuffer API.
+        //
+        // Actually, the simplest correct approach: use with_framebuffer
+        // to get direct access. But FrameBuffer doesn't expose raw ptr.
+        // Let's add a scroll method to FrameBuffer instead.
         gfx::with_framebuffer(|fb| {
-            let row_bytes = COLS * CHAR_WIDTH;
-            let ptr = fb.as_mut_ptr();
-            // Move rows 1..ROWS up by one text row. The regions overlap,
-            // so `copy` (not `copy_nonoverlapping`) is required.
-            //
-            // SAFETY: Both regions are inside the `WIDTH * HEIGHT` byte
-            // framebuffer; `ptr` is the buffer start.
-            unsafe {
-                let src = ptr.add(CHAR_HEIGHT * row_bytes);
-                let bytes = (ROWS - 1) * CHAR_HEIGHT * row_bytes;
-                core::ptr::copy(src, ptr, bytes);
-            }
-            // Clear the last row.
-            fb.fill_rect(0, (ROWS - 1) * CHAR_HEIGHT, row_bytes, CHAR_HEIGHT, self.bg);
+            fb.scroll_up(CHAR_HEIGHT, self.bg);
         });
     }
 
     /// Clears the screen and homes the cursor.
     pub fn clear(&mut self) {
-        gfx::with_framebuffer(|fb| fb.clear(self.bg));
+        gfx::with_framebuffer(|fb| {
+            fb.fill_rect(0, 0, fb.width(), fb.height(), self.bg);
+        });
         self.col = 0;
         self.row = 0;
     }
@@ -121,7 +134,7 @@ static WRITER: OnceCell<Mutex<Console>> = OnceCell::uninit();
 /// Panics if called more than once.
 pub fn init() {
     WRITER
-        .try_init_once(|| Mutex::new(Console::new()))
+        .try_init_once(|| Mutex::new(Console::for_framebuffer()))
         .expect("console::init must be called exactly once");
     WRITER.try_get().expect("console just initialized").lock().clear();
 }
@@ -159,8 +172,12 @@ pub fn _print(args: fmt::Arguments) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Console, COLS, ROWS};
+    use super::Console;
     use core::fmt::Write;
+
+    // Test dimensions (matches Console::new defaults).
+    const TEST_COLS: usize = 80;
+    const TEST_ROWS: usize = 25;
 
     #[test_case]
     fn test_console_advances_cursor() {
@@ -174,10 +191,10 @@ mod tests {
     #[test_case]
     fn test_console_wraps_at_end_of_row() {
         let mut console = Console::new();
-        for _ in 0..COLS {
+        for _ in 0..TEST_COLS {
             write!(console, "x").unwrap();
         }
-        assert_eq!((console.col, console.row), (COLS, 0));
+        assert_eq!((console.col, console.row), (TEST_COLS, 0));
         // The next character wraps to the following row.
         write!(console, "y").unwrap();
         assert_eq!((console.col, console.row), (1, 1));
@@ -186,10 +203,10 @@ mod tests {
     #[test_case]
     fn test_console_scroll_keeps_cursor_on_last_row() {
         let mut console = Console::new();
-        for _ in 0..(ROWS + 5) {
+        for _ in 0..(TEST_ROWS + 5) {
             write!(console, "\n").unwrap();
         }
-        assert_eq!((console.col, console.row), (0, ROWS - 1));
+        assert_eq!((console.col, console.row), (0, TEST_ROWS - 1));
     }
 
     #[test_case]

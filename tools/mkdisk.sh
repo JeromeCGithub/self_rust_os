@@ -4,13 +4,21 @@
 # This script produces everything needed to boot the OS and load user
 # programs from disk (instead of the kernel embedding them via include_bytes!):
 #
-#   1. Builds all user-space programs (hello.bin, snake.bin, terminal.bin, ...)
+#   1. Builds all user-space programs (hello.bin, snake.bin, forge.bin, ...)
 #      using tools/build-user.sh when available, falling back to the
 #      per-program user_programs/*/build.sh scripts.
 #   2. Builds the kernel boot image with `cargo bootimage`.
 #   3. Creates a FAT32 data disk image (default 16 MiB).
-#   4. Copies every user_programs/*/*.bin into the FAT32 filesystem with
-#      8.3 uppercase names (e.g. TERMINAL.BIN).
+#   4. Creates the Unix-like directory hierarchy and copies every
+#      user_programs/*/*.bin into /BIN with 8.3 uppercase names
+#      (e.g. FORGE.BIN).
+#
+# Filesystem hierarchy created on the data disk:
+#   /bin/            User programs (HELLO.BIN, SNAKE.BIN, FORGE.BIN, ...)
+#   /etc/            Configuration (empty for now)
+#   /home/           User home directories
+#   /home/Desktop/   Desktop folder
+#   /tmp/            Temporary files (empty for now)
 #
 # Disk layout expected by the kernel (see src/entry_point.rs, src/fs.rs):
 #   - Boot image -> IDE primary master   (QEMU: -drive ...,if=ide,index=0)
@@ -147,13 +155,17 @@ echo "[mkdisk] formatting as FAT32 (mformat -F)..."
 mformat -F -i "${OUTPUT_IMG}" ::
 
 # ---------------------------------------------------------------------------
-# 4. Copy user binaries with 8.3 uppercase names.
+# 4. Create the directory hierarchy and copy user binaries into /BIN.
 # ---------------------------------------------------------------------------
-echo "[mkdisk] copying user programs into the image..."
+echo "[mkdisk] creating directory hierarchy (/bin, /etc, /home/Desktop, /tmp)..."
+mmd -i "${OUTPUT_IMG}" ::/BIN ::/ETC ::/HOME ::/TMP
+mmd -i "${OUTPUT_IMG}" ::/HOME/DESKTOP
+
+echo "[mkdisk] copying user programs into /BIN..."
 for bin in "${BIN_FILES[@]}"; do
     base="$(basename "${bin}")"
-    # Uppercase; names are already 8.3-compatible (e.g. terminal.bin).
-    dest="::${base^^}"
+    # Uppercase; names are already 8.3-compatible (e.g. forge.bin).
+    dest="::/BIN/${base^^}"
     echo "[mkdisk]   ${base} -> ${dest}"
     mcopy -i "${OUTPUT_IMG}" "${bin}" "${dest}"
 done

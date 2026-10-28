@@ -23,13 +23,17 @@ use x86_64::instructions;
 
 pub mod allocator;
 pub mod ata;
+#[cfg(any(feature = "grub", test))]
+pub mod boot;
 pub mod console;
 pub mod fat32;
 pub mod fs;
 pub mod gdt;
 pub mod gfx;
 pub mod interrupts;
+pub mod mbr;
 pub mod memory;
+pub mod mouse;
 pub mod scheduler;
 pub mod serial;
 pub mod task;
@@ -39,9 +43,12 @@ pub mod userspace;
 ///
 /// Initializes the graphics framebuffer + text console first (so `println!`
 /// works), then the GDT, IDT, and PICs. Must be called once at boot with the
-/// physical memory offset from the bootloader.
-pub fn init(phys_mem_offset: x86_64::VirtAddr) {
-    gfx::init(phys_mem_offset);
+/// physical memory offset from the bootloader and the framebuffer info.
+pub fn init(phys_mem_offset: x86_64::VirtAddr, fb_info: gfx::FbInfo, fb_virt_addr: x86_64::VirtAddr) {
+    // SAFETY: fb_virt_addr must point to mapped framebuffer memory.
+    unsafe {
+        gfx::init(fb_info, fb_virt_addr);
+    }
     console::init();
 
     gdt::init();
@@ -51,11 +58,17 @@ pub fn init(phys_mem_offset: x86_64::VirtAddr) {
     // Initialize the Programmable Interrupt Controller (PIC).
     unsafe {
         interrupts::PICS.lock().initialize();
-        // Unmask timer (IRQ0) and keyboard (IRQ1); keep others masked.
-        // The firmware may have IRQ1 masked, which would break keyboard input.
-        interrupts::PICS.lock().write_masks(0xFC, 0xFF);
+        // Mask the timer (IRQ0) for now: it stays masked until the scheduler
+        // has spawned its first process. If a timer fires during early boot,
+        // timer_entry runs with no scheduler state and double-faults.
+        // Unmask keyboard (IRQ1) and the PIC2 cascade (IRQ2); on the slave,
+        // unmask the mouse (IRQ12). The firmware may have these masked, which
+        // would break input.
+        // 0xF9 = 11111001: IRQ0 masked, IRQ1/IRQ2 unmasked.
+        interrupts::PICS.lock().write_masks(0xF9, 0xEF);
     }
-    // Enable interrupts.
+    // Enable interrupts. Note: the timer IRQ is masked in the PIC, so no
+    // timer interrupt can fire until the scheduler unmasks it.
     instructions::interrupts::enable();
 }
 
@@ -67,7 +80,22 @@ entry_point!(test_kernel_main);
 #[cfg(test)]
 fn test_kernel_main(boot_info: &'static BootInfo) -> ! {
     let phys_mem_offset = x86_64::VirtAddr::new(boot_info.physical_memory_offset);
-    init(phys_mem_offset);
+    // For unit tests, use a dummy framebuffer info. The actual framebuffer
+    // is not mapped in the test environment.
+    let fb_info = gfx::FbInfo {
+        addr: 0xA0000,
+        width: 320,
+        height: 200,
+        pitch: 320 * 4,
+        bpp: 32,
+    };
+    // SAFETY: In tests, we don't actually draw to the framebuffer.
+    // This is just to satisfy the init signature.
+    init(
+        phys_mem_offset,
+        fb_info,
+        x86_64::VirtAddr::new(0xFFFF_8000_000A_0000),
+    );
 
     // Set up paging and the heap so unit tests can use `alloc`.
     // SAFETY: The bootloader guarantees the physical memory offset is valid.

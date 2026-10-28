@@ -85,7 +85,23 @@ fn map_user_binary_inner(
         unsafe {
             mapper
                 .map_to(page, frame, writable_flags, frame_allocator)
-                .map_err(|_| "failed to map user binary page")?
+                .map_err(|e| {
+                    // Log the specific error for debugging. The `e` is a
+                    // MapToError; we match on it to give a useful message.
+                    use x86_64::structures::paging::mapper::MapToError;
+                    let reason = match e {
+                        MapToError::FrameAllocationFailed => "frame allocation failed",
+                        MapToError::PageAlreadyMapped(_) => "page already mapped",
+                        MapToError::ParentEntryHugePage => "parent entry is huge page",
+                    };
+                    crate::serial_println!(
+                        "[process] map_user_binary: failed to map page {} (virt {:#x}): {}",
+                        i,
+                        page.start_address().as_u64(),
+                        reason
+                    );
+                    "failed to map user binary page"
+                })?
                 .flush();
         }
 
@@ -248,7 +264,9 @@ fn map_user_stack_inner(
     Ok(())
 }
 
-/// Maps the VGA framebuffer into user space at
+/// Maps the framebuffer into user space.
+///
+/// Maps the physical framebuffer (whose address the bootloader reported) to
 /// [`USER_FRAMEBUFFER`](super::USER_FRAMEBUFFER) with USER_ACCESSIBLE |
 /// WRITABLE so user programs can draw directly to the screen.
 pub(crate) fn map_user_framebuffer(
@@ -265,7 +283,7 @@ pub(crate) fn map_user_framebuffer(
 
     let num_pages = userspace::FRAMEBUFFER_SIZE / 4096;
     let fb_virt_start = VirtAddr::new(userspace::USER_FRAMEBUFFER);
-    let fb_phys_start = PhysAddr::new(0xA0000);
+    let fb_phys_start = PhysAddr::new(crate::gfx::framebuffer_phys_addr());
 
     for i in 0..num_pages {
         let page: Page<Size4KiB> = Page::containing_address(fb_virt_start + i * 4096);

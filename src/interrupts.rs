@@ -32,6 +32,8 @@ pub enum InterruptIndex {
     Timer = PIC_1_OFFSET,
     /// Keyboard interrupt index.
     Keyboard,
+    /// PS/2 mouse interrupt index (IRQ12 on the slave PIC).
+    Mouse = PIC_2_OFFSET + 4,
 }
 
 impl InterruptIndex {
@@ -70,6 +72,7 @@ lazy_static! {
         }
         idt[InterruptIndex::Keyboard.as_usize()]
             .set_handler_fn(keyboard_interrupt_handler);
+        idt[InterruptIndex::Mouse.as_usize()].set_handler_fn(mouse_interrupt_handler);
 
         // Register the syscall handler at interrupt vector 0x80.
         // DPL is set to Ring 3 so user-mode code can invoke it via `int 0x80`.
@@ -205,6 +208,10 @@ extern "C" fn timer_dispatch(saved_rsp: u64) -> u64 {
     }
 
     // From user mode: maybe preempt.
+    // DEBUG-BISECT: preemption disabled to isolate the timer switch path.
+    let _ = saved_rsp;
+    return 0;
+    #[allow(unreachable_code)]
     crate::scheduler::on_timer(saved_rsp)
 }
 
@@ -236,6 +243,35 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
+    }
+}
+
+extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    let mut status_port = Port::<u8>::new(0x64);
+    let mut data_port = Port::<u8>::new(0x60);
+
+    // SAFETY: Reading the PS/2 status/data ports is side-effect free apart
+    // from consuming the pending output byte, which is exactly what the
+    // IRQ signals.
+    unsafe {
+        let status: u8 = status_port.read();
+        // Only consume the byte if the output buffer is full and the byte
+        // came from the mouse; a keyboard byte must never enter the mouse
+        // packet assembler.
+        if status & crate::mouse::STATUS_OUTPUT_READY != 0
+            && status & crate::mouse::STATUS_MOUSE_DATA != 0
+        {
+            let byte: u8 = data_port.read();
+            crate::mouse::handle_byte(byte);
+        }
+    }
+
+    // Notify the PICs that the interrupt has been handled.
+    //
+    // SAFETY: We are in the mouse IRQ handler; the vector is valid.
+    unsafe {
+        PICS.lock()
+            .notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
     }
 }
 
