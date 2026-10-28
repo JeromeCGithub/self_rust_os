@@ -1,239 +1,114 @@
 # self_rust_os
-A self made simple OS in Rust.
 
-This is an experimental repository to learn how to make an OS in Rust.
+An experimental x86-64 operating system written from scratch in Rust for learning,
+based on Philipp Oppermann's [Writing an OS in Rust](https://os.phil-opp.com/).
+It is not a production OS or a Linux/POSIX-compatible system.
 
-This project is based on the blog post series [Writing an OS in Rust](https://os.phil-opp.com/). I recommend you to read it if you want to learn how to make an OS in Rust.
+## Start here
 
-I'm following the blog post of Philipp Oppermann, then trying to enhance the OS with more features that make me learn more about OS development.
+- [Project documentation](docs/README.md): architecture, builds, testing and syscall ABI.
+- [AI contribution rules](AGENTS.md): mandatory test-driven development and evidence
+  before claiming completion. Read scoped instructions before editing a subsystem.
+- [Kernel versus userspace](docs/architecture.md): `src/` is Ring 0, including
+  `src/userspace/`; apps and `userlib` under `user_programs/` run in Ring 3.
 
-## Features
+## Current features
 
-- [x] VGA text buffer
-- [x] Interrupts
-- [x] Memory management
-- [x] Multitasking (async executor)
-- [x] User mode (Ring 3 execution with syscall interface)
-- [x] In-memory file system (`ramfs`)
-- [x] ATA disk driver (PIO block device)
-- [x] FAT32 filesystem (format, create/read/write/delete files)
+- GDT/TSS, interrupts, paging, heap, serial diagnostics, and preemptive user processes.
+- ATA PIO storage, MBR partitions, FAT32 files/directories and file syscalls.
+- GRUB/Multiboot2 desktop boot with a 640×480×32 framebuffer.
+- Userspace compositor with an image wallpaper, discovered application icons,
+  private application surfaces, window stacking, dragging, close buttons and focus.
+- Portal graphical terminal, Forge text shell, Hello, Snake and CPU-bound Spin app.
+- QEMU absolute pointer integration, with PS/2 fallback, plus keyboard input.
 
-## Requirements
+## Requirements and running
 
-- [QEMU](https://www.qemu.org/)
-- [Rust](https://www.rust-lang.org/) (nightly, see `rust-toolchain`)
-
-You will need to install these dependencies:
+Use the pinned [Rust nightly](rust-toolchain.toml), including `rust-src` and
+`llvm-tools-preview`. Host tools: QEMU x86, GRUB BIOS utilities, mtools, Python 3,
+and Pillow for screenshot tests. Kernel tests also require `cargo-bootimage`:
 
 ```bash
-$ cargo install bootimage
-$ rustup component add llvm-tools-preview
+cargo install bootimage
+cargo run
 ```
 
-## How to run
+See [development setup](docs/development.md) for details. On Debian/Ubuntu the system
+packages commonly include `qemu-system-x86`, `grub-pc-bin`, `mtools`, and `python3-pil`.
+
+`cargo run` builds every app, creates a GRUB/FAT32 disk at `target/grub-disk.img`, and
+starts QEMU. **Rebuilding overwrites that development disk.** Stop any VM using it
+before rebuilding. `RUSTOS_DISPLAY=none cargo run` boots without a graphical window.
+
+Move the host pointer over the display; absolute integration avoids capture where
+supported. **Ctrl+Alt+G** toggles QEMU input capture if needed. Click an icon to open
+an app, click a window to focus it, drag the title bar, and click **x** to close it.
+Up to six windows can be open; exited apps remain visible until closed.
+
+Terminal commands: `help`, `echo`, `clear`, `pwd`, `ls [path]`, `cat /file.txt`,
+`write /file.txt text`, `mkdir /directory`, `time`, and `exit`. Paths are rooted at `/`
+and filenames use FAT32 8.3 conventions. Command and desktop policy lives in userspace.
+
+## Building and testing
 
 ```bash
-$ cargo run
+cargo build
+cargo build --features grub
+cargo build --release --features grub
+./tools/build-user.sh
+cargo test --no-run
 ```
 
-`cargo run` builds the user applications and a bootable GRUB/FAT32 disk, then
-starts QEMU with a 640×480, 32-bit desktop. Install `grub-pc-bin`, `mtools`,
-and `qemu-system-x86` in addition to the Rust toolchain. The image is generated
-at `target/grub-disk.img`; rebuilding replaces this development disk.
-
-The desktop loads `/ETC/WALL.PPM` and discovers application icons from `/BIN`.
-QEMU absolute pointer integration makes the desktop cursor follow the host
-pointer without capture, including on Wayland desktops. A PS/2 fallback is
-retained for other machines. **Ctrl+Alt+G** toggles capture if needed.
-Click an icon to launch it, click a window to focus it, drag its title bar, and
-use its **x** button to close it. Up to six windows can be open. Each application
-has a private drawing surface; the compositor combines them into a complete
-frame before updating the display. Keyboard input goes to the focused window.
-Exited applications remain visible until closed.
-
-**Terminal** opens the Portal shell. Commands include `help`, `echo`, `clear`,
-`pwd`, `ls [path]`, `cat /file.txt`, `write /file.txt text`, `mkdir /directory`,
-`time`, and `exit`. Paths are relative to `/`; filenames use FAT32 8.3 names.
-Forge provides a second text shell; Hello, Snake, and Spin are also launchable.
-For repeatable desktop interaction checks and screenshots:
+These compile code; they do not prove runtime behavior. Follow the complete
+[testing matrix](docs/testing.md) for the affected subsystem. Kernel tests use QEMU
+and custom `#[test_case]` harnesses, not ordinary host tests. The full `cargo test`
+command currently includes a nonterminating graphics demo and known baseline failures;
+do not claim it is a green unattended gate.
 
 ```bash
+# Focused kernel runtime checks
+cargo test --test basic_boot --test gfx --test heap_allocation --test userspace
+./e2e/ata.sh
+./e2e/fat32.sh
+
+# Current desktop runtime checks: build fresh disk first
 ./tools/build-grub-disk.sh
-python3 e2e/desktop.py  # also requires Pillow
+python3 e2e/desktop.py
+
+# Documentation/tooling checks
+python3 -B -m unittest discover -s tools/tests -p 'test_*.py'
+python3 -B tools/check_docs.py
 ```
 
-The default development runner uses GRUB because the legacy bootloader's 8-bit
-VGA mode cannot display the 32-bit desktop. Integration tests still use bootimage.
-The current process allocator does not reclaim address-space frames on exit, so
-long sessions with repeated launches will eventually require a reboot.
+ATA/FAT32 checks mutate dedicated image fixtures. Do not replace them with host disks
+or run concurrent writers against one fixture. Screenshots are in
+[docs/screenshots](docs/screenshots).
 
-## How to run the tests
+To rebuild one app, use `./tools/build-user.sh portal` (substitute the crate name).
+The builder regenerates both flat `.bin` files and `_meta.rs` layout metadata.
+Programs use [userlib](user_programs/userlib/src/lib.rs) and implement `user_main`;
+the SDK supplies `_start` and the panic handler. Rebuild the disk after an app change.
 
-```bash
-$ cargo test
-```
+## Interfaces and limitations
 
-The ATA integration test needs a test disk image attached (it is attached
-automatically via `test-args` in `Cargo.toml`):
+The [current syscall ABI](docs/syscalls.md) uses `int 0x80`. It provides process,
+keyboard, file-by-path, display/surface and focus operations. It does not implement
+the old ramfs open/close API, Linux syscall numbers, or a POSIX descriptor model.
+The root filesystem is now FAT32, and the kernel loads the WM from disk at runtime.
 
-```bash
-$ ./e2e/ata.sh   # runs the ATA driver E2E in QEMU and prints metrics
-```
-
-Test fixtures live in `tests/fixtures/` (`disk-ata.img` is used by the ATA
-tests as the primary slave; the boot disk stays the primary master and is
-never written by tests).
-
-## Storage
-
-### ATA driver (`src/ata.rs`)
-
-Polling PIO-mode driver for IDE disks (LBA28, up to 128 GiB):
-
-```rust
-use self_rust_os::ata::{AtaDisk, AtaDrive};
-
-let mut disk = AtaDisk::primary(AtaDrive::Slave);
-let info = disk.identify()?.expect("no disk");
-let mut sector = [0u8; 512];
-disk.read_sector(42, &mut sector)?;
-disk.write_sector(42, &sector)?;
-```
-
-- `identify()` returns the model/serial/sector count, or `None` when no
-  device is attached.
-- Every operation polls the status register with a bounded timeout, so a
-  missing device fails with `AtaError::Timeout` instead of hanging the kernel.
-- Disk interrupts are not used; cache flushes are issued after every write.
-
-### FAT32 filesystem (`src/fat32.rs`)
-
-Self-contained FAT32 implementation generic over a `BlockDevice` trait
-(so it is unit-tested against a RAM mock and runs on the real ATA disk):
-
-```rust
-use self_rust_os::ata::{AtaDisk, AtaDrive};
-use self_rust_os::fat32::Fat32;
-
-let disk = AtaDisk::secondary(AtaDrive::Master);
-let mut fs = Fat32::format(disk, 32768, b"RUSTOS     ")?;
-fs.create_file("HELLO.TXT")?;
-fs.write_file("HELLO.TXT", b"Hello, disk!")?;
-
-let mut buf = [0u8; 64];
-let n = fs.read_file("HELLO.TXT", &mut buf)?;
-```
-
-- `format` / `open` (BPB parsing + validation), `create_file`,
-  `write_file`, `read_file`, `delete_file`, `list_dir`
-- 8.3 filenames, root directory, cluster-chain allocation
-- E2E: `./e2e/fat32.sh` (uses `tests/fixtures/disk-fat32.img` as secondary master)
-
-## User Space
-
-The OS supports executing user-mode binaries in Ring 3. A user program communicates
-with the kernel through a syscall interface triggered by the `int 0x80` software
-interrupt.
-
-### Syscall ABI
-
-| Register | Purpose        |
-|----------|----------------|
-| `rax`    | syscall number |
-| `rdi`    | argument 1     |
-| `rsi`    | argument 2     |
-| `rdx`    | argument 3     |
-
-The return value is placed in `rax`.
-
-#### Available syscalls
-
-| Number | Name        | Arguments                                            | Description                                |
-|--------|-------------|------------------------------------------------------|--------------------------------------------|
-| `0`    | `sys_exit`  | `rdi` = exit code                                    | Terminates the user process.               |
-| `1`    | `sys_write` | `rdi` = buffer ptr, `rsi` = length                   | Writes a buffer to the VGA text display.   |
-| `2`    | `sys_open`  | `rdi` = path ptr, `rsi` = path len, `rdx` = flags    | Opens (or creates) a file, returns a fd.   |
-| `3`    | `sys_close` | `rdi` = fd                                           | Closes an open file descriptor.            |
-| `4`    | `sys_read`  | `rdi` = fd, `rsi` = buffer ptr, `rdx` = length       | Reads bytes from an open file.             |
-| `5`    | `sys_fwrite`| `rdi` = fd, `rsi` = buffer ptr, `rdx` = length       | Writes bytes to an open file.              |
-
-`sys_open` flags: `O_READ = 0x01`, `O_WRITE = 0x02`, `O_CREATE = 0x04`,
-`O_TRUNC = 0x08`, `O_APPEND = 0x10`. Unknown syscall numbers return
-`u64::MAX - 1`.
-
-### Building the user program
-
-A sample user program lives in `user_programs/hello/`. It is a minimal `no_std`
-Rust binary that prints a greeting message via `sys_write` and terminates via
-`sys_exit`.
-
-To rebuild the user program after making changes:
-
-```bash
-$ cd user_programs/hello
-$ ./build.sh
-```
-
-This compiles the Rust binary for the custom `x86_64-user-program` target and
-converts the resulting ELF to a flat binary (`hello.bin`) using `llvm-objcopy`.
-The flat binary is linked at virtual address `0x400000` with `_start` as the
-entry point.
-
-The kernel embeds `hello.bin` via `include_bytes!` at compile time, so after
-rebuilding the user program you must also rebuild the kernel:
-
-```bash
-$ cargo run
-```
-
-### Writing your own user program
-
-1. Create a new `no_std`, `no_main` Rust crate (you can copy `user_programs/hello/`
-   as a template).
-2. Use the `int 0x80` syscall interface to interact with the kernel. Example:
-
-   ```rust
-   unsafe fn syscall(num: u64, arg1: u64, arg2: u64) -> u64 {
-       let result: u64;
-       core::arch::asm!(
-           "int 0x80",
-           inlateout("rax") num => result,
-           in("rdi") arg1,
-           in("rsi") arg2,
-           lateout("rcx") _,
-           lateout("r11") _,
-           options(nostack),
-       );
-       result
-   }
-   ```
-
-3. Mark your entry point with `#[no_mangle]` and `#[link_section = ".text.start"]`
-   so the linker places it at the base address of the binary.
-4. Build with the provided target JSON and linker script, then convert to a flat
-   binary with `llvm-objcopy -O binary`.
-5. Embed the binary in the kernel with `include_bytes!` and pass it to
-   `userspace::process::run()`.
-
-## File system (`ramfs`)
-
-The kernel embeds a tiny in-memory filesystem. It has a flat namespace
-(every file lives at the root, e.g. `/hello.txt`), supports up to 32 files
-of 64 KiB each, and tracks up to 32 open file descriptors with per-fd
-cursors. Paths must be absolute, use only `[A-Za-z0-9._-]` components, and
-be at most 64 bytes long.
-
-The filesystem is volatile: everything is lost on reboot. At boot the
-kernel seeds it with `/welcome.txt`. The sample user program
-(`user_programs/hello/`) demonstrates the file syscalls end to end: it
-creates `/hello.txt`, writes a greeting, reads it back, and prints it.
+The desktop currently targets 640×480. Process frames/stacks are not fully reclaimed
+on exit; repeated launches can exhaust memory. User-pointer validation and code
+permissions also need further hardening. See [architecture](docs/architecture.md)
+for boundaries and exceptions and [known test gaps](docs/testing.md#known-baseline-gaps)
+for reproducible baseline issues. Do not confuse compile success with isolation,
+cleanup, Ring 3 execution, or manual host GUI verification.
 
 ## Contributing
 
-If like me you want to learn more about OS development in rust, feel free to contribute to this project. You can open an issue or a pull request. I will be happy to discuss with you about this project and its implementation.
+Use red → green → refactor, preserve the kernel/userspace boundary, and include
+actual test evidence and limitations in PRs. Questions and learning-oriented
+contributions are welcome. See [development workflow](docs/development.md).
 
-## License  
+## License
 
-This project is licensed under the MIT License - see the [LICENSE-MIT](LICENSE-MIT) file for details.
-
-This project is also licensed under the Apache 2.0 License - see the [LICENSE-APACHE](LICENSE-APACHE) file for details.
+Dual licensed under [MIT](LICENSE-MIT) and [Apache 2.0](LICENSE-APACHE).
