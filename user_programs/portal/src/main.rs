@@ -6,78 +6,16 @@
 #![no_std]
 #![no_main]
 
-use font8x8::{UnicodeFonts, BASIC_FONTS};
-use userlib::{println, sys};
+use userlib::{
+    println, sys,
+    ui::{self, Color, Event, Material, Rect, Window, WindowOptions},
+};
 
-/// Framebuffer base address (mapped by kernel).
-const FB_ADDR: usize = sys::FRAMEBUFFER_ADDR;
-
-/// Global framebuffer geometry (set at startup).
-static mut FB_WIDTH: i32 = 1280;
-static mut FB_HEIGHT: i32 = 720;
-static mut FB_PITCH: i32 = 1280 * 4;
-
-/// Logical content dimensions (must match the compositor).
 const WIN_W: i32 = 488;
 const WIN_H: i32 = 288;
-const TITLE_H: i32 = 0;
-
-/// Content area (inside window frame).
-const CONTENT_X_OFF: i32 = 4;
-const CONTENT_Y_OFF: i32 = TITLE_H + 4;
-
-/// Font cell dimensions.
-const FONT_W: i32 = 8;
 const FONT_H: i32 = 12;
-
-/// Colors (32-bit XRGB).
-const BLACK: u32 = 0x101827;
-const GREEN: u32 = 0xbed5e8;
-const WHITE: u32 = 0xFFFFFF;
-
-/// Sets a pixel (with bounds check). 32bpp.
-fn set_pixel(x: i32, y: i32, color: u32) {
-    unsafe {
-        if x >= 0 && x < FB_WIDTH && y >= 0 && y < FB_HEIGHT {
-            let offset = (y * FB_PITCH + x * 4) as usize;
-            core::ptr::write((FB_ADDR as *mut u8).add(offset) as *mut u32, color);
-        }
-    }
-}
-
-/// Fills a rectangle.
-fn fill_rect(x: i32, y: i32, w: i32, h: i32, color: u32) {
-    for dy in 0..h {
-        for dx in 0..w {
-            set_pixel(x + dx, y + dy, color);
-        }
-    }
-}
-
-/// Draws a character at (x, y) using the 8x8 font.
-fn draw_char(x: i32, y: i32, c: char, color: u32) {
-    if let Some(glyph) = BASIC_FONTS.get(c) {
-        for (row, byte) in glyph.iter().enumerate() {
-            for col in 0..8 {
-                if (byte >> col) & 1 != 0 {
-                    let px = x + col as i32;
-                    let py = y + row as i32;
-                    fill_rect(px, py, 1, 1, color);
-                }
-            }
-        }
-    }
-}
-
-/// Draws a string at (x, y). Returns the x position after the last char.
-fn draw_str(x: i32, y: i32, s: &str, color: u32) -> i32 {
-    let mut cx = x;
-    for c in s.chars() {
-        draw_char(cx, y, c, color);
-        cx += FONT_W;
-    }
-    cx
-}
+const GREEN: Color = Color::rgb(0xbed5e8);
+const WHITE: Color = Color::rgb(0xffffff);
 
 /// Simple line buffer for the shell.
 struct Shell {
@@ -225,18 +163,13 @@ impl Shell {
 /// Entry point.
 #[no_mangle]
 pub extern "C" fn user_main() {
-    sys::graphics_mode();
     println!("[portal] Portal starting...");
-
-    // Get framebuffer geometry.
-    if let Ok(info) = sys::fb_info() {
-        unsafe {
-            FB_WIDTH = info.width as i32;
-            FB_HEIGHT = info.height as i32;
-            FB_PITCH = info.pitch as i32;
-        }
-        println!("[portal] Framebuffer: {}x{}", info.width, info.height);
-    }
+    let mut window = Window::create(
+        WindowOptions::new("Terminal")
+            .content_size(WIN_W as usize, WIN_H as usize)
+            .background(Material::Glass),
+    )
+    .expect("create terminal window");
 
     let mut shell = Shell::new();
     shell.push_line(b"Portal / RustOS shell");
@@ -247,6 +180,11 @@ pub extern "C" fn user_main() {
     let mut dirty = true;
     let mut previous_blink = false;
     loop {
+        for _ in 0..16 {
+            if window.poll_event().expect("terminal events") == Some(Event::CloseRequested) {
+                sys::exit(0);
+            }
+        }
         let blink = (sys::ticks() / 9) % 2 == 0;
         dirty |= blink != previous_blink;
         // Bound each input batch so an active typist cannot starve rendering.
@@ -271,38 +209,31 @@ pub extern "C" fn user_main() {
             }
         }
         if dirty {
-            let (wx, wy) = (0, 0);
-            let cx = wx + CONTENT_X_OFF;
-            let cy = wy + CONTENT_Y_OFF;
-            let cw = WIN_W - 8;
-            let ch = WIN_H - TITLE_H - 8;
-
-            // Draw content background.
-            fill_rect(cx, cy, cw, ch, BLACK);
-
-            // Draw shell lines.
-            for (i, line) in shell.lines[..shell.line_count].iter().enumerate() {
-                let y = cy + 8 + (i as i32 * FONT_H);
-                if y + FONT_H > cy + ch {
-                    break;
-                }
-                let len = line.iter().position(|&b| b == 0).unwrap_or(64);
-                let s = core::str::from_utf8(&line[..len]).unwrap_or("");
-                draw_str(cx + 8, y, s, GREEN);
-            }
-
-            // Draw input line with cursor.
-            let input_y = cy + 8 + (shell.line_count as i32 * FONT_H);
-            if input_y + FONT_H <= cy + ch {
-                draw_str(cx + 8, input_y, "> ", GREEN);
-                let input_str = core::str::from_utf8(&shell.input[..shell.input_len]).unwrap_or("");
-                let end_x = draw_str(cx + 8 + 16, input_y, input_str, WHITE);
-                if blink {
-                    fill_rect(end_x, input_y, 8, FONT_H, WHITE);
-                }
-            }
-
-            sys::present_surface().expect("terminal surface publication");
+            window
+                .draw(|canvas| {
+                    // Transparent content lets the WM material show through. Text
+                    // stays opaque and sharp, independent of the backdrop blur.
+                    for (i, line) in shell.lines[..shell.line_count].iter().enumerate() {
+                        let y = 12 + i as i32 * FONT_H;
+                        if y + FONT_H > WIN_H - 4 {
+                            break;
+                        }
+                        let len = line.iter().position(|&b| b == 0).unwrap_or(64);
+                        let line = core::str::from_utf8(&line[..len]).unwrap_or("");
+                        ui::text(canvas, 12, y, line, GREEN, 1);
+                    }
+                    let input_y = 12 + shell.line_count as i32 * FONT_H;
+                    if input_y + FONT_H <= WIN_H - 4 {
+                        ui::text(canvas, 12, input_y, "> ", GREEN, 1);
+                        let input =
+                            core::str::from_utf8(&shell.input[..shell.input_len]).unwrap_or("");
+                        let end = ui::text(canvas, 28, input_y, input, WHITE, 1);
+                        if blink {
+                            canvas.fill_rect(Rect::new(end, input_y, 8, FONT_H as u32), WHITE);
+                        }
+                    }
+                })
+                .expect("terminal frame");
             dirty = false;
         }
         previous_blink = blink;

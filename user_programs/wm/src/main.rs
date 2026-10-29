@@ -3,8 +3,13 @@
 #![no_std]
 #![no_main]
 use font8x8::{UnicodeFonts, BASIC_FONTS};
+use userlib::ui::{
+    protocol::{self, Configuration, Material},
+    raster::{coverage, opacity, over, Color},
+};
 use userlib::{println, sys};
 mod damage;
+mod glass;
 use damage::Damage;
 const MAX_W: usize = 1920;
 const MAX_H: usize = 1080;
@@ -12,11 +17,20 @@ const MAX_PITCH: usize = 8192;
 struct Desktop {
     info: sys::FbInfo,
     damage: Damage,
+    cursor: Option<(i32, i32)>,
+    cursor_under: [u32; 8 * 14],
 }
 const MAX: usize = 6;
 static mut BACK: [u32; MAX_W * MAX_H] = [0; MAX_W * MAX_H];
 static mut SURFACE: [u32; MAX_PITCH / 4 * MAX_H] = [0; MAX_PITCH / 4 * MAX_H];
-static mut CACHE: [[u32; 488 * 288]; MAX] = [[0; 488 * 288]; MAX];
+const CONTENT_W: usize = protocol::MAX_WIDTH;
+const CONTENT_H: usize = protocol::MAX_HEIGHT;
+const TITLE_H: i32 = 28;
+const HALO: i32 = 16;
+const BLUR_LEN: usize = 168 * 115;
+static mut CACHE: [[u32; CONTENT_W * CONTENT_H]; MAX] = [[0; CONTENT_W * CONTENT_H]; MAX];
+static mut BLUR_A: [u32; BLUR_LEN] = [0; BLUR_LEN];
+static mut BLUR_B: [u32; BLUR_LEN] = [0; BLUR_LEN];
 static mut WALL: [u8; 57615] = [0; 57615];
 #[derive(Clone, Copy)]
 struct App {
@@ -36,6 +50,16 @@ struct Window {
     exited: bool,
     cache_slot: usize,
     revision: Option<(u64, bool)>,
+    width: usize,
+    height: usize,
+    title: [u8; protocol::TITLE_BYTES],
+    native: bool,
+    material: Material,
+    commit: Option<u32>,
+    reply: Option<u32>,
+    focus_event: Option<bool>,
+    pointer: Option<(i32, i32, u8)>,
+    closing: Option<u64>,
 }
 fn string(bytes: &[u8]) -> &str {
     core::str::from_utf8(&bytes[..bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len())])
@@ -57,7 +81,8 @@ impl Desktop {
             }
         }
     }
-    fn present(&mut self, mx: i32, my: i32) {
+    fn present(&mut self, _mx: i32, _my: i32) {
+        self.restore_cursor();
         // Copy adjacent dirty tiles as runs, clipping the partial right/bottom
         // tiles to the actual display. BACK holds the scene without the cursor.
         let info = self.info;
@@ -76,27 +101,65 @@ impl Desktop {
                 );
             }
         });
-        for y in 0..14 {
-            for x in 0..=y / 2 {
-                let (px, py) = (mx + x, my + y);
-                if px >= 0 && py >= 0 && px < self.info.width as i32 && py < self.info.height as i32
+        let (mx, my, _) = sys::mouse();
+        self.draw_cursor(mx, my);
+    }
+    fn restore_cursor(&mut self) {
+        let Some((mx, my)) = self.cursor.take() else {
+            return;
+        };
+        for y in 0..14usize {
+            for x in 0..8usize {
+                let (px, py) = (mx + x as i32, my + y as i32);
+                if px < 0 || py < 0 || px >= self.info.width as i32 || py >= self.info.height as i32
                 {
-                    let color = if x == 0 || x == y / 2 {
-                        0x081321
-                    } else {
-                        0xffffff
-                    };
-                    // SAFETY: Clipped coordinates address one aligned pixel in
-                    // this process's mapped display; the compositor is its sole
-                    // owner. The cursor is deliberately absent from BACK so its
-                    // previous position can be restored without repainting.
-                    unsafe {
-                        ((sys::FRAMEBUFFER_ADDR + py as usize * self.info.pitch + px as usize * 4)
-                            as *mut u32)
-                            .write_volatile(color);
+                    continue;
+                }
+                // SAFETY: Clipped coordinates address aligned pixels within the
+                // WM's exclusive pitch*height display mapping. Saved pixels came
+                // from this same rectangle before drawing the last cursor. Only
+                // this WM writes display memory; no reference spans scheduling.
+                unsafe {
+                    ((sys::FRAMEBUFFER_ADDR + py as usize * self.info.pitch + px as usize * 4)
+                        as *mut u32)
+                        .write_volatile(self.cursor_under[y * 8 + x]);
+                }
+            }
+        }
+    }
+    fn draw_cursor(&mut self, mx: i32, my: i32) {
+        for y in 0..14usize {
+            for x in 0..8usize {
+                let (px, py) = (mx + x as i32, my + y as i32);
+                if px < 0 || py < 0 || px >= self.info.width as i32 || py >= self.info.height as i32
+                {
+                    continue;
+                }
+                // SAFETY: Validated geometry and clipping bound aligned MMIO
+                // accesses. The WM is the sole writer. Save the displayed scene,
+                // not the in-progress composition, before overlaying the cursor.
+                unsafe {
+                    let pixel = (sys::FRAMEBUFFER_ADDR
+                        + py as usize * self.info.pitch
+                        + px as usize * 4) as *mut u32;
+                    self.cursor_under[y * 8 + x] = pixel.read_volatile();
+                    if x <= y / 2 {
+                        pixel.write_volatile(if x == 0 || x == y / 2 {
+                            0x081321
+                        } else {
+                            0xffffff
+                        });
                     }
                 }
             }
+        }
+        self.cursor = Some((mx, my));
+    }
+    fn refresh_cursor(&mut self) {
+        let (x, y, _) = sys::mouse();
+        if self.cursor != Some((x, y)) {
+            self.restore_cursor();
+            self.draw_cursor(x, y);
         }
     }
 
@@ -153,6 +216,9 @@ impl Desktop {
         // Restore only the workspace exposed by a changed window layout.
         let (left, top, right, bottom) = bounds;
         for y in top..bottom {
+            if y % 32 == 0 {
+                self.refresh_cursor();
+            }
             let wall_row = 15 + (y * 120 / self.info.height) * 160 * 3;
             for x in left..right {
                 let c = if wallpaper {
@@ -213,73 +279,184 @@ impl Desktop {
     }
     fn update_surface(&self, win: &mut Window) -> bool {
         let status = sys::surface_status(win.pid);
-        if win.revision == status.ok() && win.revision.is_some() {
+        win.exited = status.map(|(_, exited)| exited).unwrap_or(true);
+        if win.native && win.commit.is_none() {
             return false;
         }
-        let scale = string(&win.app.name) == "SNAKE";
+        if !win.native && win.revision == status.ok() && win.revision.is_some() {
+            return false;
+        }
+        let scale = !win.native && string(&win.app.name) == "SNAKE";
         let words = if scale {
             self.info.pitch / 4 * self.info.height
         } else {
-            287 * (self.info.pitch / 4) + 488
+            (win.height - 1) * (self.info.pitch / 4) + win.width
         };
-        // SAFETY: Validated geometry bounds the full scratch surface, including
-        // pitch padding. This process exclusively owns SURFACE and CACHE;
-        // cache_slot is unique among live windows and bounded by MAX.
+        // SAFETY: Display geometry and accepted content dimensions bound this
+        // prefix of the private surface. The WM alone owns SURFACE and CACHE;
+        // every live window has a unique bounded cache slot. Native clients keep
+        // submitted pixels immutable until the RELEASE sent after this copy.
         let result = unsafe {
             sys::snapshot(
                 win.pid,
                 &mut (&mut *core::ptr::addr_of_mut!(SURFACE))[..words],
             )
         };
-        win.exited = result == Ok(true);
         win.revision = status.ok();
-        for y in 0..288 {
-            for x in 0..488 {
-                let sx = if scale { x * self.info.width / 488 } else { x };
-                let sy = if scale { y * self.info.height / 288 } else { y };
-                // SAFETY: Sampling is within the validated scratch dimensions;
-                // the exclusive snapshot borrow has ended. The cache index is
-                // bounded by 488x288, and only this compositor accesses it.
+        for y in 0..win.height {
+            for x in 0..win.width {
+                let sx = if scale {
+                    x * self.info.width / win.width
+                } else {
+                    x
+                };
+                let sy = if scale {
+                    y * self.info.height / win.height
+                } else {
+                    y
+                };
+                // SAFETY: Sampling is bounded by the validated surface geometry;
+                // the snapshot borrow has ended. Only this WM accesses the cache.
                 unsafe {
-                    CACHE[win.cache_slot][y * 488 + x] = if result.is_err() {
-                        0x101827
+                    let pixel = if result.is_err() {
+                        0xff101827
                     } else {
                         SURFACE[sy * (self.info.pitch / 4) + sx]
+                    };
+                    CACHE[win.cache_slot][y * CONTENT_W + x] = if win.native {
+                        pixel
+                    } else {
+                        pixel | 0xff000000
                     };
                 }
             }
         }
+        if let Some(serial) = win.commit.take() {
+            win.reply = Some(protocol::RELEASE | serial);
+        }
         true
     }
     fn window(&mut self, win: &Window, active: bool) {
-        self.rect(win.x + 5, win.y + 5, 492, 326, 0x081321);
-        self.rect(
-            win.x - 1,
-            win.y - 1,
-            490,
-            322,
-            if active { 0x86cfc8 } else { 0x45576e },
-        );
-        self.rect(
-            win.x,
-            win.y,
-            488,
-            28,
-            if active { 0x233b55 } else { 0x1c2d42 },
-        );
-        self.text(win.x + 12, win.y + 10, string(&win.app.name), 0xf4f8ff);
-        if win.exited {
-            self.text(win.x + 200, win.y + 10, "Exited", 0x99b4c9);
-        }
-        self.text(win.x + 465, win.y + 10, "x", 0xffa9a9);
-        for y in 0..288 {
-            for x in 0..488 {
-                // SAFETY: cache_slot uniquely belongs to this live window;
-                // update_surface initialized all in-bounds pixels before use.
-                let c = unsafe { CACHE[win.cache_slot][y * 488 + x] };
-                self.pixel(win.x + x as i32, win.y + 28 + y as i32, c);
+        let w = win.width as i32;
+        let h = win.height as i32 + TITLE_H;
+        let blur_width = (w + HALO * 2 + 3) as usize / 4;
+        let blur_height = ((if win.native { h } else { TITLE_H }) + HALO * 2 + 3) as usize / 4;
+        let tint = match win.material {
+            Material::GlassClear => 112,
+            Material::Glass => 168,
+            Material::Opaque => 255,
+        };
+        let tint_color = Color::rgba(20, 30, 48, tint).0;
+        let title_color = Color::rgba(225, 239, 255, if active { 18 } else { 8 }).0;
+        let edge_color = Color::rgba(220, 237, 255, if active { 100 } else { 48 }).0;
+        // Capture only layers below this window, before its own shadow/material.
+        // SAFETY: Validated display dimensions bound clamped BACK reads. Accepted
+        // content bounds guarantee blur_width*blur_height <= BLUR_LEN. This WM is
+        // the sole owner of all three buffers; no references survive this block.
+        unsafe {
+            for y in 0..blur_height {
+                for x in 0..blur_width {
+                    let sx = (win.x - HALO + x as i32 * 4 + 2).clamp(0, self.info.width as i32 - 1)
+                        as usize;
+                    let sy = (win.y - HALO + y as i32 * 4 + 2).clamp(0, self.info.height as i32 - 1)
+                        as usize;
+                    BLUR_A[y * blur_width + x] = BACK[sy * self.info.width + sx];
+                }
+            }
+            glass::blur(
+                &*core::ptr::addr_of!(BLUR_A),
+                &mut *core::ptr::addr_of_mut!(BLUR_B),
+                blur_width,
+                blur_height,
+                true,
+            );
+            glass::blur(
+                &*core::ptr::addr_of!(BLUR_B),
+                &mut *core::ptr::addr_of_mut!(BLUR_A),
+                blur_width,
+                blur_height,
+                false,
+            );
+            // Tint at low resolution once, instead of blending the same material
+            // for every output pixel. Opaque legacy content needs only the title.
+            for pixel in
+                (&mut *core::ptr::addr_of_mut!(BLUR_A))[..blur_width * blur_height].iter_mut()
+            {
+                *pixel = over(tint_color, *pixel | 0xff000000);
             }
         }
+        // A restrained shadow outside the rounded window's bounding box.
+        for y in -8..h + 16 {
+            for x in -12..w + 12 {
+                if x >= 0 && y >= 0 && x < w && y < h {
+                    continue;
+                }
+                let distance = (-x).max(x - w + 1).max(-y).max(y - h + 1).max(0);
+                let alpha = ((16 - distance).max(0) * 3).min(42) as u8;
+                self.blend(win.x + x, win.y + y, Color::rgba(3, 8, 18, alpha).0);
+            }
+        }
+        for y in 0..h {
+            if y % 32 == 0 {
+                self.refresh_cursor();
+            }
+            for x in 0..w {
+                let mask = coverage(x, y, w, h, 16);
+                if mask == 0 {
+                    continue;
+                }
+                let sx = (x + HALO) as usize / 4;
+                let sy = (y + HALO) as usize / 4;
+                let mut pixel = if y >= TITLE_H {
+                    // SAFETY: y-TITLE_H and x are bounded by accepted dimensions.
+                    let content = unsafe {
+                        CACHE[win.cache_slot][(y - TITLE_H) as usize * CONTENT_W + x as usize]
+                    };
+                    if content >> 24 == 255 {
+                        content
+                    } else {
+                        // SAFETY: Only native content has alpha; native windows
+                        // initialize the complete backdrop, including this index.
+                        over(content, unsafe { BLUR_A[sy * blur_width + sx] })
+                    }
+                } else {
+                    // SAFETY: Every window initializes at least its title backdrop.
+                    over(title_color, unsafe { BLUR_A[sy * blur_width + sx] })
+                };
+                let inner = coverage(x - 1, y - 1, w - 2, h - 2, 15);
+                let edge = mask.saturating_sub(inner);
+                if edge > 0 {
+                    pixel = over(edge_color, pixel);
+                }
+                if mask == 255 {
+                    self.pixel(win.x + x, win.y + y, pixel & 0xffffff);
+                } else {
+                    self.blend(win.x + x, win.y + y, opacity(pixel, mask));
+                }
+            }
+        }
+        self.text(
+            win.x + 18,
+            win.y + 11,
+            string(&win.title),
+            if active { 0xf2f6ff } else { 0x9aaec5 },
+        );
+        // Close control keeps a fixed, observable hit target for every material.
+        for y in -5..=5 {
+            for x in -5..=5 {
+                if x * x + y * y <= 25 {
+                    self.pixel(win.x + w - 18 + x, win.y + 14 + y, 0xff6b79);
+                }
+            }
+        }
+    }
+    fn blend(&mut self, x: i32, y: i32, color: u32) {
+        if x < 0 || y < 0 || x >= self.info.width as i32 || y >= self.info.height as i32 {
+            return;
+        }
+        // SAFETY: Clipped coordinates index the WM's exclusively owned BACK.
+        let old = unsafe { BACK[y as usize * self.info.width + x as usize] | 0xff000000 };
+        self.pixel(x, y, over(color, old) & 0xffffff);
     }
 }
 fn focus(pid: u32) {
@@ -307,6 +484,8 @@ pub extern "C" fn user_main() {
     let mut display = Desktop {
         info,
         damage: Damage::new(),
+        cursor: None,
+        cursor_under: [0; 8 * 14],
     };
     // SAFETY: WALL is exclusively borrowed for this synchronous read. The
     // returned size and header are checked before rendering its pixel data.
@@ -324,17 +503,150 @@ pub extern "C" fn user_main() {
     let mut drag: Option<(i32, i32)> = None;
     let mut scene_dirty = true;
     let mut old_bounds = (0, 0, info.width, info.height);
+    let mut focused = 0;
+    let mut announced_focus = 0;
     display.damage.mark(0, 0, info.width, info.height);
     let mut old_mouse = None;
     loop {
+        // Opaque service messages are decoded here in Ring 3, never in the kernel.
+        // Each iteration is bounded even if a malicious client floods its channel.
+        for _ in 0..64 {
+            let Ok(Some((pid, message))) = sys::receive_message() else {
+                break;
+            };
+            let existing = windows[..used]
+                .iter()
+                .position(|window| window.map(|w| w.pid) == Some(pid));
+            match message & protocol::KIND {
+                protocol::CONFIGURE => {
+                    let config = Configuration::decode(message)
+                        .filter(|c| c.fits_display(info.width, info.height));
+                    if config.is_none()
+                        || sys::surface_status(pid)
+                            .map(|(_, dead)| dead)
+                            .unwrap_or(true)
+                        || existing
+                            .map(|i| windows[i].unwrap().native)
+                            .unwrap_or(false)
+                    {
+                        let _ = sys::send_message(pid, protocol::REJECT);
+                        continue;
+                    }
+                    let index = if let Some(index) = existing {
+                        index
+                    } else {
+                        if used == MAX {
+                            let _ = sys::send_message(pid, protocol::REJECT);
+                            continue;
+                        }
+                        let slot = free_slot(&windows[..used]);
+                        windows[used] = Some(new_window(pid, EMPTY_APP, slot, used));
+                        used += 1;
+                        focused = pid;
+                        focus(pid);
+                        used - 1
+                    };
+                    let config = config.expect("validated configuration");
+                    let window = windows[index].as_mut().expect("registered window");
+                    window.width = config.width;
+                    window.height = config.height;
+                    window.native = true;
+                    window.material = config.material;
+                    window.reply = Some(protocol::ACCEPT);
+                    window.focus_event = Some(window.pid == focused);
+                    window.x = window.x.clamp(0, info.width as i32 - window.width as i32);
+                    window.y = window
+                        .y
+                        .clamp(28, info.height as i32 - 32 - TITLE_H - window.height as i32);
+                    // SAFETY: The cache slot uniquely belongs to this live window.
+                    // Clear it before exposing native alpha pixels or reusing it.
+                    unsafe {
+                        CACHE[window.cache_slot].fill(0);
+                    }
+                    scene_dirty = true;
+                }
+                protocol::TITLE => {
+                    if let Some(index) = existing {
+                        let window = windows[index].as_mut().expect("registered window");
+                        let chunk = ((message >> 24) & 15) as usize;
+                        if window.native && chunk < 8 {
+                            for byte in 0..3 {
+                                let value = ((message >> (byte * 8)) & 255) as u8;
+                                window.title[chunk * 3 + byte] =
+                                    if value == 0 || (32..127).contains(&value) {
+                                        value
+                                    } else {
+                                        b'?'
+                                    };
+                            }
+                            scene_dirty = true;
+                        }
+                    }
+                }
+                protocol::COMMIT => {
+                    if let Some(index) = existing {
+                        let window = windows[index].as_mut().expect("registered window");
+                        if window.native && window.commit.is_none() {
+                            window.commit = Some(message & protocol::SERIAL);
+                        }
+                    }
+                }
+                protocol::CLOSE => {
+                    if let Some(index) = existing {
+                        let window = windows[index].as_mut().expect("registered window");
+                        if window.native {
+                            window.closing = Some(sys::ticks());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Native exit/close frees the WM cache slot; legacy text apps retain their
+        // final output until closed. Existing kernel frame/stack leaks are separate.
+        let mut index = 0;
+        while index < used {
+            let window = windows[index].expect("registered window");
+            let dead = sys::surface_status(window.pid)
+                .map(|(_, dead)| dead)
+                .unwrap_or(true);
+            if window.native
+                && (dead
+                    || window
+                        .closing
+                        .map(|tick| sys::ticks().wrapping_sub(tick) >= 18)
+                        .unwrap_or(false))
+            {
+                if !dead {
+                    let _ = sys::kill(window.pid);
+                }
+                let _ = sys::waitpid(window.pid);
+                for j in index..used - 1 {
+                    windows[j] = windows[j + 1];
+                }
+                used -= 1;
+                windows[used] = None;
+                if focused == window.pid {
+                    focused = if used > 0 {
+                        windows[used - 1].unwrap().pid
+                    } else {
+                        0
+                    };
+                    focus(focused);
+                }
+                drag = None;
+                scene_dirty = true;
+            } else {
+                index += 1;
+            }
+        }
         let (mx, my, buttons) = sys::mouse();
         let down = buttons & 1 != 0;
         let click = down && previous & 1 == 0;
         if click {
-            scene_dirty = true;
             let window_hit = (0..used).rev().find(|&i| {
                 let w = windows[i].unwrap();
-                hit(mx, my, w.x, w.y, 488, 316)
+                hit(mx, my, w.x, w.y, w.width as i32, w.height as i32 + TITLE_H)
             });
             if window_hit.is_none() && my >= 40 && my < 120 {
                 let index = ((mx - 18).max(0) / 100) as usize;
@@ -342,55 +654,50 @@ pub extern "C" fn user_main() {
                     let app = apps[index];
                     match sys::spawn(string(&app.path)) {
                         Ok(pid) => {
-                            let cache_slot = (0..MAX)
-                                .find(|slot| {
-                                    !windows[..used]
-                                        .iter()
-                                        .flatten()
-                                        .any(|window| window.cache_slot == *slot)
-                                })
-                                .expect("free window cache slot");
-                            windows[used] = Some(Window {
-                                pid,
-                                app,
-                                x: 80 + used as i32 * 12,
-                                y: 126 + (used as i32 * 2).min(6),
-                                exited: false,
-                                cache_slot,
-                                revision: None,
-                            });
+                            let slot = free_slot(&windows[..used]);
+                            windows[used] = Some(new_window(pid, app, slot, used));
                             used += 1;
+                            focused = pid;
                             focus(pid);
                             println!("[desktop] launched {} pid={}", string(&app.name), pid);
+                            scene_dirty = true;
                         }
                         Err(()) => println!("[desktop] launch failed: {}", string(&app.path)),
                     }
                 }
-            } else {
-                if let Some(i) = window_hit {
-                    let w = windows[i].unwrap();
-                    for j in i..used - 1 {
-                        windows[j] = windows[j + 1];
-                    }
-                    windows[used - 1] = Some(w);
-                    focus(w.pid);
-                    if hit(mx, my, w.x + 455, w.y, 33, 28) {
+            } else if let Some(i) = window_hit {
+                let w = windows[i].unwrap();
+                for j in i..used - 1 {
+                    windows[j] = windows[j + 1];
+                }
+                windows[used - 1] = Some(w);
+                focused = w.pid;
+                focus(w.pid);
+                scene_dirty = true;
+                if hit(mx, my, w.x + w.width as i32 - 33, w.y, 33, TITLE_H) {
+                    if w.native && !w.exited {
+                        let _ = sys::send_message(w.pid, protocol::CLOSE);
+                        windows[used - 1].as_mut().unwrap().closing = Some(sys::ticks());
+                    } else {
                         let _ = sys::kill(w.pid);
                         let _ = sys::waitpid(w.pid);
                         used -= 1;
                         windows[used] = None;
-                        focus(if used > 0 {
+                        focused = if used > 0 {
                             windows[used - 1].unwrap().pid
                         } else {
                             0
-                        });
-                    } else if hit(mx, my, w.x, w.y, 455, 28) {
-                        drag = Some((mx - w.x, my - w.y));
-                        println!("[desktop] drag started: pid={}", w.pid);
+                        };
+                        focus(focused);
                     }
-                } else {
-                    focus(0);
+                } else if hit(mx, my, w.x, w.y, w.width as i32 - 33, TITLE_H) {
+                    drag = Some((mx - w.x, my - w.y));
+                    println!("[desktop] drag started: pid={}", w.pid);
                 }
+            } else {
+                focused = 0;
+                focus(0);
+                scene_dirty = true;
             }
         }
         if !down {
@@ -399,24 +706,66 @@ pub extern "C" fn user_main() {
         if let Some((dx, dy)) = drag {
             if used > 0 {
                 let w = windows[used - 1].as_mut().unwrap();
-                let x = (mx - dx).clamp(0, info.width as i32 - 488);
-                let y = (my - dy).clamp(28, info.height as i32 - 32 - 316);
+                let x = (mx - dx).clamp(0, info.width as i32 - w.width as i32);
+                let y = (my - dy).clamp(28, info.height as i32 - 32 - TITLE_H - w.height as i32);
                 scene_dirty |= (w.x, w.y) != (x, y);
                 (w.x, w.y) = (x, y);
             }
         }
+        if focused != announced_focus {
+            for window in windows[..used].iter_mut().flatten().filter(|w| w.native) {
+                window.focus_event = Some(window.pid == focused);
+                window.pointer = None;
+            }
+            announced_focus = focused;
+            scene_dirty = true;
+        }
         let mut compose = scene_dirty;
         for window in windows[..used].iter_mut().flatten() {
             compose |= display.update_surface(window);
+            // Frame/config acknowledgements have priority over coalesced motion.
+            if let Some(reply) = window.reply {
+                if sys::send_message(window.pid, reply).is_ok() {
+                    window.reply = None;
+                }
+            }
+            if let Some(focused) = window.focus_event {
+                if sys::send_message(window.pid, protocol::FOCUS | u32::from(focused)).is_ok() {
+                    window.focus_event = None;
+                }
+            }
+            if window.native && window.pid == focused && drag.is_none() {
+                let pointer = (
+                    (mx - window.x).clamp(-1024, 1023),
+                    (my - window.y - TITLE_H).clamp(-1024, 1023),
+                    buttons,
+                );
+                if window.pointer != Some(pointer) {
+                    let payload = protocol::POINTER
+                        | (pointer.0 as u32 & 2047)
+                        | ((pointer.1 as u32 & 2047) << 11)
+                        | (u32::from(buttons & 7) << 22);
+                    if sys::send_message(window.pid, payload).is_ok() {
+                        window.pointer = Some(pointer);
+                    }
+                }
+            }
         }
-        if scene_dirty {
+        if compose {
             let mut bounds = (info.width, info.height, 0, 0);
             for window in windows[..used].iter().flatten() {
-                bounds.0 = bounds.0.min((window.x - 1).max(0) as usize);
-                bounds.1 = bounds.1.min((window.y - 1).max(0) as usize);
-                bounds.2 = bounds.2.max((window.x as usize + 497).min(info.width));
-                bounds.3 = bounds.3.max((window.y as usize + 331).min(info.height));
+                bounds.0 = bounds.0.min((window.x - 12).max(0) as usize);
+                bounds.1 = bounds.1.min((window.y - 8).max(0) as usize);
+                bounds.2 = bounds
+                    .2
+                    .max((window.x as usize + window.width + 12).min(info.width));
+                bounds.3 = bounds.3.max(
+                    (window.y as usize + window.height + TITLE_H as usize + 16).min(info.height),
+                );
             }
+            // Restore and compose bottom-to-top on *any* content change. Glass
+            // depends on lower layers even if its own client's revision is stable.
+            // This also prevents repeatedly blurring the previous glass result.
             display.desktop(
                 &apps[..count],
                 wallpaper,
@@ -427,13 +776,11 @@ pub extern "C" fn user_main() {
                     old_bounds.3.max(bounds.3),
                 ),
             );
+            for window in windows[..used].iter().flatten() {
+                display.window(window, window.pid == focused);
+            }
             old_bounds = bounds;
             scene_dirty = false;
-        }
-        if compose {
-            for i in 0..used {
-                display.window(windows[i].as_ref().unwrap(), i == used - 1);
-            }
         }
         let moved = old_mouse != Some((mx, my));
         if moved {
@@ -446,5 +793,33 @@ pub extern "C" fn user_main() {
         old_mouse = Some((mx, my));
         previous = buttons;
         sys::sleep_ticks(1).expect("desktop timed wait");
+    }
+}
+fn free_slot(windows: &[Option<Window>]) -> usize {
+    (0..MAX)
+        .find(|slot| !windows.iter().flatten().any(|w| w.cache_slot == *slot))
+        .expect("free cache slot")
+}
+fn new_window(pid: u32, app: App, cache_slot: usize, index: usize) -> Window {
+    let mut title = [0; protocol::TITLE_BYTES];
+    title[..12].copy_from_slice(&app.name);
+    Window {
+        pid,
+        app,
+        x: 80 + index as i32 * 12,
+        y: 126 + (index as i32 * 2).min(6),
+        exited: false,
+        cache_slot,
+        revision: None,
+        width: 488,
+        height: 288,
+        title,
+        native: false,
+        material: Material::Glass,
+        commit: None,
+        reply: None,
+        pointer: None,
+        closing: None,
+        focus_event: None,
     }
 }

@@ -36,6 +36,10 @@ pub const SYS_SLEEP_TICKS: u64 = 17;
 pub const SYS_PRESENT_SURFACE: u64 = 18;
 /// Queries surface revision and exit status (display owner only).
 pub const SYS_SURFACE_STATUS: u64 = 19;
+/// Bounded messages between an application and the display owner.
+pub const SYS_SEND_MESSAGE: u64 = 20;
+/// Nonblocking receive from the caller's inbox.
+pub const SYS_RECEIVE_MESSAGE: u64 = 21;
 
 /// Return value indicating a failed syscall.
 pub const SYSCALL_ERROR: u64 = u64::MAX - 1;
@@ -320,4 +324,32 @@ pub fn surface_status(pid: u32) -> Result<(u64, bool), ()> {
     // SAFETY: Syscall 19 takes a PID and returns integer metadata, no pointers.
     let result = unsafe { syscall(SYS_SURFACE_STATUS, u64::from(pid), 0, 0) };
     if result == SYSCALL_ERROR { Err(()) } else { Ok((result >> 1, result & 1 != 0)) }
+}
+
+/// Failure to send/receive a scalar service message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageError {
+    /// The target's sixteen-message inbox is full. Retry after yielding.
+    Full,
+    /// Missing/dead target, forbidden client-to-client delivery, or no caller.
+    Unavailable,
+}
+
+/// Sends an opaque scalar to PID 0, or from PID 0 to a live client.
+pub fn send_message(target: u32, payload: u32) -> Result<(), MessageError> {
+    // SAFETY: Only integers cross the boundary; no user memory is borrowed.
+    match unsafe { syscall(SYS_SEND_MESSAGE, u64::from(target), u64::from(payload), 0) } {
+        0 => Ok(()),
+        1 => Err(MessageError::Full),
+        _ => Err(MessageError::Unavailable),
+    }
+}
+
+/// Returns a kernel-authenticated `(sender, payload)`, or None for an empty inbox.
+pub fn receive_message() -> Result<Option<(u32, u32)>, MessageError> {
+    // SAFETY: No arguments or pointers; only the caller's inbox is accessed.
+    let value = unsafe { syscall(SYS_RECEIVE_MESSAGE, 0, 0, 0) };
+    if value == SYSCALL_ERROR { return Err(MessageError::Unavailable); }
+    if value == 0 { return Ok(None); }
+    Ok(Some((((value >> 32) - 1) as u32, value as u32)))
 }

@@ -79,9 +79,14 @@ host device. `file.locking=off` permits attachment; it does not make concurrent 
 ./tools/build-grub-disk.sh
 python3 e2e/desktop.py
 python3 e2e/desktop_perf.py
+python3 e2e/glass_ui.py
 bash e2e/build_profile.sh
 rustc --edition=2021 --test user_programs/wm/src/damage.rs -o /tmp/rustos-damage-tests
 /tmp/rustos-damage-tests
+rustc --edition=2021 --test user_programs/userlib/src/ui/host_tests.rs -o /tmp/rustos-ui-tests
+/tmp/rustos-ui-tests
+rustc --edition=2021 --test user_programs/wm/src/glass.rs -o /tmp/rustos-glass-tests
+/tmp/rustos-glass-tests
 python3 -B -m unittest discover -s tools/tests -p 'test_*.py'
 python3 -B tools/check_docs.py
 git diff --check

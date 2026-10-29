@@ -1,5 +1,10 @@
 # 1080p performance work
 
+These measurements describe the original 1080p optimization, before the native
+[UI toolkit and glass compositor](ui.md). The current WM uses larger content
+caches and recomposes lower-layer changes for glass; rerun the same performance
+suite for current measurements rather than treating historical numbers as current.
+
 The requested behavior is responsive input and CPU use proportional to useful work.
 Desktop policy remains in Ring 3. The kernel adds timed blocking, surface publication
 metadata, and nonempty prefix snapshots; PID 0 retains exclusive display/snapshot

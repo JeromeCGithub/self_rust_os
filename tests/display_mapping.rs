@@ -144,6 +144,22 @@ fn large_binary_and_padded_surfaces_survive_spawn_snapshot_and_reap() {
             "surface must be entirely zeroed, including its last partial page"
         );
         activate(first, &mut context);
+        assert_eq!(scheduler::receive_message(), 0, "new clients have empty inboxes");
+        assert_eq!(scheduler::send_message(0, 0x12345678), 0, "clients can contact the display owner");
+        activate(0, &mut context);
+        assert_eq!(scheduler::receive_message(), ((u64::from(first) + 1) << 32) | 0x12345678,
+            "transport supplies the actual sender");
+        assert_eq!(scheduler::receive_message(), 0, "messages are consumed once");
+        for payload in 0..16 {
+            assert_eq!(scheduler::send_message(first, payload), 0);
+        }
+        assert_eq!(scheduler::send_message(first, 99), 1, "full inbox applies backpressure");
+        activate(first, &mut context);
+        for payload in 0..16 {
+            assert_eq!(scheduler::receive_message(), (1u64 << 32) | payload);
+        }
+        assert_eq!(scheduler::receive_message(), 0);
+        assert_eq!(scheduler::send_message(u32::MAX, 0), u64::MAX - 1);
         assert_eq!(scheduler::present_surface(), 0);
         assert_eq!(scheduler::surface_status(first), 2, "publication advances revision");
         scheduler::surface_write(b"x");
@@ -161,6 +177,8 @@ fn large_binary_and_padded_surfaces_survive_spawn_snapshot_and_reap() {
         // keep aliases to the first client's surface or the compositor's code.
         let second = scheduler::spawn_process(&[0xc3], 0).expect("second private surface");
         activate(second, &mut context);
+        assert_eq!(scheduler::send_message(first, 0), u64::MAX - 1,
+            "clients cannot inject events into another client's inbox");
         // SAFETY: second now owns the active mapping at the same address.
         // The last byte is within its complete surface (partial final page).
         unsafe {
@@ -179,6 +197,8 @@ fn large_binary_and_padded_surfaces_survive_spawn_snapshot_and_reap() {
                 "snapshot must not alias its destination"
             );
             assert!(scheduler::kill(pid).is_some());
+            assert_eq!(scheduler::send_message(pid, 0), u64::MAX - 1,
+                "dead recipients reject new messages");
             assert_eq!(scheduler::snapshot(pid, &mut pixels), 1);
             assert_eq!(scheduler::surface_status(pid) & 1, 1, "exit is observable without copying pixels");
             scheduler::waitpid(pid);

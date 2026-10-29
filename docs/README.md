@@ -11,6 +11,7 @@ current behavior; architecture targets are not evidence of implemented features.
 | [Testing](testing.md) | Change-to-test matrix, commands, evidence requirements, baseline gaps |
 | [Performance validation](performance.md) | 1080p optimization measurements, tests, and remaining limits |
 | [Syscall ABI](syscalls.md) | Current interface between kernel and userspace |
+| [Window and UI toolkit](ui.md) | Native window API, canvas/widgets, glass materials and protocol |
 | [GRUB boot](grub-boot.md) | Current disk layout and boot sequence |
 
 Scoped instructions: [kernel](../src/AGENTS.md), [applications/SDK](../user_programs/AGENTS.md),

@@ -18,7 +18,7 @@ microkernel.
 | Kernel syscall boundary | [dispatcher](../src/userspace/syscall.rs) | Argument validation, privilege enforcement, resource operations |
 | Kernel storage | [ATA](../src/ata.rs), [MBR](../src/mbr.rs), [FAT32](../src/fat32.rs), [mount](../src/fs.rs) | Block I/O, partition offsets, directory/file mechanisms |
 | Kernel input/display | [mouse](../src/mouse.rs), [absolute pointer](../src/mouse/absolute.rs), [keyboard](../src/task/keyboard.rs), [graphics](../src/gfx.rs) | Hardware transport, input delivery, display mappings and boot console |
-| User SDK/runtime | [userlib](../user_programs/userlib/src/lib.rs), [syscalls](../user_programs/userlib/src/sys.rs), [runtime](../user_programs/userlib/src/rt.rs) | Ring 3 syscall wrappers, `_start`, panic handler, console formatting |
+| User SDK/runtime | [userlib](../user_programs/userlib/src/lib.rs), [syscalls](../user_programs/userlib/src/sys.rs), [UI](../user_programs/userlib/src/ui/mod.rs), [runtime](../user_programs/userlib/src/rt.rs) | Ring 3 syscall wrappers, windows, canvas, widgets, `_start`, panic handler, console formatting |
 | User compositor | [wm](../user_programs/wm/src/main.rs) | Wallpaper, icons, application discovery, stacking, decorations, focus policy, presentation |
 | User shells/apps | [portal](../user_programs/portal/src/main.rs), [forge](../user_programs/forge/src/main.rs), [hello](../user_programs/hello/src/main.rs), [snake](../user_programs/snake/src/main.rs), [spin](../user_programs/spin/src/main.rs) | Commands, UI, executable selection, application behavior |
 | Host tooling | [tools](../tools), [E2E](../e2e) | Building images, QEMU execution and verification; never guest privilege code |
@@ -63,15 +63,19 @@ file-descriptor table is exposed by the current syscall interface.
 
 PID 0 owns the hardware framebuffer mapping. Other processes map private backing
 frames at the same user virtual address. The compositor snapshots those frames,
-caches the visible 488×288 content per window, combines changed windows in
+caches window content (up to 640×400 for native SDK clients), combines changed windows in
 stacking order into a retained back buffer, and presents dirty 32×32 tiles. Cursor
 movement restores the old cursor tiles from that buffer. Graphical clients publish
-surface revisions after drawing; console output publishes automatically. Unchanged
-surfaces require only metadata queries. The six cache slots reserve 3.22 MiB in
-addition to the existing back/scratch buffers. Timed waits let the CPU halt when
+surface revisions after drawing; console output publishes automatically. Native
+SDK clients also send frame serials and wait for copy acknowledgements before
+reusing their pixels. Unchanged surfaces require only metadata queries. The six
+cache slots reserve 5.86 MiB, plus 151 KiB of glass blur scratch storage, in
+addition to the existing back/snapshot buffers. Timed waits let the CPU halt when
 applications are waiting. See [performance validation](performance.md). Text apps
 receive kernel-rendered console output on their private surface. Graphical apps
-call `graphics_mode()`; their console writes remain serial diagnostics.
+call `graphics_mode()` (automatically through the window SDK); their console writes
+remain serial diagnostics. The WM renders glass materials from lower layers;
+widgets and layout stay in the client. See [the UI API and protocol](ui.md).
 
 The WM decides which application has keyboard focus; the kernel enforces it.
 Mouse input uses QEMU's VMware-compatible absolute protocol when available, otherwise
@@ -96,7 +100,8 @@ or application-specific filename handling to a generic driver or syscall.
   syscalls are not a full permissions model.
 - Desktop rendering supports 640×480 through 1920×1080 at 32 bpp, with pitch up to
   8192 bytes, and allows six simultaneous windows. The default boot requests 1080p.
-  Window content remains 488×288 pixels; more display pixels provide workspace.
+  Legacy content remains 488×288 pixels; native SDK clients request content sizes
+  from 160×96 through 640×400. One mapped window per process is currently exposed.
 - Address-space frames and leaked kernel stacks are not reclaimed on process exit;
   repeated launch/close can exhaust memory. Reaping a PCB does not reclaim all resources.
 - User-pointer checks include numerical range checks; these do not prove every page

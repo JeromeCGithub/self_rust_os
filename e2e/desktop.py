@@ -91,20 +91,23 @@ with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
         move(150,138);start=log.stat().st_size;cmd('mouse_button 1')
         wait_for('[desktop] drag started: ',after=start)
         move(WIDTH-1,HEIGHT-1)
-        wait_pixel('desktop-1080p-drag',(WIDTH-488,HEIGHT-32-316),(0x23,0x3b,0x55))
+        # Glass samples the backdrop, so its titlebar has no fixed flat color.
+        # The close control remains a stable pixel at the negotiated window edge.
+        wait_pixel('desktop-1080p-drag',(WIDTH-18,HEIGHT-32-316+14),(0xff,0x6b,0x79))
         cmd('mouse_button 0');time.sleep(.5)
         click(WIDTH-18,HEIGHT-32-316+12);time.sleep(.5)
         click(250,65);wait_for('[desktop] launched Terminal pid=');time.sleep(1)
         # Drag the terminal using its titlebar, then close it.
         move(150,138);start=log.stat().st_size;cmd('mouse_button 1')
         wait_for('[desktop] drag started: ',after=start)
-        move(190,140);wait_pixel(None,(120,128),(0x23,0x3b,0x55))
+        move(190,140);wait_pixel(None,(120+488-18,128+14),(0xff,0x6b,0x79))
         cmd('mouse_button 0');time.sleep(.5)
         click(120+470,128+12);time.sleep(.5)
         shot('desktop-after-close')
         for x,name,expected in [(50,'FORGE','self_rust_os forge'),(150,'HELLO','Hello from user space!'),(450,'SPIN','spin: starting')]:
             click(x,65);wait_for(expected);time.sleep(.7)
-            click(80+470,126+12);time.sleep(.4)
+            width=640 if name=='HELLO' else 488
+            click(80+width-18,126+14);time.sleep(.4)
         assert 'Kernel panic' not in log.read_text()
         print('PASS: 1920x1080 framebuffer, edge pixels/pointer, wallpaper, application icons, terminal commands, concurrent Snake, focus, dragging and close')
     except Exception:
