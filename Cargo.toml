@@ -9,6 +9,9 @@ categories = ["operating-systems", "embedded", "rust-os", "os-dev", "bare-metal"
 keywords = ["OS", "x86_64", "os-development", "no-std", "kernel-development"]
 
 [dependencies]
+rustos-net-abi = { path = "crates/net-abi" }
+rustos-net-stack = { path = "crates/net-stack" }
+smoltcp = { version = "=0.12.0", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-icmp", "socket-udp", "socket-tcp"] }
 bootloader = { version = "0.9", features = ["map_physical_memory", "vga_320x200"] }
 font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
 volatile = "0.2.6"

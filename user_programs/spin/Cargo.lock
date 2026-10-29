@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "rustos-net-abi"
+version = "0.1.0"
+
+[[package]]
 name = "spin"
 version = "0.1.0"
 dependencies = [
@@ -12,3 +16,6 @@ dependencies = [
 [[package]]
 name = "userlib"
 version = "0.1.0"
+dependencies = [
+ "rustos-net-abi",
+]

@@ -70,6 +70,9 @@ fn run_kernel(
     // Initialize the PS/2 mouse (IRQ12). Non-fatal if absent.
     self_rust_os::mouse::init();
 
+    // Optional NIC bring-up owns its fixed DMA frames before scheduler startup.
+    self_rust_os::net::init(mapper, &mut frame_allocator, phys_mem_offset);
+
     // Mount the root filesystem (needs heap for FAT32).
     // If the disk is not formatted, this will panic; the disk fixture
     // must be created with the FAT32 format.

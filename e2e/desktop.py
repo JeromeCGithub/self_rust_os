@@ -3,15 +3,18 @@
 Build first: ./tools/build-grub-disk.sh
 Run: python3 e2e/desktop.py
 """
-import json, pathlib, re, socket, subprocess, tempfile, time
+import json, pathlib, re, socket, subprocess, tempfile, time, sys
 from PIL import Image
 ROOT=pathlib.Path(__file__).resolve().parents[1]
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT/'tools'))
+from qemu_network import arguments as network_arguments
 WIDTH,HEIGHT=1920,1080
 OUT=ROOT/'docs/screenshots'
 OUT.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
     monpath=f'{tmp}/monitor'; qmppath=f'{tmp}/qmp'; log=pathlib.Path(tmp)/'serial.log'
-    qemu=subprocess.Popen(['qemu-system-x86_64','-drive',f'format=raw,file={ROOT}/target/grub-disk.img','-machine','pc,i8042=on,vmport=on','-vga','std','-m','256','-serial',f'file:{log}','-display','none','-no-reboot','-monitor',f'unix:{monpath},server,nowait','-qmp',f'unix:{qmppath},server,nowait'])
+    qemu=subprocess.Popen(['qemu-system-x86_64','-drive',f'format=raw,file={ROOT}/target/grub-disk.img','-machine','pc,i8042=on,vmport=on','-vga','std','-m','256','-serial',f'file:{log}','-display','none','-no-reboot','-monitor',f'unix:{monpath},server,nowait','-qmp',f'unix:{qmppath},server,nowait'] + network_arguments())
     try:
         deadline=time.monotonic()+60
         while not pathlib.Path(monpath).exists():

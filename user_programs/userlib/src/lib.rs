@@ -26,6 +26,7 @@
 #![no_std]
 
 pub mod io;
+pub mod net;
 pub mod sys;
 
 mod rt;

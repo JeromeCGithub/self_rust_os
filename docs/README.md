@@ -11,6 +11,9 @@ current behavior; architecture targets are not evidence of implemented features.
 | [Testing](testing.md) | Change-to-test matrix, commands, evidence requirements, baseline gaps |
 | [Performance validation](performance.md) | 1080p optimization measurements, tests, and remaining limits |
 | [Syscall ABI](syscalls.md) | Current interface between kernel and userspace |
+| [Networking architecture](networking.md) | Ethernet, ARP/IPv4, ICMP/UDP/TCP, socket ABI and userspace clients |
+| [Networking validation](networking-validation.md) | Red/green evidence, packet captures and remaining limits |
+| [Ethernet networking plan](networking-plan.md) | Delivered ping/client sockets and roadmap toward DNS, HTTP and TLS |
 | [GRUB boot](grub-boot.md) | Current disk layout and boot sequence |
 
 Scoped instructions: [kernel](../src/AGENTS.md), [applications/SDK](../user_programs/AGENTS.md),

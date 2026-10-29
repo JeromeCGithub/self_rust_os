@@ -80,7 +80,11 @@ fn draw_str(x: i32, y: i32, s: &str, color: u32) -> i32 {
 }
 
 /// Simple line buffer for the shell.
+mod ping;
+
 struct Shell {
+    ping: Option<ping::Client>,
+    ping_address: [u8; 4],
     lines: [[u8; 64]; 20], // 20 lines, 64 chars each
     line_count: usize,
     input: [u8; 64],
@@ -90,6 +94,8 @@ struct Shell {
 impl Shell {
     fn new() -> Self {
         Self {
+            ping: None,
+            ping_address: [0; 4],
             lines: [[0; 64]; 20],
             line_count: 0,
             input: [0; 64],
@@ -116,6 +122,37 @@ impl Shell {
         self.line_count += 1;
     }
 
+    fn push_args(&mut self, args: core::fmt::Arguments<'_>) {
+        use core::fmt::Write;
+        let mut buffer = [0; 64];
+        let mut line = Line { buf: &mut buffer, len: 0 };
+        let _ = line.write_fmt(args);
+        let len = line.len;
+        self.push_line(&buffer[..len]);
+    }
+
+    fn ping_tick(&mut self) -> bool {
+        let Some(client) = self.ping.as_mut() else { return false; };
+        let Some(event) = client.step(sys::ticks(), &mut ping::Sockets) else { return false; };
+        match event {
+            ping::Event::Reply { sequence, ticks } => {
+                let a = self.ping_address;
+                if ticks == 0 {
+                    self.push_args(format_args!("reply from {}.{}.{}.{} seq={} time=<55 ms", a[0], a[1], a[2], a[3], sequence));
+                } else {
+                    self.push_args(format_args!("reply from {}.{}.{}.{} seq={} time=~{} ms", a[0], a[1], a[2], a[3], sequence, ticks.saturating_mul(55)));
+                }
+            }
+            ping::Event::Timeout { sequence } => self.push_args(format_args!("ping: seq={} timeout", sequence)),
+            ping::Event::Done { sent, received } => {
+                self.push_args(format_args!("{} transmitted, {} received, {}% loss", sent, received, 100 * (sent - received) / sent));
+                self.ping = None;
+            }
+            ping::Event::Failed(error) => { self.push_line(ping::error(error)); self.ping = None; }
+        }
+        true
+    }
+
     fn handle_command(&mut self) {
         let mut cmd_buf = [0u8; 64];
         let cmd_len = self.input_len.min(64);
@@ -133,8 +170,24 @@ impl Shell {
         echo[2..2 + len].copy_from_slice(&cmd[..len]);
         self.push_line(&echo[..2 + len]);
 
-        if cmd == b"help" {
+        if cmd == b"ping" || cmd.starts_with(b"ping ") {
+            if self.ping.is_some() {
+                self.push_line(b"ping: already running");
+            } else if let Ok(config) = ping::Config::parse(core::str::from_utf8(cmd).unwrap_or("")) {
+                match ping::Client::start(config, sys::ticks(), &mut ping::Sockets) {
+                    Ok(client) => {
+                        self.ping_address = config.address;
+                        self.ping = Some(client);
+                        self.push_line(b"PING: 56 data bytes, bounded echo requests");
+                    }
+                    Err(error) => self.push_line(ping::error(error)),
+                }
+            } else {
+                self.push_line(b"usage: ping [-c 1..16] IPv4");
+            }
+        } else if cmd == b"help" {
             self.push_line(b"help echo clear pwd ls cat write mkdir time exit");
+            self.push_line(b"ping [-c 1..16] IPv4");
         } else if cmd == b"pwd" {
             self.push_line(b"/");
         } else if cmd == b"exit" {
@@ -270,6 +323,7 @@ pub extern "C" fn user_main() {
                 }
             }
         }
+        dirty |= shell.ping_tick();
         if dirty {
             let (wx, wy) = (0, 0);
             let cx = wx + CONTENT_X_OFF;

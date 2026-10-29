@@ -30,6 +30,7 @@ an explicit verification gap; do not replace it with `--no-run` and claim comple
 | Kernel Rust | Both default and GRUB builds, GRUB release build, `cargo test --no-run`, complete applicable unit and integration suites |
 | Frames/paging/heap | Kernel row + allocation/boundary/failure cases, heap tests, process isolation and repeated launch/exit tests in QEMU |
 | Interrupts/scheduler/input | Kernel row + keyboard/timer, process progress under CPU load, blocking/wakeup, focused input, kill/exit/wait, desktop E2E |
+| Networking/PCI/NIC/client transports | Kernel + memory + syscall/SDK + scheduler cleanup rows; [network suites](networking.md#running-and-testing), packet assertions, missing NIC, timeouts, ring wrap and real Ring 3 UDP/TCP/HTTP probe |
 | Syscalls/userlib/runtime | Kernel row + invalid argument/error tests, rebuild **all** apps, desktop E2E proving actual Ring 3 behavior and SDK compatibility |
 | ATA/MBR/FAT32 | Kernel row + parser/mock cases, ATA and FAT32 fixture integration tests, file operations through userspace when ABI/mount behavior changes |
 | User apps/desktop | Red interaction test, rebuild all apps/disk, complete desktop E2E; inspect screenshots and applicable shell/error cases |
@@ -106,6 +107,18 @@ For a manual input check, run `cargo run` on the reported host, move the pointer
 across the display, launch an icon, drag and close a window, type into the focused
 terminal, and verify host/guest coordinate alignment. Record host backend/session
 and observations. If unavailable, explicitly leave that criterion unverified.
+
+## Networking checks
+
+See [networking](networking.md#running-and-testing) for host and QEMU commands.
+Run the pure net ABI, stack and ping crates from outside the root bare-metal Cargo
+configuration, explicitly targeting the host. Exercise allocation-failure recovery,
+PCI decoding and page-table permissions as well. Runtime tests use independent
+disk copies and local UDP/HTTP servers. Live 8.8.8.8 acceptance is separate from
+local deterministic tests and depends on the host's ICMP support. The network
+probe also exercises spawn with live socket buffers, blocked waitpid return/reap,
+foreign handles, quotas and close/exit/kill cleanup. Record each result and actual
+captured packets; do not infer transport behavior from unit harness compilation.
 
 ## Known baseline gaps
 

@@ -99,3 +99,20 @@ in Ring 3, including rejected/unmapped/read-only buffers and privilege checks wh
 relevant. Keep existing numbers stable unless the task explicitly includes migration.
 Do not expose kernel pointers, internal scheduling sentinels, or Rust layout without
 an explicit representation and ABI contract.
+
+
+## Network client sockets (version 1)
+
+Syscalls 20–26 are open, connect, send, receive, close, poll and interface info.
+The kernel dispatcher and userlib share [record definitions/constants](../crates/net-abi/src/lib.rs).
+[The networking ABI](networking.md#socket-abi-version-1) specifies the complete
+argument table, exact sizes, byte order, quotas, readiness bits and error encoding.
+The typed SDK is [userlib::net](../user_programs/userlib/src/net.rs).
+
+These are PID-owned generation socket handles, not POSIX file descriptors. ICMP
+Echo, connected UDP and outgoing TCP are supported. All operations are nonblocking
+and drive bounded protocol progress; callers sleep between retries. Every buffer
+page and effective user/write permission is checked before copying. Network errors
+use their own documented range below the existing control sentinels. Socket
+close/exit/kill releases owned buffers. DNS/HTTP logic stays in userspace; the
+kernel exposes no ping-command or HTTP-specific syscall.

@@ -9,6 +9,8 @@ cd "${ROOT}"
 ./tools/build-grub-disk.sh
 # QEMU vmmouse supplies absolute host coordinates; PS/2 remains a fallback.
 DESKTOP_DISPLAY="${RUSTOS_DISPLAY:-gtk,show-cursor=off}"
+NETWORK_OPTIONS="$(python3 tools/qemu_network.py "${RUSTOS_NETWORK:-user}")"
+mapfile -t NETWORK_ARGS <<< "${NETWORK_OPTIONS}"
 echo "[desktop] Absolute mouse integration enabled; move the pointer over the display."
 exec qemu-system-x86_64 -machine pc,i8042=on,vmport=on -drive "format=raw,file=${ROOT}/target/grub-disk.img" \
-    -vga std -m 256 -serial stdio -no-reboot -display "${DESKTOP_DISPLAY}"
+    -vga std -m 256 -serial stdio -no-reboot -display "${DESKTOP_DISPLAY}" "${NETWORK_ARGS[@]}"

@@ -5,6 +5,9 @@ edition = "2021"
 description = "Minimal user-space standard library for self_rust_os."
 license = "MIT OR Apache-2.0"
 
+[dependencies]
+rustos-net-abi = { path = "../../crates/net-abi" }
+
 [lib]
 crate-type = ["rlib"]
 

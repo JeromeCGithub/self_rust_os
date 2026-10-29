@@ -13,9 +13,24 @@ name = "portal"
 version = "0.1.0"
 dependencies = [
  "font8x8",
+ "rustos-ping",
  "userlib",
+]
+
+[[package]]
+name = "rustos-net-abi"
+version = "0.1.0"
+
+[[package]]
+name = "rustos-ping"
+version = "0.1.0"
+dependencies = [
+ "rustos-net-abi",
 ]
 
 [[package]]
 name = "userlib"
 version = "0.1.0"
+dependencies = [
+ "rustos-net-abi",
+]

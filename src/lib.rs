@@ -34,6 +34,7 @@ pub mod interrupts;
 pub mod mbr;
 pub mod memory;
 pub mod mouse;
+pub mod net;
 pub mod scheduler;
 pub mod serial;
 pub mod task;

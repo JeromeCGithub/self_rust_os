@@ -10,5 +10,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustos-net-abi"
+version = "0.1.0"
+
+[[package]]
 name = "userlib"
 version = "0.1.0"
+dependencies = [
+ "rustos-net-abi",
+]

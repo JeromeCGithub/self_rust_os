@@ -683,6 +683,7 @@ pub fn exit_current(code: u64) {
         pcb.exit_code = code;
         crate::serial_println!("[sched] process {} exited with code {}", current, code);
     }
+    crate::net::cleanup(current);
     wake_waiters_locked(&mut sched, current);
     // Remove from ready queue (shouldn't be there, but be safe).
     sched.ready_queue.retain(|&pid| pid != current);
@@ -706,6 +707,7 @@ pub fn kill(pid: Pid) -> Option<u64> {
     
     pcb.state = ProcessState::Zombie;
     pcb.exit_code = 9; // SIGKILL
+    crate::net::cleanup(pid);
     wake_waiters_locked(&mut sched, pid);
     sched.ready_queue.retain(|&p| p != pid);
     
@@ -831,6 +833,8 @@ pub fn wake_keyboard_waiters() {
 
 /// Moves Blocked processes waiting on `exited_pid` back to Ready.
 fn wake_waiters_locked(sched: &mut Scheduler, exited_pid: Pid) {
+    let Some(exit_code) = sched.processes.get(exited_pid as usize).and_then(Option::as_ref).map(|pcb| pcb.exit_code) else { return; };
+    let mut reaped = false;
     for (idx, pcb_opt) in sched.processes.iter_mut().enumerate() {
         if let Some(pcb) = pcb_opt {
             if pcb.state == ProcessState::Blocked {
@@ -839,6 +843,12 @@ fn wake_waiters_locked(sched: &mut Scheduler, exited_pid: Pid) {
                     _ => false,
                 };
                 if wake {
+                    // SAFETY: A blocked waitpid context was saved on this live
+                    // process's aligned kernel stack before another process could
+                    // exit. IRQs are disabled, the scheduler lock is held and no
+                    // other CPU or reference accesses the saved register frame.
+                    unsafe { (*(pcb.kernel_rsp as *mut SavedContext)).rax = exit_code; }
+                    reaped = true;
                     pcb.state = ProcessState::Ready;
                     pcb.block_reason = BlockReason::None;
                     sched.ready_queue.push_back(idx as Pid);
@@ -851,6 +861,7 @@ fn wake_waiters_locked(sched: &mut Scheduler, exited_pid: Pid) {
             }
         }
     }
+    if reaped { sched.processes[exited_pid as usize] = None; }
 }
 
 /// Returns the PID of the current process, if any.
@@ -862,16 +873,22 @@ pub fn current_pid() -> Option<Pid> {
 ///
 /// Returns the binary bytes, or an error string.
 pub fn load_program_from_disk(path: &str) -> Result<Vec<u8>, &'static str> {
-    // Flat binaries include zero-filled storage; bound them below the user stack.
-    let mut buf = alloc::vec![0u8; (userspace::USER_STACK_BOTTOM - userspace::USER_CODE_START) as usize];
-    let n = crate::fs::with_fs(|fs| fs.read_file(path, &mut buf))
-        .ok_or("filesystem not initialized")?
-        .map_err(|_| "failed to read program file")?;
-    if n == 0 {
-        return Err("program file is empty");
-    }
-    buf.truncate(n);
-    Ok(buf)
+    // Persistent resources such as socket buffers can fragment the heap. Stage
+    // only the actual file, rather than demanding a contiguous maximum-size
+    // user image on every spawn. Hold the FS lock across metadata and read.
+    crate::fs::with_fs(|fs| {
+        let size = fs.file_size(path).map_err(|_| "failed to query program size")?;
+        if size == 0 { return Err("program file is empty"); }
+        if size as u64 > userspace::USER_STACK_BOTTOM - userspace::USER_CODE_START {
+            return Err("user binary overlaps stack");
+        }
+        let mut binary = Vec::new();
+        binary.try_reserve_exact(size).map_err(|_| "not enough memory to stage program")?;
+        binary.resize(size, 0);
+        let read = fs.read_file(path, &mut binary).map_err(|_| "failed to read program file")?;
+        if read != size { return Err("short program read"); }
+        Ok(binary)
+    }).ok_or("filesystem not initialized")?
 }
 
 /// PID receiving keyboard input; only the compositor can change it.

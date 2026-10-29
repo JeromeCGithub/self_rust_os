@@ -17,6 +17,7 @@ microkernel.
 | Kernel process management | [scheduler](../src/scheduler.rs), [loader](../src/userspace/process.rs) | Process state, private address spaces, contexts, blocking and wakeup |
 | Kernel syscall boundary | [dispatcher](../src/userspace/syscall.rs) | Argument validation, privilege enforcement, resource operations |
 | Kernel storage | [ATA](../src/ata.rs), [MBR](../src/mbr.rs), [FAT32](../src/fat32.rs), [mount](../src/fs.rs) | Block I/O, partition offsets, directory/file mechanisms |
+| Kernel networking | [facade](../src/net/mod.rs), [PCI](../src/net/pci.rs), [Ethernet](../src/net/e1000.rs), [protocol service](../crates/net-stack/src/lib.rs) | Device/DMA ownership, Ethernet/ARP/IPv4, ICMP/UDP/TCP, bounded socket progress and PID ownership |
 | Kernel input/display | [mouse](../src/mouse.rs), [absolute pointer](../src/mouse/absolute.rs), [keyboard](../src/task/keyboard.rs), [graphics](../src/gfx.rs) | Hardware transport, input delivery, display mappings and boot console |
 | User SDK/runtime | [userlib](../user_programs/userlib/src/lib.rs), [syscalls](../user_programs/userlib/src/sys.rs), [runtime](../user_programs/userlib/src/rt.rs) | Ring 3 syscall wrappers, `_start`, panic handler, console formatting |
 | User compositor | [wm](../user_programs/wm/src/main.rs) | Wallpaper, icons, application discovery, stacking, decorations, focus policy, presentation |
@@ -88,6 +89,30 @@ The disk builder installs `/BIN`, `/ETC`, `/HOME`, and `/TMP`. The WM discovers
 launchers from `/BIN` and reads `/ETC/WALL.PPM`; shells decide command semantics.
 `spawn` receives an explicit path. Do not add PATH lookup, wallpaper selection,
 or application-specific filename handling to a generic driver or syscall.
+
+## Networking and application protocols
+
+The optional QEMU e1000 device feeds a kernel smoltcp stack through a polled
+Ethernet adapter. Link protocols (Ethernet/ARP), Internet mechanisms (IPv4/routing/
+ICMP), transport state (UDP/TCP), and process/socket validation have separate
+responsibilities. A common padding-free ABI crosses int 0x80 into typed Ring 3
+SDK calls. Portal's ping policy and the HTTP regression client stay in userspace.
+See [networking](networking.md) for the layer diagram, exact syscall contracts,
+execution model, resource limits and HTTP roadmap.
+
+Network syscalls validate actual user mappings and effective page permissions,
+copy complete records, and retain no user references. This does not repair the
+older syscall pointer checks. Socket state is reclaimed on close/exit/kill;
+existing process frame/stack leaks remain. Network progress is bounded and driven
+by callers; there is no background network worker. Static IPv4, connected UDP and
+outgoing TCP are supported; DNS resolution, a general HTTP client, TLS and server
+socket interfaces are future userspace/interface work. An independent host fixture
+is used to verify a real userspace HTTP/1.0 request over the TCP socket API.
+
+The loader queries file size and stages only the bounded actual binary, returning
+an error on allocation failure. This permits spawning with live socket buffers
+without requiring a contiguous maximum-size user image allocation. A blocked
+waitpid receives the exit code in its saved return register and reaps the child.
 
 ## Existing limitations and design obligations
 

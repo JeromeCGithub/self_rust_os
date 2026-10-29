@@ -243,6 +243,7 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
             if crate::scheduler::current_pid() != Some(0) { return SYSCALL_ERROR; }
             crate::scheduler::surface_status(arg1 as u32)
         }
+        20..=26 => crate::net::syscall(num, arg1, arg2, arg3),
         SYS_READ_NB => sys_read_nb(arg1, arg2, arg3),
         SYS_LS => sys_ls(arg1, arg2, arg3),
         SYS_READ_FILE => sys_read_file(arg1, arg2, arg3),

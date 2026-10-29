@@ -480,13 +480,21 @@ impl<B: BlockDevice> Fat32<B> {
         Ok(written)
     }
 
-    /// Reads the file at `path` into `buf`, returning the number of bytes read.
+    /// Query file size without allocating or reading its contents.
+    /// Returns errors for directories, absent files, invalid paths and I/O failure.
+    pub fn file_size(&mut self, path: &str) -> Result<usize, FatError> {
+        let (directory, name) = self.resolve_parent(path)?;
+        let (cluster, index) = self.find_entry_in(directory, &name)?.ok_or(FatError::FileNotFound)?;
+        self.ensure_not_dir(cluster, index)?;
+        let mut entry = [0; DIR_ENTRY_SIZE];
+        self.read_dir_entry(cluster, index, &mut entry)?;
+        Ok(u32::from_le_bytes([entry[28], entry[29], entry[30], entry[31]]) as usize)
+    }
+
+    /// Reads the file at `path` into `buf`, returning bytes read.
     ///
     /// # Errors
-    ///
-    /// Returns [`FatError::FileNotFound`] if the file does not exist,
-    /// [`FatError::IsADirectory`] if the path is a directory,
-    /// [`FatError::BufferTooSmall`] if `buf` is smaller than the file.
+    /// Returns FileNotFound, IsADirectory, BufferTooSmall, or an I/O error.
     pub fn read_file(&mut self, path: &str, buf: &mut [u8]) -> Result<usize, FatError> {
         let (dir_cluster, name_83) = self.resolve_parent(path)?;
         let (entry_cluster, dir_index) = self
@@ -965,6 +973,18 @@ mod tests {
 
     // Small enough to fit in the 1 MiB kernel heap with room to spare.
     const TEST_SECTORS: u32 = 512;
+
+    #[test_case]
+    fn file_size_handles_nested_empty_and_error_cases() {
+        let mut fs = Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        fs.create_dir("/BIN").unwrap();
+        fs.create_file("/BIN/TINY.BIN").unwrap();
+        assert_eq!(fs.file_size("/BIN/TINY.BIN"), Ok(0));
+        fs.write_file("/BIN/TINY.BIN", b"flat binary").unwrap();
+        assert_eq!(fs.file_size("/BIN/TINY.BIN"), Ok(11));
+        assert_eq!(fs.file_size("/BIN/MISSING.BIN"), Err(FatError::FileNotFound));
+        assert_eq!(fs.file_size("/BIN"), Err(FatError::IsADirectory));
+    }
 
     #[test_case]
     fn test_to_83_uppercases_and_pads() {

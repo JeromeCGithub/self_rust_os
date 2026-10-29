@@ -91,6 +91,19 @@ impl RegionFrameAllocator {
         Self { regions, next: 0 }
     }
 
+    /// Reserve a fixed batch atomically, rolling back on insufficient memory.
+    pub fn allocate_batch<const N: usize>(&mut self) -> Option<[PhysFrame; N]> {
+        let checkpoint = self.next;
+        let mut result = [PhysFrame::containing_address(PhysAddr::new(0)); N];
+        for slot in &mut result {
+            match self.allocate_frame() {
+                Some(frame) => *slot = frame,
+                None => { self.next = checkpoint; return None; }
+            }
+        }
+        Some(result)
+    }
+
 
 }
 
@@ -155,5 +168,22 @@ unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
         let frame = self.usable_frames().nth(self.next);
         self.next += 1;
         frame
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    #[test_case]
+    fn batch_failure_restores_allocator_cursor() {
+        static REGIONS: [MemRegion; 1] = [MemRegion { start: 0x2000, end: 0x4000 }];
+        // SAFETY: No memory is dereferenced; this allocator is local to the test.
+        let mut frames = unsafe { RegionFrameAllocator::new(&REGIONS) };
+        assert!(frames.allocate_batch::<3>().is_none());
+        let batch = frames.allocate_batch::<2>().expect("failed reservation must preserve frames");
+        assert_eq!(batch[0].start_address().as_u64(), 0x2000);
+        assert_eq!(batch[1].start_address().as_u64(), 0x3000);
+        assert!(frames.allocate_batch::<1>().is_none());
+        assert!(frames.allocate_batch::<0>().is_some());
     }
 }
