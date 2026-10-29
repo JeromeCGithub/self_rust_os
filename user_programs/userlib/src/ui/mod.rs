@@ -2,7 +2,9 @@
 //!
 //! The compositor owns placement, decorations and materials. Applications draw
 //! content-local pixels and keep submitted pixels unchanged until RELEASE.
+pub mod declarative;
 mod input;
+pub use declarative::{Style, View};
 pub mod protocol;
 pub mod raster;
 use crate::sys;
@@ -21,6 +23,7 @@ static WINDOW_TAKEN: AtomicBool = AtomicBool::new(false);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     InvalidGeometry,
+    InvalidView(declarative::RenderError),
     InvalidTitle,
     AlreadyConnected,
     Unavailable,
@@ -216,6 +219,15 @@ impl Window {
     /// Clears to transparent, draws one frame, and submits it. The next call
     /// waits for the WM's copy acknowledgement before modifying the buffer.
     pub fn draw(&mut self, paint: impl FnOnce(&mut Canvas<'_>)) -> Result<(), Error> {
+        self.draw_frame(|canvas| {
+            paint(canvas);
+            Ok(())
+        })
+    }
+    fn draw_frame(
+        &mut self,
+        paint: impl FnOnce(&mut Canvas<'_>) -> Result<(), Error>,
+    ) -> Result<(), Error> {
         self.wait(true)?;
         let words = (self.config.height - 1) * self.stride + self.config.width;
         // SAFETY: The kernel maps the complete private pitch*height surface at
@@ -232,7 +244,7 @@ impl Window {
                 Canvas::new(pixels, self.config.width, self.config.height, self.stride)
                     .ok_or(Error::InvalidGeometry)?;
             canvas.clear(Color::TRANSPARENT);
-            paint(&mut canvas);
+            paint(&mut canvas)?;
         }
         self.serial = (self.serial + 1) & SERIAL;
         sys::present_surface().map_err(|_| Error::Unavailable)?;
@@ -241,7 +253,36 @@ impl Window {
     }
     /// Runs a widget view on initial display and input changes; idle waits yield
     /// to the scheduler. Labels used as button IDs must be unique within a view.
-    pub fn run(mut self, mut view: impl FnMut(&mut Ui<'_, '_>)) -> Result<(), Error> {
+    pub fn run(self, mut view: impl FnMut(&mut Ui<'_, '_>)) -> Result<(), Error> {
+        self.run_frames(|ui| {
+            view(ui);
+            Ok(())
+        })
+    }
+    /// Mounts pure component functions and an explicit state-update handler.
+    /// Actions are delivered once after rendering, then the new state is painted
+    /// before publication. Components return ordinary typed values, without a heap.
+    pub fn mount<S, M: Clone, V: View<M>>(
+        self,
+        mut state: S,
+        view: impl Fn(&S) -> V,
+        mut update: impl FnMut(&mut S, M),
+    ) -> Result<(), Error> {
+        self.run_frames(|ui| {
+            let action = render_component(ui, &view(&state))?;
+            if let Some(message) = action {
+                ui.input.finish_frame();
+                update(&mut state, message);
+                ui.canvas.clear(Color::TRANSPARENT);
+                render_component(ui, &view(&state))?;
+            }
+            Ok(())
+        })
+    }
+    fn run_frames(
+        mut self,
+        mut view: impl FnMut(&mut Ui<'_, '_>) -> Result<(), Error>,
+    ) -> Result<(), Error> {
         let mut dirty = true;
         loop {
             for _ in 0..16 {
@@ -255,14 +296,14 @@ impl Window {
             if dirty {
                 self.wait(true)?;
                 let mut input = core::mem::take(&mut self.input);
-                self.draw(|canvas| {
+                self.draw_frame(|canvas| {
                     let mut ui = Ui {
                         canvas,
                         input: &mut input,
                         x: 24,
                         y: 24,
                     };
-                    view(&mut ui);
+                    view(&mut ui)
                 })?;
                 input.finish_frame();
                 self.input = input;
@@ -363,10 +404,38 @@ impl<'a, 'buffer> Ui<'a, 'buffer> {
     /// release inside a button that captured the press.
     pub fn button(&mut self, label: &str) -> Response {
         let bounds = Rect::new(self.x, self.y, self.canvas.width().saturating_sub(48), 38);
-        let id = label.bytes().fold(2166136261u32, |hash, byte| {
+        let response = self.button_control(label, label, bounds, Color::rgb(0xffffff));
+        self.y += 50;
+        response
+    }
+    fn button_control(
+        &mut self,
+        key: &str,
+        label: &str,
+        bounds: Rect,
+        foreground: Color,
+    ) -> Response {
+        if bounds.width < 2 {
+            return Response { clicked: false };
+        }
+        // Input is clipped too: a pointer outside the content must not activate
+        // a component whose layout extends beyond the window.
+        let left = bounds.x.max(0);
+        let top = bounds.y.max(0);
+        let right = (i64::from(bounds.x) + i64::from(bounds.width))
+            .clamp(0, i64::from(self.canvas.width())) as i32;
+        let bottom = (i64::from(bounds.y) + i64::from(bounds.height))
+            .clamp(0, i64::from(self.canvas.height())) as i32;
+        let hit_bounds = Rect::new(
+            left,
+            top,
+            right.saturating_sub(left).max(0) as u32,
+            bottom.saturating_sub(top).max(0) as u32,
+        );
+        let id = key.bytes().fold(2166136261u32, |hash, byte| {
             (hash ^ u32::from(byte)).wrapping_mul(16777619)
         });
-        let clicked = self.input.button(id, bounds);
+        let clicked = self.input.button(id, hit_bounds);
         let hovered = bounds.contains(self.input.x, self.input.y);
         let color = if hovered && self.input.down {
             Color::rgba(125, 185, 255, 160)
@@ -384,13 +453,12 @@ impl<'a, 'buffer> Ui<'a, 'buffer> {
         );
         text(
             self.canvas,
-            self.x + 14,
-            self.y + 15,
+            bounds.x.saturating_add(14),
+            bounds.y.saturating_add(15),
             label,
-            Color::rgb(0xffffff),
+            foreground,
             1,
         );
-        self.y += 50;
         Response { clicked }
     }
     /// Access custom clipped drawing without giving up the window API.
@@ -406,4 +474,54 @@ impl Response {
     pub fn clicked(&self) -> bool {
         self.clicked
     }
+}
+
+struct ViewRenderer<'a, 'ui, 'buffer, M> {
+    ui: &'a mut Ui<'ui, 'buffer>,
+    action: Option<M>,
+}
+impl<M: Clone> declarative::Renderer<M> for ViewRenderer<'_, '_, '_, M> {
+    fn text(&mut self, bounds: Rect, label: &str, color: Color, scale: u32) {
+        text(self.ui.canvas, bounds.x, bounds.y, label, color, scale);
+    }
+    fn button(&mut self, bounds: Rect, key: &str, label: &str, action: &M, color: Option<Color>) {
+        if self
+            .ui
+            .button_control(key, label, bounds, color.unwrap_or(Color::rgb(0xffffff)))
+            .clicked()
+            && self.action.is_none()
+        {
+            self.action = Some(action.clone());
+        }
+    }
+    fn card(&mut self, bounds: Rect, title: &str, detail: &str, color: Option<Color>) {
+        self.ui
+            .canvas
+            .rounded_rect(bounds, 14, Color::rgba(225, 240, 255, 20));
+        text(
+            self.ui.canvas,
+            bounds.x.saturating_add(16),
+            bounds.y.saturating_add(16),
+            title,
+            color.unwrap_or(Color::rgb(0xe7f2ff)),
+            1,
+        );
+        text(
+            self.ui.canvas,
+            bounds.x.saturating_add(16),
+            bounds.y.saturating_add(40),
+            detail,
+            color.unwrap_or(Color::rgb(0xb7cbe1)),
+            1,
+        );
+    }
+}
+fn render_component<M: Clone>(
+    ui: &mut Ui<'_, '_>,
+    view: &impl View<M>,
+) -> Result<Option<M>, Error> {
+    let (width, height) = (ui.canvas.width(), ui.canvas.height());
+    let mut renderer = ViewRenderer { ui, action: None };
+    declarative::render(view, &mut renderer, width, height).map_err(Error::InvalidView)?;
+    Ok(renderer.action)
 }

@@ -3,8 +3,8 @@
 #![no_main]
 
 use userlib::{
-    println, sys,
-    ui::{Error, Material, Window, WindowOptions},
+    println, rsx, sys,
+    ui::{Color, Error, Material, Style, View, Window, WindowOptions},
 };
 
 #[no_mangle]
@@ -30,30 +30,58 @@ pub extern "C" fn user_main() {
     ));
     println!("[hello-ui] invalid requests rejected");
     println!("[hello-ui] ready: 640x400 glass");
-    let mut changes = 0u32;
     window
-        .run(|ui| {
-            ui.column(|ui| {
-                ui.heading("Hello, glass.");
-                ui.label("A little clarity. A little depth.");
-                ui.label("Your app draws content. The desktop does the rest.");
-                ui.space(16);
-                if ui.button("Change accent").clicked() {
-                    changes += 1;
-                    println!("[hello-ui] accent changed: {}", changes);
-                }
-                ui.space(12);
-                ui.card(
-                    if changes % 2 == 0 {
-                        "COOL BLUE"
-                    } else {
-                        "SOFT LAVENDER"
-                    },
-                    "Glass behind. Sharp, readable content above.",
-                );
-                ui.label("RUSTOS  /  NATIVE USERSPACE UI");
-            });
-        })
-        .expect("glass event loop");
+        .mount(State::default(), app, update)
+        .expect("glass component loop");
     sys::exit(0);
+}
+
+#[derive(Default)]
+struct State {
+    changes: u32,
+}
+#[derive(Clone)]
+enum Action {
+    ChangeAccent,
+}
+
+fn app_style() -> Style {
+    Style::new().padding(24)
+}
+
+fn app(state: &State) -> impl View<Action> {
+    rsx! {
+        column { style: app_style(),
+            heading { "Hello, glass." }
+            label { "A little clarity. A little depth." }
+            label { "Your app draws content. The desktop does the rest." }
+            space { 16 }
+            button { key: "accent", onclick: Action::ChangeAccent,
+                if state.changes == 0 { "Change accent" } else { "Change again" }
+            }
+            space { 12 }
+            { appearance_card(state) }
+        }
+    }
+}
+
+fn appearance_card(state: &State) -> impl View<Action> {
+    let lavender = state.changes % 2 != 0;
+    rsx! {
+        column { style: Style::new().color(Color::rgb(if lavender { 0xd2b9ff } else { 0x9dd6ff })),
+            card { title: if lavender { "SOFT LAVENDER" } else { "COOL BLUE" },
+                "Glass behind. Sharp, readable content above."
+            }
+            label { "RUSTOS  /  DECLARATIVE COMPONENTS" }
+        }
+    }
+}
+
+fn update(state: &mut State, action: Action) {
+    match action {
+        Action::ChangeAccent => {
+            state.changes = state.changes.wrapping_add(1);
+            println!("[hello-ui] accent changed: {}", state.changes);
+        }
+    }
 }

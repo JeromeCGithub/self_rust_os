@@ -11,7 +11,12 @@ scalar messages. No widget, blur or theme policy executes in the kernel.
 #![no_std]
 #![no_main]
 
-use userlib::{sys, ui::{Material, Window, WindowOptions}};
+use userlib::{rsx, sys, ui::{Material, Style, View, Window, WindowOptions}};
+
+#[derive(Default)]
+struct State { enabled: bool }
+#[derive(Clone)]
+enum Action { Toggle }
 
 #[no_mangle]
 pub extern "C" fn user_main() {
@@ -20,16 +25,33 @@ pub extern "C" fn user_main() {
             .content_size(640, 400)
             .background(Material::GlassClear),
     ).expect("create window");
-    let mut enabled = false;
-    window.run(|ui| {
-        ui.heading("Appearance");
-        ui.label("Your own app, on the native desktop.");
-        if ui.button("Change appearance").clicked() {
-            enabled = !enabled;
-        }
-        ui.card("PREFERENCE", if enabled { "Enabled" } else { "Disabled" });
-    }).expect("window loop");
+    window.mount(State::default(), app, update).expect("component loop");
     sys::exit(0);
+}
+
+fn app_style() -> Style { Style::new().padding(24).gap(8) }
+
+fn app(state: &State) -> impl View<Action> {
+    rsx! {
+        column { style: app_style(),
+            heading { "Appearance" }
+            label { "Your own app, on the native desktop." }
+            button { key: "toggle", onclick: Action::Toggle,
+                if state.enabled { "Disable" } else { "Enable" }
+            }
+            { preference_card(state.enabled) }
+        }
+    }
+}
+
+fn preference_card(enabled: bool) -> impl View<Action> {
+    rsx! {
+        card { title: "PREFERENCE", if enabled { "Enabled" } else { "Disabled" } }
+    }
+}
+
+fn update(state: &mut State, action: Action) {
+    match action { Action::Toggle => state.enabled = !state.enabled }
 }
 ```
 
@@ -37,6 +59,48 @@ pub extern "C" fn user_main() {
 [Portal](../user_programs/portal/src/main.rs) demonstrates custom canvas drawing:
 `window.draw(|canvas| { ... })`, `ui::text`, `Color`, and `Rect`. It retains its shell
 and keyboard handling without managing framebuffer pointers or pitch.
+
+## Components, styles and state
+
+`rsx!` builds ordinary Rust values implementing `View<Message>`. Components are
+functions returning views; `{ component(props) }` embeds another component. Keep
+component construction pure. Put state changes and side effects in the update
+handler passed to `mount`. Buttons declare a stable `key` and an `onclick` message;
+changing a label does not change the widget's identity. Keys must be unique within
+the mounted view.
+
+A click is captured during rendering, then delivered once to `update`. The SDK
+clears the input transition and renders the updated state before publishing the
+frame, so text/style changes appear without a further mouse movement. Initial
+render, hover and focus changes do not invoke update handlers. The mount loop
+retains application state across frames and sleeps when idle.
+
+Supported native syntax:
+
+- `column { style: Style::new().padding(24).gap(8), ... }` lays out nested children
+  vertically. `padding` and `gap` use pixels; `.color(Color::rgb(...))` inherits a
+  foreground color through nested components. Style functions return typed values.
+- `heading { "Title" }`, `label { "Text" }`, and
+  `label { color: Color::rgb(0x9dd6ff), "Override" }` render sharp text.
+- `button { key: "save", onclick: Action::Save, "Save" }` declares an action.
+- `card { title: "STATUS", "Description" }` and `space { 12 }` provide presentation
+  and spacing. `{ child(props) }` accepts any Rust expression returning a view.
+
+Components use the existing typography and control sizing (heading slot 36px,
+label 22px, button 50px including its 38px control, card 88px including its 72px
+panel), with container gaps added between children. Excessive padding produces
+zero available width; drawing and hit-testing stay clipped to window content.
+Trees deeper than 16 levels return `Error::InvalidView` before drawing, protecting
+the small user stack. The tree stores concrete nested values without allocation,
+unsafe code or a DOM. There is no browser, CSS parser, React/Dioxus dependency,
+hook system or reconciliation engine. Text is borrowed `&str`; the mounted root
+must return a fixed view type whose text does not borrow transient application
+state. The example uses static strings selected from state. Dynamic-length lists
+and formatted owned text are not implemented by this first component layer.
+
+The existing `Window::run`, `Ui` and custom canvas interfaces remain available.
+The WM still controls materials and window policy; only the client SDK interprets
+components, layout and styles. The window protocol and syscall ABI are unchanged.
 
 ## Drawing and input contract
 

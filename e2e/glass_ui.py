@@ -95,6 +95,8 @@ def main():
                 assert glass.getpixel((400, 400)) != backdrop.getpixel((400, 400)), 'glass material missing'
                 colors = glass.crop((104, 178, 500, 200)).getcolors(10000) or []
                 assert any(color == (246, 249, 255) for _, color in colors), 'foreground text must remain sharp'
+                colors = glass.crop((104, 424, 500, 436)).getcolors(10000) or []
+                assert any(color == (157, 214, 255) for _, color in colors), 'component foreground style missing'
                 assert glass.getpixel((700, 400)) != backdrop.getpixel((700, 400)), 'requested 640px content size ignored'
 
                 # Button activates once on release, and not when released outside.
@@ -106,6 +108,8 @@ def main():
                 wait('[hello-ui] accent changed: 1', offset)
                 time.sleep(.3)
                 assert log.read_text()[offset:].count('[hello-ui] accent changed:') == 1
+                colors = shot().crop((104, 424, 500, 436)).getcolors(10000) or []
+                assert any(color == (210, 185, 255) for _, color in colors), 'component state did not rerender after click'
                 offset = log.stat().st_size
                 move(140, 298)
                 button(True)

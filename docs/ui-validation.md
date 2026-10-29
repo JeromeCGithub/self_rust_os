@@ -116,3 +116,42 @@ per process, keyboard widget navigation, system accessibility preferences, GPU
 refraction and fluid animation remain outside this first toolkit implementation.
 Existing process frame/stack leaks and pointer-validation hardening gaps remain;
 bounded close/reopen tests do not prove complete resource reclamation.
+
+
+## Declarative component follow-up (October 29, 2026)
+
+`Window::mount(state, app, update)` and `rsx!` now let application/component
+functions return typed views and style functions. Hello was migrated to `app`,
+`appearance_card`, `app_style`, and `update`. Rendering/layout/style interpretation
+remains in Ring 3; this follow-up changes no syscall or compositor protocol.
+
+Red evidence recorded during this follow-up:
+
+- The two new layout tests emitted zero primitives instead of the expected nested
+  styled text/button slots. Both passed after the component renderer was implemented.
+- A further boundary case emitted text when padding exhausted the available width;
+  rendering now skips empty content widths and viewports.
+- The strengthened `python3 e2e/glass_ui.py` failed on the original disk with
+  `component foreground style missing`. The new build passes that assertion and
+  asserts that a click changes the foreground color before another pointer event.
+
+Checks run now: thirteen native SDK tests (including component composition,
+spacing/inherited styles, stable keys with changing labels, empty viewports and
+pre-render nesting rejection), three blur and four damage cases; default/GRUB
+kernel builds, release GRUB build, `cargo test --no-run`, and the selected complete
+kernel/QEMU command listed above. All dependent apps and tracked binary/metadata
+pairs were rebuilt using `tools/build-user.sh` through a fresh disk build.
+The full glass and desktop E2E passed, as did the unchanged desktop performance
+suite (idle Portal 8.5%, Portal/Snake 21%, unloaded pointer 61 ms, pointer under
+Spin 18 ms, keyboard burst drain 31 ms). The docs checker, its seven host tests,
+and `git diff --check` passed. These are current results, separate from the
+original implementation results above. Screenshots were regenerated and inspected
+from this component build.
+
+The debug/release heap suites were not rerun for this pure userspace component
+change; their earlier timeout/pass evidence remains historical. Manual host GUI
+input remains unverified. This is native RSX-inspired syntax, not Dioxus
+compatibility: the first layer has typed columns/text/cards/buttons, explicit
+messages, and static or borrowed text, with a fixed root view type. It does not
+supply hooks, CSS, dynamic-length lists or owned formatted text. Existing canvas
+and imperative UI APIs remain supported.
