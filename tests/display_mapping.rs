@@ -210,7 +210,56 @@ fn large_binary_and_padded_surfaces_survive_spawn_snapshot_and_reap() {
         let last = self_rust_os::userspace::USER_CODE_START + 2 * 1920 * 1080 * 4 + 65535;
         assert_eq!(unsafe { (last as *const u8).read_volatile() }, 0xc3);
     }
+    context = keyboard_wait_checks(context);
     timed_wait_checks(context);
+}
+
+/// A blocking keyboard read resumes with zero so its caller retries the buffer
+/// read, instead of interpreting the old syscall number as newly read bytes.
+fn keyboard_wait_checks(mut context: u64) -> u64 {
+    x86_64::instructions::interrupts::disable();
+    let child = scheduler::spawn_process(&[0xc3], 0).expect("keyboard child");
+    activate(child, &mut context);
+    // SAFETY: activate returned this live child's aligned, owned kernel-stack
+    // SavedContext. Only this single-CPU harness accesses it, with IRQs masked.
+    unsafe {
+        (*(context as *mut scheduler::SavedContext)).rax = 2;
+    }
+    assert_eq!(
+        scheduler::block_on_keyboard(),
+        scheduler::PROCESS_BLOCK_SENTINEL
+    );
+    context = scheduler::schedule(context);
+    assert_eq!(scheduler::current_pid(), Some(0));
+    scheduler::wake_keyboard_waiters();
+    activate(child, &mut context);
+    // SAFETY: This is again the current child's live saved context; the previous
+    // exclusive access ended before scheduling. IRQs remain disabled.
+    assert_eq!(
+        unsafe { (*(context as *const scheduler::SavedContext)).rax },
+        0,
+        "keyboard wake must not replay stale user-buffer bytes"
+    );
+    assert_eq!(
+        scheduler::block_on_keyboard(),
+        scheduler::PROCESS_BLOCK_SENTINEL
+    );
+    context = scheduler::schedule(context);
+    assert!(scheduler::kill(child).is_some());
+    scheduler::wake_keyboard_waiters();
+    for _ in 0..3 {
+        let next = scheduler::on_timer(context);
+        if next != 0 {
+            context = next;
+        }
+    }
+    assert_eq!(
+        scheduler::current_pid(),
+        Some(0),
+        "killed keyboard waiter cannot wake"
+    );
+    assert_eq!(scheduler::waitpid(child), 9);
+    context
 }
 
 /// A sleeping compositor yields, wakes from a kernel-mode timer, and can be killed.

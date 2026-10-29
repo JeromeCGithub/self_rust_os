@@ -110,4 +110,4 @@ for binary in "${ROOT}"/user_programs/*/*.bin; do
     base="$(basename "${binary}")"
     mcopy -i "${IMG}@@${PART_OFFSET}" "${binary}" "::/BIN/${base^^}"
 done
-mcopy -i "${IMG}@@${PART_OFFSET}" "${ROOT}/user_programs/wm/wallpaper.ppm" ::/ETC/WALL.PPM
+mcopy -i "${IMG}@@${PART_OFFSET}" "${ROOT}/user_programs/de/wallpaper.ppm" ::/ETC/WALL.PPM

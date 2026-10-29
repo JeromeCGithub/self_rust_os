@@ -12,6 +12,7 @@ current behavior; architecture targets are not evidence of implemented features.
 | [Performance validation](performance.md) | 1080p optimization measurements, tests, and remaining limits |
 | [Syscall ABI](syscalls.md) | Current interface between kernel and userspace |
 | [Window and UI toolkit](ui.md) | Native window API, canvas/widgets, glass materials and protocol |
+| [Desktop environment](desktop-environment.md) | Separate DE/compositor processes, shell protocol and default space wallpaper |
 | [GRUB boot](grub-boot.md) | Current disk layout and boot sequence |
 
 Scoped instructions: [kernel](../src/AGENTS.md), [applications/SDK](../user_programs/AGENTS.md),

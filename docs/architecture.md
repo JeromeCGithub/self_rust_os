@@ -19,7 +19,8 @@ microkernel.
 | Kernel storage | [ATA](../src/ata.rs), [MBR](../src/mbr.rs), [FAT32](../src/fat32.rs), [mount](../src/fs.rs) | Block I/O, partition offsets, directory/file mechanisms |
 | Kernel input/display | [mouse](../src/mouse.rs), [absolute pointer](../src/mouse/absolute.rs), [keyboard](../src/task/keyboard.rs), [graphics](../src/gfx.rs) | Hardware transport, input delivery, display mappings and boot console |
 | User SDK/runtime | [userlib](../user_programs/userlib/src/lib.rs), [syscalls](../user_programs/userlib/src/sys.rs), [UI](../user_programs/userlib/src/ui/mod.rs), [runtime](../user_programs/userlib/src/rt.rs) | Ring 3 syscall wrappers, windows, canvas, widgets, `_start`, panic handler, console formatting |
-| User compositor | [wm](../user_programs/wm/src/main.rs) | Wallpaper, icons, application discovery, stacking, decorations, focus policy, presentation |
+| User compositor | [wm](../user_programs/wm/src/main.rs) | Stacking, placement, decorations, focus/input routing, surface ownership, glass and presentation |
+| Desktop environment | [de](../user_programs/de/src/main.rs) | Wallpaper, panels, launchers, application discovery and executable launch policy; requests compositor services |
 | User shells/apps | [portal](../user_programs/portal/src/main.rs), [forge](../user_programs/forge/src/main.rs), [hello](../user_programs/hello/src/main.rs), [snake](../user_programs/snake/src/main.rs), [spin](../user_programs/spin/src/main.rs) | Commands, UI, executable selection, application behavior |
 | Host tooling | [tools](../tools), [E2E](../e2e) | Building images, QEMU execution and verification; never guest privilege code |
 
@@ -34,6 +35,9 @@ build and QEMU, and routes test executables to `bootimage runner`. GRUB supplies
 1920×1080×32 framebuffer. The kernel establishes memory mappings, GDT/IDT/PICs, heap,
 input queues, and the FAT32 root mount. It loads `/BIN/WM.BIN`, creates the initial
 PID 0 process, and enters Ring 3 through the scheduler. See [boot details](grub-boot.md).
+The compositor then spawns `/BIN/DE.BIN` in Ring 3. That process requests a desktop
+surface and panel work-area reservations over the scalar message channel; no
+shell-widget rendering or application-discovery policy executes in PID 0. See [the split](desktop-environment.md).
 
 A process has a private page-table subtree, user code/data and stack, a kernel stack,
 and a saved register context. Timer preemption switches user processes; IRQs that
@@ -70,7 +74,10 @@ surface revisions after drawing; console output publishes automatically. Native
 SDK clients also send frame serials and wait for copy acknowledgements before
 reusing their pixels. Unchanged surfaces require only metadata queries. The six
 cache slots reserve 5.86 MiB, plus 151 KiB of glass blur scratch storage, in
-addition to the existing back/snapshot buffers. Timed waits let the CPU halt when
+addition to the pitched composition buffer, full-resolution packed desktop cache,
+and bounded 480-row application snapshot scratch. The DE's full-display surface
+is copied before release and does not consume an application window slot.
+Timed waits let the CPU halt when
 applications are waiting. See [performance validation](performance.md). Text apps
 receive kernel-rendered console output on their private surface. Graphical apps
 call `graphics_mode()` (automatically through the window SDK); their console writes
@@ -88,8 +95,9 @@ GRUB boots from the primary master's first FAT32 partition. The root mount uses
 MBR-relative sector offsets. Files use FAT32 8.3 names and directory traversal;
 the current root filesystem is not the old ramfs described in historical notes.
 
-The disk builder installs `/BIN`, `/ETC`, `/HOME`, and `/TMP`. The WM discovers
-launchers from `/BIN` and reads `/ETC/WALL.PPM`; shells decide command semantics.
+The disk builder installs `/BIN`, `/ETC`, `/HOME`, and `/TMP`. The DE discovers
+launchers from `/BIN` and reads `/ETC/WALL.PPM`; the compositor understands neither
+the wallpaper path/format nor executable names. Shells decide command semantics.
 `spawn` receives an explicit path. Do not add PATH lookup, wallpaper selection,
 or application-specific filename handling to a generic driver or syscall.
 

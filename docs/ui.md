@@ -105,8 +105,10 @@ components, layout and styles. The window protocol and syscall ABI are unchanged
 ## Drawing and input contract
 
 - Content dimensions are independent of desktop resolution: 160–640 pixels wide
-  and 96–400 high, also bounded by the display's workspace (88 pixels are reserved
-  vertically for desktop panels, placement margin and decorations). The WM chooses placement and adds a
+  and 96–400 high, also bounded by the display's negotiated workspace. The SDK
+  preflights only the titlebar; the DE requests panel reservations and the WM
+  rejects content that does not fit them. The default DE reserves 28 pixels above
+  and 32 below, with a further 28 pixels for window decorations. The WM chooses placement and adds a
   28-pixel titlebar. Native clients use content-local coordinates.
 - The current OS maps one private, display-sized backing surface per process.
   The SDK exposes one window creation per process, including after dropping a
@@ -152,12 +154,15 @@ bounded row intervals and updates only the cursor, preserving its underlying
 display pixels separately. This keeps motion responsive without exposing the
 unfinished scene. The final presentation still flushes dirty tiles.
 Six content cache slots reserve 5.86 MiB; two small blur scratch arrays add about
-151 KiB. The existing full-display back/snapshot buffers remain.
+151 KiB. The compositor also caches the DE's rendered full-display surface and
+uses a bounded 480-row scratch area for client snapshots. See the
+[two-process desktop protocol](desktop-environment.md).
 
 This is CPU-rendered frosted/clear glass, without GPU acceleration, optical
 refraction, fluid transitions, dynamic resizing, or system accessibility settings.
 The existing approximately 18.2 Hz PIT polling remains; this is not a claim of
-60 Hz animation. Legacy Snake still uses the WM's historical scaling adapter.
+60 Hz animation. The DE requests a generic legacy scaling adapter for Snake;
+the compositor contains no application-name exceptions.
 
 ## Window protocol version 1
 
@@ -176,6 +181,11 @@ or pointers. Sender IDs come from the kernel.
 | `7` CLOSE | Either | Window close/disconnect request |
 | `8` ACCEPT | WM → app | Configuration accepted |
 | `9` REJECT | WM → app | Invalid/unsupported configuration or no free slot |
+
+Kinds A–E implement the separate DE's background role, workspace reservations,
+legacy window registration and full-display pointer routing. See the
+[shell extension](desktop-environment.md#shell-message-extension). Existing app
+message kinds and syscall numbers are preserved.
 
 Only the first configuration is accepted for a window. Geometry, content, and
 material are fixed for its lifetime. Unknown message kinds are ignored. Configuration

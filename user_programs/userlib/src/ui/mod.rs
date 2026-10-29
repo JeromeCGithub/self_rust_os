@@ -3,6 +3,7 @@
 //! The compositor owns placement, decorations and materials. Applications draw
 //! content-local pixels and keep submitted pixels unchanged until RELEASE.
 pub mod declarative;
+pub mod desktop_protocol;
 mod input;
 pub use declarative::{Style, View};
 pub mod protocol;
@@ -80,16 +81,21 @@ pub struct Window {
     closed: bool,
     rejected: bool,
     input: Input,
+    desktop: bool,
 }
 impl Window {
     /// Connects to the WM and negotiates content geometry. No raw pointers escape.
     pub fn create(options: WindowOptions<'_>) -> Result<Self, Error> {
+        Self::connect(options, false)
+    }
+    fn connect(options: WindowOptions<'_>, desktop: bool) -> Result<Self, Error> {
+        let info = sys::fb_info().map_err(|_| Error::Unavailable)?;
         let config = Configuration {
-            width: options.width,
-            height: options.height,
+            width: if desktop { info.width } else { options.width },
+            height: if desktop { info.height } else { options.height },
             material: options.material,
         };
-        if Configuration::decode(config.encode()) != Some(config) {
+        if !desktop && Configuration::decode(config.encode()) != Some(config) {
             return Err(Error::InvalidGeometry);
         }
         if options.title.len() > TITLE_BYTES
@@ -97,11 +103,15 @@ impl Window {
         {
             return Err(Error::InvalidTitle);
         }
-        let info = sys::fb_info().map_err(|_| Error::Unavailable)?;
         if info.bpp != 32
             || info.pitch % 4 != 0
             || info.pitch < info.width.checked_mul(4).ok_or(Error::InvalidGeometry)?
-            || !config.fits_display(info.width, info.height)
+            || (!desktop && !config.fits_display(info.width, info.height))
+            || info.width > 1920
+            || info.height > 1080
+            || info.width == 0
+            || info.height == 0
+            || info.pitch > 8192
         {
             return Err(Error::InvalidGeometry);
         }
@@ -133,11 +143,16 @@ impl Window {
             closed: false,
             rejected: false,
             input: Input::default(),
+            desktop,
         };
-        send(config.encode())?;
+        send(if desktop {
+            desktop_protocol::DESKTOP
+        } else {
+            config.encode()
+        })?;
         let mut title = [0u8; TITLE_BYTES];
         title[..options.title.len()].copy_from_slice(options.title.as_bytes());
-        for (index, chunk) in title.chunks_exact(3).enumerate() {
+        for (index, chunk) in title.chunks_exact(3).enumerate().filter(|_| !desktop) {
             send(
                 TITLE
                     | ((index as u32) << 24)
@@ -167,6 +182,10 @@ impl Window {
             return Err(Error::Unavailable);
         }
         match message & KIND {
+            desktop_protocol::DESKTOP_POINTER if self.desktop => {
+                let (x, y, buttons) = desktop_protocol::decode_pointer(message);
+                return Ok(Some(Event::Pointer { x, y, buttons }));
+            }
             ACCEPT => self.accepted = true,
             REJECT => self.rejected = true,
             RELEASE if self.pending == Some(message & SERIAL) => self.pending = None,
@@ -319,6 +338,99 @@ impl Drop for Window {
         let _ = sys::send_message(0, CLOSE);
     }
 }
+
+/// A shell-owned background layer. Only the compositor-spawned DE may connect.
+/// Uses the same private mapping and copy/release lifetime as ordinary windows.
+pub struct DesktopSurface {
+    window: Window,
+    pending_event: Option<Event>,
+}
+impl DesktopSurface {
+    /// Claims the full-display background role; ordinary applications are rejected.
+    pub fn connect() -> Result<Self, Error> {
+        Ok(Self {
+            window: Window::connect(WindowOptions::new("Desktop"), true)?,
+            pending_event: None,
+        })
+    }
+    /// Draws and submits the entire desktop; the compositor caches it before RELEASE.
+    pub fn draw(&mut self, paint: impl FnOnce(&mut Canvas<'_>)) -> Result<(), Error> {
+        self.window.draw(paint)
+    }
+    /// Receives unoccluded desktop pointer events in full-display coordinates.
+    pub fn poll_event(&mut self) -> Result<Option<Event>, Error> {
+        if self.pending_event.is_some() {
+            return Ok(self.pending_event.take());
+        }
+        self.window.poll_event()
+    }
+    /// Requests vertical workspace reservations for panels.
+    pub fn reserve_work_area(&mut self, top: u16, bottom: u16) -> Result<(), Error> {
+        let area = desktop_protocol::WorkArea { top, bottom };
+        if desktop_protocol::WorkArea::decode(area.encode(), self.window.config.height)
+            != Some(area)
+        {
+            return Err(Error::InvalidGeometry);
+        }
+        self.request(area.encode(), desktop_protocol::WORK_REPLY)
+    }
+    /// Asks the compositor to manage/focus a spawned legacy client. Native clients
+    /// still negotiate their own windows. Registration replies are consumed here.
+    pub fn manage(&mut self, pid: u32, title: &str, large: bool) -> Result<(), Error> {
+        if title.len() > TITLE_BYTES || !title.bytes().all(|byte| (32..127).contains(&byte)) {
+            return Err(Error::InvalidTitle);
+        }
+        self.request(
+            desktop_protocol::Managed { pid, large }
+                .encode()
+                .ok_or(Error::Rejected)?,
+            pid,
+        )?;
+        let mut bytes = [0u8; TITLE_BYTES];
+        bytes[..title.len()].copy_from_slice(title.as_bytes());
+        for (index, chunk) in bytes.chunks_exact(3).enumerate() {
+            send(
+                desktop_protocol::MANAGED_TITLE
+                    | ((index as u32) << 24)
+                    | u32::from(chunk[0])
+                    | (u32::from(chunk[1]) << 8)
+                    | (u32::from(chunk[2]) << 16),
+            )?;
+        }
+        Ok(())
+    }
+    fn request(&mut self, message: u32, tag: u32) -> Result<(), Error> {
+        send(message)?;
+        let start = sys::ticks();
+        loop {
+            if let Some((sender, message)) =
+                sys::receive_message().map_err(|_| Error::Unavailable)?
+            {
+                if sender != 0 {
+                    return Err(Error::Unavailable);
+                }
+                if message == (REJECT | tag) {
+                    return Err(Error::Rejected);
+                }
+                if message == (ACCEPT | tag) {
+                    break;
+                }
+                if message & KIND == RELEASE && self.window.pending == Some(message & SERIAL) {
+                    self.window.pending = None;
+                }
+                if message & KIND == desktop_protocol::DESKTOP_POINTER {
+                    let (x, y, buttons) = desktop_protocol::decode_pointer(message);
+                    self.pending_event = Some(Event::Pointer { x, y, buttons });
+                }
+            }
+            if sys::ticks().wrapping_sub(start) >= 36 {
+                return Err(Error::Timeout);
+            }
+            sys::sleep_ticks(1).map_err(|_| Error::Unavailable)?;
+        }
+        Ok(())
+    }
+}
 fn send(message: u32) -> Result<(), Error> {
     let start = sys::ticks();
     loop {
@@ -437,15 +549,16 @@ impl<'a, 'buffer> Ui<'a, 'buffer> {
         });
         let clicked = self.input.button(id, hit_bounds);
         let hovered = bounds.contains(self.input.x, self.input.y);
-        let color = if hovered && self.input.down {
-            Color::rgba(125, 185, 255, 160)
+        let pressed = self.input.down && self.input.active == Some(id);
+        let color = if pressed {
+            Color::rgba(130, 190, 255, 110)
         } else if hovered {
-            Color::rgba(150, 200, 255, 110)
+            Color::rgba(150, 210, 255, 76)
         } else {
-            Color::rgba(150, 190, 235, 62)
+            Color::rgba(145, 190, 235, 37)
         };
         self.canvas
-            .rounded_rect(bounds, 11, Color::rgba(220, 237, 255, 100));
+            .rounded_rect(bounds, 11, Color::rgba(220, 237, 255, 30));
         self.canvas.rounded_rect(
             Rect::new(bounds.x + 1, bounds.y + 1, bounds.width - 2, 36),
             10,
@@ -454,7 +567,7 @@ impl<'a, 'buffer> Ui<'a, 'buffer> {
         text(
             self.canvas,
             bounds.x.saturating_add(14),
-            bounds.y.saturating_add(15),
+            bounds.y.saturating_add(if pressed { 16 } else { 15 }),
             label,
             foreground,
             1,

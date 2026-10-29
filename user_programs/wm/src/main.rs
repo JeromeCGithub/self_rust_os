@@ -4,6 +4,7 @@
 #![no_main]
 use font8x8::{UnicodeFonts, BASIC_FONTS};
 use userlib::ui::{
+    desktop_protocol::{self as shell, Managed, WorkArea},
     protocol::{self, Configuration, Material},
     raster::{coverage, opacity, over, Color},
 };
@@ -14,15 +15,16 @@ use damage::Damage;
 const MAX_W: usize = 1920;
 const MAX_H: usize = 1080;
 const MAX_PITCH: usize = 8192;
-struct Desktop {
+struct Compositor {
     info: sys::FbInfo,
     damage: Damage,
     cursor: Option<(i32, i32)>,
     cursor_under: [u32; 8 * 14],
 }
 const MAX: usize = 6;
-static mut BACK: [u32; MAX_W * MAX_H] = [0; MAX_W * MAX_H];
-static mut SURFACE: [u32; MAX_PITCH / 4 * MAX_H] = [0; MAX_PITCH / 4 * MAX_H];
+static mut BACK: [u32; MAX_PITCH / 4 * MAX_H] = [0; MAX_PITCH / 4 * MAX_H];
+static mut BASE: [u32; MAX_W * MAX_H] = [0; MAX_W * MAX_H];
+static mut SURFACE: [u32; MAX_PITCH / 4 * 480] = [0; MAX_PITCH / 4 * 480];
 const CONTENT_W: usize = protocol::MAX_WIDTH;
 const CONTENT_H: usize = protocol::MAX_HEIGHT;
 const TITLE_H: i32 = 28;
@@ -31,20 +33,10 @@ const BLUR_LEN: usize = 168 * 115;
 static mut CACHE: [[u32; CONTENT_W * CONTENT_H]; MAX] = [[0; CONTENT_W * CONTENT_H]; MAX];
 static mut BLUR_A: [u32; BLUR_LEN] = [0; BLUR_LEN];
 static mut BLUR_B: [u32; BLUR_LEN] = [0; BLUR_LEN];
-static mut WALL: [u8; 57615] = [0; 57615];
-#[derive(Clone, Copy)]
-struct App {
-    name: [u8; 12],
-    path: [u8; 32],
-}
-const EMPTY_APP: App = App {
-    name: [0; 12],
-    path: [0; 32],
-};
 #[derive(Clone, Copy)]
 struct Window {
     pid: u32,
-    app: App,
+    large: bool,
     x: i32,
     y: i32,
     exited: bool,
@@ -65,7 +57,15 @@ fn string(bytes: &[u8]) -> &str {
     core::str::from_utf8(&bytes[..bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len())])
         .unwrap_or("")
 }
-impl Desktop {
+impl Compositor {
+    fn clear_background(&mut self) {
+        // SAFETY: Validated display dimensions bound this exclusively WM-owned
+        // packed cache. No shell/user references alias it or survive this fill.
+        unsafe {
+            (&mut *core::ptr::addr_of_mut!(BASE))[..self.info.width * self.info.height]
+                .fill(0x0e172b);
+        }
+    }
     fn pixel(&mut self, x: i32, y: i32, c: u32) {
         if x >= 0 && y >= 0 && x < self.info.width as i32 && y < self.info.height as i32 {
             // SAFETY: Validated dimensions and the coordinate bounds keep
@@ -73,7 +73,7 @@ impl Desktop {
             unsafe {
                 let pixel = core::ptr::addr_of_mut!(BACK)
                     .cast::<u32>()
-                    .add(y as usize * self.info.width + x as usize);
+                    .add(y as usize * (self.info.pitch / 4) + x as usize);
                 if pixel.read() != c {
                     pixel.write(c);
                     self.damage.mark(x as usize, y as usize, 1, 1);
@@ -95,7 +95,7 @@ impl Desktop {
                 core::ptr::copy_nonoverlapping(
                     core::ptr::addr_of!(BACK)
                         .cast::<u32>()
-                        .add(y * info.width + x),
+                        .add(y * (info.pitch / 4) + x),
                     (sys::FRAMEBUFFER_ADDR + y * info.pitch + x * 4) as *mut u32,
                     width,
                 );
@@ -163,13 +163,6 @@ impl Desktop {
         }
     }
 
-    fn rect(&mut self, x: i32, y: i32, w: i32, h: i32, c: u32) {
-        for yy in y.max(0)..(y + h).min(self.info.height as i32) {
-            for xx in x.max(0)..(x + w).min(self.info.width as i32) {
-                self.pixel(xx, yy, c);
-            }
-        }
-    }
     fn text(&mut self, x: i32, y: i32, s: &str, c: u32) {
         for (i, ch) in s.chars().enumerate() {
             if let Some(g) = BASIC_FONTS.get(ch) {
@@ -187,94 +180,33 @@ impl Desktop {
 fn hit(mx: i32, my: i32, x: i32, y: i32, w: i32, h: i32) -> bool {
     mx >= x && mx < x + w && my >= y && my < y + h
 }
-fn discover(apps: &mut [App; MAX]) -> usize {
-    let mut entries = [0u8; 12 * 32];
-    let mut count = 0;
-    if let Some(n) = sys::ls("/BIN", &mut entries, 32) {
-        for e in entries.chunks_exact(12).take(n.min(32)) {
-            if &e[8..11] != b"BIN" || &e[..8] == b"WM      " || count == MAX {
-                continue;
-            }
-            let len = e[..8].iter().position(|b| *b == b' ').unwrap_or(8);
-            let mut app = EMPTY_APP;
-            app.name[..len].copy_from_slice(&e[..len]);
-            if &e[..len] == b"PORTAL" {
-                app.name = [0; 12];
-                app.name[..8].copy_from_slice(b"Terminal");
-            }
-            app.path[..5].copy_from_slice(b"/BIN/");
-            app.path[5..5 + len].copy_from_slice(&e[..len]);
-            app.path[5 + len..9 + len].copy_from_slice(b".BIN");
-            apps[count] = app;
-            count += 1;
-        }
-    }
-    count
-}
-impl Desktop {
-    fn desktop(&mut self, apps: &[App], wallpaper: bool, bounds: (usize, usize, usize, usize)) {
-        // Restore only the workspace exposed by a changed window layout.
+impl Compositor {
+    fn restore_background(&mut self, bounds: (usize, usize, usize, usize)) {
         let (left, top, right, bottom) = bounds;
         for y in top..bottom {
             if y % 32 == 0 {
                 self.refresh_cursor();
             }
-            let wall_row = 15 + (y * 120 / self.info.height) * 160 * 3;
-            for x in left..right {
-                let c = if wallpaper {
-                    let i = wall_row + (x * 160 / self.info.width) * 3;
-                    // SAFETY: Scaling bounds this RGB triplet to WALL's
-                    // 160x120 payload, loaded before the rendering loop.
-                    unsafe {
-                        ((WALL[i] as u32) << 16) | ((WALL[i + 1] as u32) << 8) | WALL[i + 2] as u32
-                    }
-                } else {
-                    0x16364e
-                };
-                self.pixel(x as i32, y as i32, c);
+            // SAFETY: Clipped workspace bounds fit the exclusively owned packed
+            // BASE and pitched BACK buffers. The copies are disjoint; no borrow
+            // survives presentation. The shell's frame was cached before RELEASE.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    core::ptr::addr_of!(BASE)
+                        .cast::<u32>()
+                        .add(y * self.info.width + left),
+                    core::ptr::addr_of_mut!(BACK)
+                        .cast::<u32>()
+                        .add(y * (self.info.pitch / 4) + left),
+                    right - left,
+                );
             }
         }
-        self.rect(0, 0, self.info.width as i32, 27, 0x111d30);
-        self.text(15, 10, "RustOS", 0xffffff);
-        self.text(
-            self.info.width as i32 - 265,
-            10,
-            "DESKTOP / APPLICATIONS",
-            0xa3bfd6,
-        );
-        for (i, app) in apps.iter().enumerate() {
-            let x = 18 + i as i32 * 100;
-            self.rect(x + 12, 48, 44, 38, 0x0a1628);
-            self.rect(x + 12, 48, 44, 3, 0x72dac6);
-            let symbol = match string(&app.name) {
-                "Terminal" => ">_",
-                "FORGE" => "sh",
-                "HELLO" => "hi",
-                "SNAKE" => "S",
-                "SPIN" => "@",
-                _ => "[]",
-            };
-            self.text(x + 22, 62, symbol, 0x91e4d2);
-            self.text(x, 98, string(&app.name), 0xffffff);
-        }
-        self.rect(
-            0,
-            self.info.height as i32 - 32,
-            self.info.width as i32,
-            32,
-            0x101c2e,
-        );
-        self.text(
-            14,
-            self.info.height as i32 - 19,
-            "R  /  Workspace 1",
-            0xc8e7f0,
-        );
-        self.text(
-            self.info.width as i32 - 300,
-            self.info.height as i32 - 19,
-            "Click an app to open a window",
-            0x9bb2c8,
+        self.damage.mark(
+            left,
+            top,
+            right.saturating_sub(left),
+            bottom.saturating_sub(top),
         );
     }
     fn update_surface(&self, win: &mut Window) -> bool {
@@ -286,9 +218,9 @@ impl Desktop {
         if !win.native && win.revision == status.ok() && win.revision.is_some() {
             return false;
         }
-        let scale = !win.native && string(&win.app.name) == "SNAKE";
+        let scale = !win.native && win.large;
         let words = if scale {
-            self.info.pitch / 4 * self.info.height
+            self.info.pitch / 4 * 480
         } else {
             (win.height - 1) * (self.info.pitch / 4) + win.width
         };
@@ -305,16 +237,8 @@ impl Desktop {
         win.revision = status.ok();
         for y in 0..win.height {
             for x in 0..win.width {
-                let sx = if scale {
-                    x * self.info.width / win.width
-                } else {
-                    x
-                };
-                let sy = if scale {
-                    y * self.info.height / win.height
-                } else {
-                    y
-                };
+                let sx = if scale { x * 640 / win.width } else { x };
+                let sy = if scale { y * 480 / win.height } else { y };
                 // SAFETY: Sampling is bounded by the validated surface geometry;
                 // the snapshot borrow has ended. Only this WM accesses the cache.
                 unsafe {
@@ -341,14 +265,7 @@ impl Desktop {
         let h = win.height as i32 + TITLE_H;
         let blur_width = (w + HALO * 2 + 3) as usize / 4;
         let blur_height = ((if win.native { h } else { TITLE_H }) + HALO * 2 + 3) as usize / 4;
-        let tint = match win.material {
-            Material::GlassClear => 112,
-            Material::Glass => 168,
-            Material::Opaque => 255,
-        };
-        let tint_color = Color::rgba(20, 30, 48, tint).0;
-        let title_color = Color::rgba(225, 239, 255, if active { 18 } else { 8 }).0;
-        let edge_color = Color::rgba(220, 237, 255, if active { 100 } else { 48 }).0;
+        let title_color = Color::rgba(225, 239, 255, if active { 10 } else { 5 }).0;
         // Capture only layers below this window, before its own shadow/material.
         // SAFETY: Validated display dimensions bound clamped BACK reads. Accepted
         // content bounds guarantee blur_width*blur_height <= BLUR_LEN. This WM is
@@ -360,7 +277,7 @@ impl Desktop {
                         as usize;
                     let sy = (win.y - HALO + y as i32 * 4 + 2).clamp(0, self.info.height as i32 - 1)
                         as usize;
-                    BLUR_A[y * blur_width + x] = BACK[sy * self.info.width + sx];
+                    BLUR_A[y * blur_width + x] = BACK[sy * (self.info.pitch / 4) + sx];
                 }
             }
             glass::blur(
@@ -382,7 +299,11 @@ impl Desktop {
             for pixel in
                 (&mut *core::ptr::addr_of_mut!(BLUR_A))[..blur_width * blur_height].iter_mut()
             {
-                *pixel = over(tint_color, *pixel | 0xff000000);
+                *pixel = if win.material == Material::Opaque {
+                    0xff101b2c
+                } else {
+                    glass::shade(*pixel, win.material == Material::GlassClear)
+                };
             }
         }
         // A restrained shadow outside the rounded window's bounding box.
@@ -391,8 +312,9 @@ impl Desktop {
                 if x >= 0 && y >= 0 && x < w && y < h {
                     continue;
                 }
-                let distance = (-x).max(x - w + 1).max(-y).max(y - h + 1).max(0);
-                let alpha = ((16 - distance).max(0) * 3).min(42) as u8;
+                let dx = (-x).max(x - w + 1).max(0);
+                let dy = (-y + 2).max(y - h - 2).max(0);
+                let alpha = ((256 - dx * dx - dy * dy).max(0) / 12).min(21) as u8;
                 self.blend(win.x + x, win.y + y, Color::rgba(3, 8, 18, alpha).0);
             }
         }
@@ -401,12 +323,12 @@ impl Desktop {
                 self.refresh_cursor();
             }
             for x in 0..w {
-                let mask = coverage(x, y, w, h, 16);
+                let mask = coverage(x, y, w, h, 20);
                 if mask == 0 {
                     continue;
                 }
-                let sx = (x + HALO) as usize / 4;
-                let sy = (y + HALO) as usize / 4;
+                let sx = (x + HALO) as usize;
+                let sy = (y + HALO) as usize;
                 let mut pixel = if y >= TITLE_H {
                     // SAFETY: y-TITLE_H and x are bounded by accepted dimensions.
                     let content = unsafe {
@@ -417,16 +339,35 @@ impl Desktop {
                     } else {
                         // SAFETY: Only native content has alpha; native windows
                         // initialize the complete backdrop, including this index.
-                        over(content, unsafe { BLUR_A[sy * blur_width + sx] })
+                        over(content, unsafe {
+                            glass::sample(
+                                &*core::ptr::addr_of!(BLUR_A),
+                                blur_width,
+                                blur_height,
+                                sx,
+                                sy,
+                            )
+                        })
                     }
                 } else {
                     // SAFETY: Every window initializes at least its title backdrop.
-                    over(title_color, unsafe { BLUR_A[sy * blur_width + sx] })
+                    over(title_color, unsafe {
+                        glass::sample(
+                            &*core::ptr::addr_of!(BLUR_A),
+                            blur_width,
+                            blur_height,
+                            sx,
+                            sy,
+                        )
+                    })
                 };
-                let inner = coverage(x - 1, y - 1, w - 2, h - 2, 15);
+                let inner = coverage(x - 1, y - 1, w - 2, h - 2, 19);
                 let edge = mask.saturating_sub(inner);
                 if edge > 0 {
-                    pixel = over(edge_color, pixel);
+                    pixel = over(
+                        Color::rgba(225, 240, 255, glass::rim(x, y, w, h, active)).0,
+                        pixel,
+                    );
                 }
                 if mask == 255 {
                     self.pixel(win.x + x, win.y + y, pixel & 0xffffff);
@@ -455,7 +396,7 @@ impl Desktop {
             return;
         }
         // SAFETY: Clipped coordinates index the WM's exclusively owned BACK.
-        let old = unsafe { BACK[y as usize * self.info.width + x as usize] | 0xff000000 };
+        let old = unsafe { BACK[y as usize * (self.info.pitch / 4) + x as usize] | 0xff000000 };
         self.pixel(x, y, over(color, old) & 0xffffff);
     }
 }
@@ -481,33 +422,42 @@ pub extern "C" fn user_main() {
             sys::exit(1)
         }
     };
-    let mut display = Desktop {
+    let mut display = Compositor {
         info,
         damage: Damage::new(),
         cursor: None,
         cursor_under: [0; 8 * 14],
     };
-    // SAFETY: WALL is exclusively borrowed for this synchronous read. The
-    // returned size and header are checked before rendering its pixel data.
-    let wallpaper = unsafe {
-        sys::read_file("/ETC/WALL.PPM", &mut *core::ptr::addr_of_mut!(WALL)) == Some(57615)
-            && &WALL[..15] == b"P6\n160 120\n255\n"
+    display.clear_background();
+    let mut shell_pid = match sys::spawn("/BIN/DE.BIN") {
+        Ok(pid) => Some(pid),
+        Err(()) => {
+            println!("[compositor] desktop launch failed");
+            None
+        }
     };
-    println!("[desktop] wallpaper loaded: {}", wallpaper);
-    let mut apps = [EMPTY_APP; MAX];
-    let count = discover(&mut apps);
-    println!("[desktop] ready: {} applications", count);
+    let mut shell_connected = false;
+    let mut shell_commit = None;
+    let mut shell_reply = None;
+    let mut shell_release = None;
+    let mut shell_pointer = None;
+    let mut last_managed = None;
+    let mut work = WorkArea { top: 0, bottom: 0 };
+    let mut desktop_capture = false;
+    println!("[compositor] ready");
     let mut windows: [Option<Window>; MAX] = [None; MAX];
     let mut used = 0;
     let mut previous = 0;
     let mut drag: Option<(i32, i32)> = None;
     let mut scene_dirty = true;
     let mut old_bounds = (0, 0, info.width, info.height);
-    let mut focused = 0;
+    let mut focused = shell_pid.unwrap_or(0);
+    focus(focused);
     let mut announced_focus = 0;
     display.damage.mark(0, 0, info.width, info.height);
     let mut old_mouse = None;
     loop {
+        let mut revoke_desktop = false;
         // Opaque service messages are decoded here in Ring 3, never in the kernel.
         // Each iteration is bounded even if a malicious client floods its channel.
         for _ in 0..64 {
@@ -518,10 +468,122 @@ pub extern "C" fn user_main() {
                 .iter()
                 .position(|window| window.map(|w| w.pid) == Some(pid));
             match message & protocol::KIND {
+                shell::DESKTOP => {
+                    if message == shell::DESKTOP
+                        && shell::authorized(pid, shell_pid)
+                        && !shell_connected
+                    {
+                        shell_connected = true;
+                        shell_reply = Some(protocol::ACCEPT);
+                    } else {
+                        let _ = sys::send_message(pid, protocol::REJECT);
+                    }
+                }
+                shell::WORK_AREA => {
+                    if shell::authorized(pid, shell_pid) && shell_connected {
+                        let area = WorkArea::decode(message, info.height).filter(|area| {
+                            windows[..used].iter().flatten().all(|w| {
+                                w.height
+                                    + TITLE_H as usize
+                                    + usize::from(area.top)
+                                    + usize::from(area.bottom)
+                                    <= info.height
+                            })
+                        });
+                        if let Some(area) = area {
+                            work = area;
+                            for window in windows[..used].iter_mut().flatten() {
+                                window.y = window.y.clamp(
+                                    i32::from(work.top),
+                                    info.height as i32
+                                        - i32::from(work.bottom)
+                                        - TITLE_H
+                                        - window.height as i32,
+                                );
+                            }
+                            scene_dirty = true;
+                            shell_reply = Some(protocol::ACCEPT | shell::WORK_REPLY);
+                        } else {
+                            shell_reply = Some(protocol::REJECT | shell::WORK_REPLY);
+                        }
+                    } else {
+                        let _ = sys::send_message(pid, protocol::REJECT);
+                    }
+                }
+                shell::MANAGE => {
+                    if !shell::authorized(pid, shell_pid) || !shell_connected {
+                        let _ = sys::send_message(pid, protocol::REJECT);
+                        continue;
+                    }
+                    let Some(request) = Managed::decode(message) else {
+                        shell_reply = Some(protocol::REJECT | (message & shell::PID_MASK));
+                        continue;
+                    };
+                    if Some(request.pid) == shell_pid || sys::surface_status(request.pid).is_err() {
+                        shell_reply = Some(protocol::REJECT | request.pid);
+                        continue;
+                    }
+                    let index = windows[..used]
+                        .iter()
+                        .position(|w| w.map(|w| w.pid) == Some(request.pid));
+                    let index = if let Some(index) = index {
+                        index
+                    } else {
+                        if used == MAX {
+                            shell_reply = Some(protocol::REJECT | request.pid);
+                            continue;
+                        }
+                        let slot = free_slot(&windows[..used]);
+                        windows[used] = Some(new_window(request.pid, slot, used));
+                        used += 1;
+                        used - 1
+                    };
+                    let window = windows[index].as_mut().expect("managed window");
+                    if !window.native {
+                        window.large = request.large;
+                    }
+                    last_managed = Some(request.pid);
+                    shell_reply = Some(protocol::ACCEPT | request.pid);
+                    focused = request.pid;
+                    focus(focused);
+                    scene_dirty = true;
+                }
+                shell::MANAGED_TITLE => {
+                    if shell::authorized(pid, shell_pid) && shell_connected {
+                        if let Some(window) = windows[..used]
+                            .iter_mut()
+                            .flatten()
+                            .find(|w| Some(w.pid) == last_managed && !w.native)
+                        {
+                            let chunk = ((message >> 24) & 15) as usize;
+                            if chunk < 8 {
+                                for byte in 0..3 {
+                                    let value = ((message >> (byte * 8)) & 255) as u8;
+                                    window.title[chunk * 3 + byte] =
+                                        if value == 0 || (32..127).contains(&value) {
+                                            value
+                                        } else {
+                                            b'?'
+                                        };
+                                }
+                                scene_dirty = true;
+                            }
+                        }
+                    } else {
+                        let _ = sys::send_message(pid, protocol::REJECT);
+                    }
+                }
                 protocol::CONFIGURE => {
-                    let config = Configuration::decode(message)
-                        .filter(|c| c.fits_display(info.width, info.height));
-                    if config.is_none()
+                    let config = Configuration::decode(message).filter(|c| {
+                        c.width <= info.width
+                            && c.height
+                                + TITLE_H as usize
+                                + usize::from(work.top)
+                                + usize::from(work.bottom)
+                                <= info.height
+                    });
+                    if Some(pid) == shell_pid
+                        || config.is_none()
                         || sys::surface_status(pid)
                             .map(|(_, dead)| dead)
                             .unwrap_or(true)
@@ -540,7 +602,7 @@ pub extern "C" fn user_main() {
                             continue;
                         }
                         let slot = free_slot(&windows[..used]);
-                        windows[used] = Some(new_window(pid, EMPTY_APP, slot, used));
+                        windows[used] = Some(new_window(pid, slot, used));
                         used += 1;
                         focused = pid;
                         focus(pid);
@@ -555,9 +617,13 @@ pub extern "C" fn user_main() {
                     window.reply = Some(protocol::ACCEPT);
                     window.focus_event = Some(window.pid == focused);
                     window.x = window.x.clamp(0, info.width as i32 - window.width as i32);
-                    window.y = window
-                        .y
-                        .clamp(28, info.height as i32 - 32 - TITLE_H - window.height as i32);
+                    window.y = window.y.clamp(
+                        i32::from(work.top),
+                        info.height as i32
+                            - i32::from(work.bottom)
+                            - TITLE_H
+                            - window.height as i32,
+                    );
                     // SAFETY: The cache slot uniquely belongs to this live window.
                     // Clear it before exposing native alpha pixels or reusing it.
                     unsafe {
@@ -584,6 +650,12 @@ pub extern "C" fn user_main() {
                     }
                 }
                 protocol::COMMIT => {
+                    if shell::authorized(pid, shell_pid) && shell_connected {
+                        if shell_commit.is_none() {
+                            shell_commit = Some(message & protocol::SERIAL);
+                        }
+                        continue;
+                    }
                     if let Some(index) = existing {
                         let window = windows[index].as_mut().expect("registered window");
                         if window.native && window.commit.is_none() {
@@ -592,6 +664,10 @@ pub extern "C" fn user_main() {
                     }
                 }
                 protocol::CLOSE => {
+                    if shell::authorized(pid, shell_pid) && shell_connected {
+                        revoke_desktop = true;
+                        continue;
+                    }
                     if let Some(index) = existing {
                         let window = windows[index].as_mut().expect("registered window");
                         if window.native {
@@ -600,6 +676,26 @@ pub extern "C" fn user_main() {
                     }
                 }
                 _ => {}
+            }
+        }
+        if revoke_desktop {
+            shell_connected = false;
+            shell_commit = None;
+            shell_release = None;
+            shell_pointer = None;
+            work = WorkArea { top: 0, bottom: 0 };
+            display.clear_background();
+            old_bounds = (0, 0, info.width, info.height);
+            scene_dirty = true;
+            if Some(focused) == shell_pid {
+                focused = windows[..used]
+                    .iter()
+                    .rev()
+                    .flatten()
+                    .next()
+                    .map(|w| w.pid)
+                    .unwrap_or(0);
+                focus(focused);
             }
         }
         // Native exit/close frees the WM cache slot; legacy text apps retain their
@@ -630,7 +726,7 @@ pub extern "C" fn user_main() {
                     focused = if used > 0 {
                         windows[used - 1].unwrap().pid
                     } else {
-                        0
+                        shell_pid.unwrap_or(0)
                     };
                     focus(focused);
                 }
@@ -648,24 +744,8 @@ pub extern "C" fn user_main() {
                 let w = windows[i].unwrap();
                 hit(mx, my, w.x, w.y, w.width as i32, w.height as i32 + TITLE_H)
             });
-            if window_hit.is_none() && my >= 40 && my < 120 {
-                let index = ((mx - 18).max(0) / 100) as usize;
-                if index < count && used < MAX {
-                    let app = apps[index];
-                    match sys::spawn(string(&app.path)) {
-                        Ok(pid) => {
-                            let slot = free_slot(&windows[..used]);
-                            windows[used] = Some(new_window(pid, app, slot, used));
-                            used += 1;
-                            focused = pid;
-                            focus(pid);
-                            println!("[desktop] launched {} pid={}", string(&app.name), pid);
-                            scene_dirty = true;
-                        }
-                        Err(()) => println!("[desktop] launch failed: {}", string(&app.path)),
-                    }
-                }
-            } else if let Some(i) = window_hit {
+            desktop_capture = window_hit.is_none();
+            if let Some(i) = window_hit {
                 let w = windows[i].unwrap();
                 for j in i..used - 1 {
                     windows[j] = windows[j + 1];
@@ -686,7 +766,7 @@ pub extern "C" fn user_main() {
                         focused = if used > 0 {
                             windows[used - 1].unwrap().pid
                         } else {
-                            0
+                            shell_pid.unwrap_or(0)
                         };
                         focus(focused);
                     }
@@ -695,8 +775,8 @@ pub extern "C" fn user_main() {
                     println!("[desktop] drag started: pid={}", w.pid);
                 }
             } else {
-                focused = 0;
-                focus(0);
+                focused = shell_pid.unwrap_or(0);
+                focus(focused);
                 scene_dirty = true;
             }
         }
@@ -707,7 +787,10 @@ pub extern "C" fn user_main() {
             if used > 0 {
                 let w = windows[used - 1].as_mut().unwrap();
                 let x = (mx - dx).clamp(0, info.width as i32 - w.width as i32);
-                let y = (my - dy).clamp(28, info.height as i32 - 32 - TITLE_H - w.height as i32);
+                let y = (my - dy).clamp(
+                    i32::from(work.top),
+                    info.height as i32 - i32::from(work.bottom) - TITLE_H - w.height as i32,
+                );
                 scene_dirty |= (w.x, w.y) != (x, y);
                 (w.x, w.y) = (x, y);
             }
@@ -751,6 +834,105 @@ pub extern "C" fn user_main() {
                 }
             }
         }
+        if let Some(pid) = shell_pid {
+            if sys::surface_status(pid)
+                .map(|(_, dead)| dead)
+                .unwrap_or(true)
+            {
+                let _ = sys::waitpid(pid);
+                shell_pid = None;
+                shell_connected = false;
+                shell_pointer = None;
+                shell_commit = None;
+                shell_reply = None;
+                shell_release = None;
+                work = WorkArea { top: 0, bottom: 0 };
+                display.clear_background();
+                old_bounds = (0, 0, info.width, info.height);
+                compose = true;
+                println!("[compositor] desktop disconnected");
+                if focused == pid {
+                    focused = windows[..used]
+                        .iter()
+                        .rev()
+                        .flatten()
+                        .next()
+                        .map(|w| w.pid)
+                        .unwrap_or(0);
+                    focus(focused);
+                }
+            } else {
+                if let Some(serial) = shell_commit.take() {
+                    // SAFETY: Validated display geometry bounds the complete
+                    // pitched BACK buffer. The shell keeps submitted pixels
+                    // immutable. Snapshot ends before copying into packed BASE;
+                    // only PID 0 writes these disjoint buffers. Cache ownership
+                    // transfers before RELEASE, permitting later shell redraws.
+                    let result = unsafe {
+                        sys::snapshot(
+                            pid,
+                            &mut (&mut *core::ptr::addr_of_mut!(BACK))
+                                [..info.pitch / 4 * info.height],
+                        )
+                    };
+                    if result == Ok(false) {
+                        // SAFETY: These disjoint static allocations are owned
+                        // exclusively by the compositor; the snapshot borrow has
+                        // ended. The safe copier validates both complete layouts
+                        // and preserves padding before the frame is acknowledged.
+                        let copied = unsafe {
+                            userlib::ui::raster::copy_surface(
+                                &*core::ptr::addr_of!(BACK),
+                                &mut *core::ptr::addr_of_mut!(BASE),
+                                info.width,
+                                info.height,
+                                info.pitch / 4,
+                                info.width,
+                            )
+                        };
+                        if !copied {
+                            shell_reply = Some(protocol::REJECT);
+                            continue;
+                        }
+                        shell_release = Some(protocol::RELEASE | serial);
+                        compose = true;
+                        old_bounds = (0, 0, info.width, info.height);
+                        display.damage.mark(0, 0, info.width, info.height);
+                        println!("[compositor] desktop surface committed");
+                    } else {
+                        shell_reply = Some(protocol::REJECT);
+                    }
+                }
+                if let Some(reply) = shell_reply {
+                    if sys::send_message(pid, reply).is_ok() {
+                        shell_reply = None;
+                    }
+                }
+                if let Some(reply) = shell_release {
+                    if sys::send_message(pid, reply).is_ok() {
+                        shell_release = None;
+                    }
+                }
+                let over_window = windows[..used]
+                    .iter()
+                    .flatten()
+                    .any(|w| hit(mx, my, w.x, w.y, w.width as i32, w.height as i32 + TITLE_H));
+                if shell_connected && (!over_window || desktop_capture) && drag.is_none() {
+                    let buttons = if desktop_capture {
+                        buttons
+                    } else {
+                        buttons & !1
+                    };
+                    let payload = shell::pointer(mx as u16, my as u16, buttons);
+                    if shell_pointer != Some(payload) && sys::send_message(pid, payload).is_ok() {
+                        shell_pointer = Some(payload);
+                    }
+                }
+            }
+        }
+        if !down {
+            desktop_capture = false;
+        }
         if compose {
             let mut bounds = (info.width, info.height, 0, 0);
             for window in windows[..used].iter().flatten() {
@@ -766,16 +948,12 @@ pub extern "C" fn user_main() {
             // Restore and compose bottom-to-top on *any* content change. Glass
             // depends on lower layers even if its own client's revision is stable.
             // This also prevents repeatedly blurring the previous glass result.
-            display.desktop(
-                &apps[..count],
-                wallpaper,
-                (
-                    old_bounds.0.min(bounds.0),
-                    old_bounds.1.min(bounds.1),
-                    old_bounds.2.max(bounds.2),
-                    old_bounds.3.max(bounds.3),
-                ),
-            );
+            display.restore_background((
+                old_bounds.0.min(bounds.0),
+                old_bounds.1.min(bounds.1),
+                old_bounds.2.max(bounds.2),
+                old_bounds.3.max(bounds.3),
+            ));
             for window in windows[..used].iter().flatten() {
                 display.window(window, window.pid == focused);
             }
@@ -800,12 +978,12 @@ fn free_slot(windows: &[Option<Window>]) -> usize {
         .find(|slot| !windows.iter().flatten().any(|w| w.cache_slot == *slot))
         .expect("free cache slot")
 }
-fn new_window(pid: u32, app: App, cache_slot: usize, index: usize) -> Window {
+fn new_window(pid: u32, cache_slot: usize, index: usize) -> Window {
     let mut title = [0; protocol::TITLE_BYTES];
-    title[..12].copy_from_slice(&app.name);
+    title[..11].copy_from_slice(b"Application");
     Window {
         pid,
-        app,
+        large: false,
         x: 80 + index as i32 * 12,
         y: 126 + (index as i32 * 2).min(6),
         exited: false,

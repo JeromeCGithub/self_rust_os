@@ -87,6 +87,7 @@ pub fn console_write(buf: &[u8]) -> usize {
 
 /// Blocking read from a file descriptor (`STDIN_FD` = keyboard).
 /// Returns the number of bytes read.
+/// A keyboard wake without copied bytes returns zero; callers should retry.
 pub fn read(fd: u64, buf: &mut [u8]) -> usize {
     unsafe {
         syscall(

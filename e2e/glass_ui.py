@@ -88,6 +88,7 @@ def main():
                 click(150, 65)
                 wait('[hello-ui] ready: 640x400 glass')
                 wait('[hello-ui] invalid requests rejected')
+                wait('[hello-ui] desktop role denied')
                 move(900, 700)
                 time.sleep(.5)
                 glass = shot('desktop-glass')
@@ -102,7 +103,10 @@ def main():
                 # Button activates once on release, and not when released outside.
                 offset = log.stat().st_size
                 move(140, 298)
+                hover = shot('desktop-glass-hover').getpixel((500, 284))
                 button(True)
+                pressed = shot('desktop-glass-pressed').getpixel((500, 284))
+                assert hover != pressed, f'pressed glass button lacks visual feedback: hover={hover}, pressed={pressed}'
                 assert '[hello-ui] accent changed' not in log.read_text()[offset:]
                 button(False)
                 wait('[hello-ui] accent changed: 1', offset)

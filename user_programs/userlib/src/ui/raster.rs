@@ -1,5 +1,38 @@
 //! Allocation-free, pitch-aware software drawing. Pixels use premultiplied ARGB.
 
+/// Copies visible rows between owned surfaces with independent pixel strides.
+/// Rejects inconsistent/overflowing geometry before writing any destination pixel.
+pub fn copy_surface(
+    source: &[u32],
+    destination: &mut [u32],
+    width: usize,
+    height: usize,
+    source_stride: usize,
+    destination_stride: usize,
+) -> bool {
+    if width == 0 || height == 0 || width > source_stride || width > destination_stride {
+        return false;
+    }
+    let source_end = (height - 1)
+        .checked_mul(source_stride)
+        .and_then(|n| n.checked_add(width));
+    let destination_end = (height - 1)
+        .checked_mul(destination_stride)
+        .and_then(|n| n.checked_add(width));
+    if source_end.map(|end| end > source.len()).unwrap_or(true)
+        || destination_end
+            .map(|end| end > destination.len())
+            .unwrap_or(true)
+    {
+        return false;
+    }
+    for y in 0..height {
+        destination[y * destination_stride..y * destination_stride + width]
+            .copy_from_slice(&source[y * source_stride..y * source_stride + width]);
+    }
+    true
+}
+
 /// A premultiplied color; construct with straight RGB and alpha components.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Color(pub u32);
@@ -209,6 +242,26 @@ impl<'a> Canvas<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn surface_copy_preserves_padding_guards_and_rejects_partial_updates() {
+        let source = [1, 2, 99, 99, 3, 4, 99, 99];
+        let mut destination = [42; 8];
+        assert!(copy_surface(&source, &mut destination, 2, 2, 4, 3));
+        assert_eq!(destination, [1, 2, 42, 3, 4, 42, 42, 42]);
+        let before = destination;
+        for (w, h, src, dst) in [
+            (3, 2, 2, 3),
+            (2, 5, 4, 3),
+            (2, 2, usize::MAX, 3),
+            (0, 2, 4, 3),
+        ] {
+            assert!(!copy_surface(&source, &mut destination, w, h, src, dst));
+            assert_eq!(
+                destination, before,
+                "failed copy must leave the destination intact"
+            );
+        }
+    }
     #[test]
     fn rounded_coverage_handles_large_geometry_and_preserves_clear_corners() {
         assert_eq!(coverage(0, 0, i32::MAX, i32::MAX, i32::MAX), 0);

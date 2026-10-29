@@ -18,6 +18,7 @@ pub extern "C" fn user_main() {
         Window::create(WindowOptions::new("bad\n")),
         Err(Error::InvalidTitle)
     ));
+    verify_desktop_role();
     let window = Window::create(
         WindowOptions::new("Hello / Glass")
             .content_size(640, 400)
@@ -83,5 +84,28 @@ fn update(state: &mut State, action: Action) {
             state.changes = state.changes.wrapping_add(1);
             println!("[hello-ui] accent changed: {}", state.changes);
         }
+    }
+}
+
+fn verify_desktop_role() {
+    use userlib::ui::{desktop_protocol, protocol};
+    sys::send_message(0, desktop_protocol::DESKTOP).expect("role probe");
+    let start = sys::ticks();
+    loop {
+        if let Some((sender, message)) = sys::receive_message().expect("role reply") {
+            assert_eq!(sender, 0);
+            assert_eq!(
+                message,
+                protocol::REJECT,
+                "ordinary apps cannot claim the desktop role"
+            );
+            println!("[hello-ui] desktop role denied");
+            break;
+        }
+        assert!(
+            sys::ticks().wrapping_sub(start) < 36,
+            "desktop role probe timeout"
+        );
+        sys::sleep_ticks(1).expect("role wait");
     }
 }

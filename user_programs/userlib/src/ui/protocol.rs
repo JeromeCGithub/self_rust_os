@@ -31,10 +31,10 @@ pub struct Configuration {
     pub material: Material,
 }
 impl Configuration {
-    /// Checks that content, titlebar and desktop panels fit the display.
+    /// Preflights content plus decorations. The compositor enforces the actual
+    /// workspace requested by the desktop environment when accepting a window.
     pub fn fits_display(self, width: usize, height: usize) -> bool {
-        // 28px top panel/placement margin + 28px titlebar + 32px bottom panel.
-        self.width <= width && self.height <= height.saturating_sub(88)
+        self.width <= width && self.height <= height.saturating_sub(28)
     }
     pub fn encode(self) -> u32 {
         CONFIGURE
@@ -69,14 +69,16 @@ impl Configuration {
 mod tests {
     use super::*;
     #[test]
-    fn content_reserves_space_for_title_and_desktop_panels() {
+    fn client_geometry_reserves_only_decorations_and_leaves_panels_to_the_shell() {
         let mut config = Configuration {
             width: 640,
             height: 400,
             material: Material::Glass,
         };
         assert!(config.fits_display(1920, 1080));
-        assert!(!config.fits_display(640, 480));
+        assert!(config.fits_display(640, 480));
+        assert!(config.fits_display(640, 428));
+        assert!(!config.fits_display(640, 427));
         config.height = 392;
         assert!(config.fits_display(640, 480));
         assert!(!config.fits_display(639, 480));

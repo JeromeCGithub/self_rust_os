@@ -25,7 +25,7 @@ Unused arguments are zero in SDK wrappers. `ptr` means a user virtual address.
 | --- | --- | --- | --- |
 | 0 | `exit` | exit code | Terminates current process; no return |
 | 1 | `console_write` | byte ptr, byte length | Bytes written; text renders to private surface unless client drawing enabled; also serial diagnostics |
-| 2 | `read` | fd, buffer ptr, byte capacity | Blocking keyboard read; only fd 0 supported; focused process only |
+| 2 | `read` | fd, buffer ptr, byte capacity | Keyboard read; only fd 0 supported; focused process only; after blocking/wakeup, zero means retry (the wake itself does not fill the buffer) |
 | 3 | `ticks` | none | Monotonic PIT tick count, not milliseconds/wall time |
 | 4 | `read_nb` | fd, buffer ptr, byte capacity | Nonblocking keyboard read; zero when no input or unfocused |
 | 5 | `ls` | path ptr, output ptr, max entries | Entry count; each entry is 11 raw 8.3 filename bytes plus one attribute byte; directory bit `0x10` |
@@ -106,6 +106,9 @@ The SDK returns `MessageError::Full` or `MessageError::Unavailable`, and decodes
 received values to `Option<(u32, u32)>`. PID 0 remains the existing privileged
 display-owner exception; this is not general IPC permission/capability management.
 The [Ring 3 window protocol](ui.md#window-protocol-version-1) uses this transport.
+The [desktop shell extension](desktop-environment.md#shell-message-extension)
+also runs entirely in userspace. The kernel does not interpret shell-role or
+workspace messages; PID 0 authenticates its spawned DE and accepts/rejects requests.
 Native clients retain immutable submitted surface pixels until the WM acknowledges
 its snapshot copy. Existing syscalls 0–19 and legacy XRGB applications are preserved.
 

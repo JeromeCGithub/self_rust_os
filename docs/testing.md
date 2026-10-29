@@ -94,6 +94,8 @@ git diff --check
 
 The desktop test builds no image itself: rebuilding first is mandatory. Its current
 checks cover wallpaper/launch readiness, Portal commands and file writes/reads,
+separate compositor/DE processes, two desktop-surface commits, exact default space
+wallpaper pixels, and DE-exit isolation while a foreground client remains usable,
 concurrent Snake, focus restoration, drag/close interactions, and launching Forge,
 Hello and Spin. Review the actual assertions before making stronger coverage claims.
 For example, an echoed command does not by itself verify successful execution.

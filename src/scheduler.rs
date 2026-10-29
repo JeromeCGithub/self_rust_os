@@ -614,7 +614,10 @@ pub extern "C" fn schedule(save_rsp: u64) -> u64 {
                 // Actually, blockers set state before returning sentinel, so we
                 // just save the RSP here.
                 pcb.kernel_rsp = save_rsp;
-                if matches!(pcb.block_reason, BlockReason::Timer(_)) {
+                if matches!(pcb.block_reason, BlockReason::Timer(_) | BlockReason::Keyboard) {
+                    // A keyboard wake does not fill the user buffer: returning
+                    // zero makes read callers retry, rather than reusing stale
+                    // bytes with the saved syscall number as a fake byte count.
                     // SAFETY: save_rsp is the aligned SavedContext on this
                     // process's live kernel stack, supplied by syscall_entry.
                     // IRQs are disabled and no other context accesses it.
