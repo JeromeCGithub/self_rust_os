@@ -135,12 +135,22 @@ fn large_binary_and_padded_surfaces_survive_spawn_snapshot_and_reap() {
     );
     for _ in 0..3 {
         let first = scheduler::spawn_process(&[0xc3], 0).expect("private surface mapping");
+        assert_eq!(scheduler::surface_status(u32::MAX), u64::MAX - 1);
+        assert_eq!(scheduler::surface_status(0), u64::MAX - 1);
+        assert_eq!(scheduler::surface_status(first), 0);
         assert_eq!(scheduler::snapshot(first, &mut pixels), 0);
         assert!(
             pixels.iter().all(|byte| *byte == 0),
             "surface must be entirely zeroed, including its last partial page"
         );
         activate(first, &mut context);
+        assert_eq!(scheduler::present_surface(), 0);
+        assert_eq!(scheduler::surface_status(first), 2, "publication advances revision");
+        scheduler::surface_write(b"x");
+        assert_eq!(scheduler::surface_status(first), 4, "console output publishes too");
+        scheduler::graphics_mode();
+        scheduler::surface_write(b"diagnostic");
+        assert_eq!(scheduler::surface_status(first), 4, "graphics logs do not change pixels");
         let last = (self_rust_os::userspace::USER_FRAMEBUFFER + BYTES as u64 - 1) as *mut u8;
         // SAFETY: first is current and owns this fully mapped, private
         // pitch * height surface. No references span a context change.
@@ -170,7 +180,9 @@ fn large_binary_and_padded_surfaces_survive_spawn_snapshot_and_reap() {
             );
             assert!(scheduler::kill(pid).is_some());
             assert_eq!(scheduler::snapshot(pid, &mut pixels), 1);
+            assert_eq!(scheduler::surface_status(pid) & 1, 1, "exit is observable without copying pixels");
             scheduler::waitpid(pid);
+            assert_eq!(scheduler::surface_status(pid), u64::MAX - 1);
             assert_eq!(scheduler::snapshot(pid, &mut pixels), u64::MAX - 1);
         }
         // SAFETY: PID 0's live code mapping covers this byte. Spawning a
@@ -178,6 +190,51 @@ fn large_binary_and_padded_surfaces_survive_spawn_snapshot_and_reap() {
         let last = self_rust_os::userspace::USER_CODE_START + 2 * 1920 * 1080 * 4 + 65535;
         assert_eq!(unsafe { (last as *const u8).read_volatile() }, 0xc3);
     }
+    timed_wait_checks(context);
+}
+
+/// A sleeping compositor yields, wakes from a kernel-mode timer, and can be killed.
+fn timed_wait_checks(mut context: u64) {
+    // Match syscall-entry interrupt state when calling scheduler primitives.
+    x86_64::instructions::interrupts::disable();
+    assert_eq!(scheduler::current_pid(), Some(0));
+    assert_eq!(scheduler::sleep_ticks(0), 0, "zero duration must not block");
+    // Make a representable deadline overflow irrespective of the current tick.
+    // The API rejects durations above i64::MAX as well as overflowing deadlines.
+    assert_eq!(scheduler::sleep_ticks(u64::MAX), u64::MAX - 1);
+    let child = scheduler::spawn_process(&[0xc3], 0).expect("timer child");
+    let before = self_rust_os::interrupts::ticks();
+    assert_eq!(scheduler::sleep_ticks(1), scheduler::PROCESS_BLOCK_SENTINEL);
+    context = scheduler::schedule(context);
+    assert_eq!(scheduler::current_pid(), Some(child), "sleeper must yield");
+    assert_eq!(scheduler::sleep_ticks(1), scheduler::PROCESS_BLOCK_SENTINEL);
+    // With both processes blocked, schedule must idle and the timer must wake
+    // them even though it interrupted Ring 0 rather than a user context.
+    // SAFETY: IDT and both contexts are initialized; this test deliberately
+    // unmasks IRQ0 only after blocking has made a valid idle context available.
+    unsafe { self_rust_os::interrupts::PICS.lock().write_masks(0xf8, 0xef); }
+    context = scheduler::schedule(context);
+    assert!(self_rust_os::interrupts::ticks() > before);
+    // SAFETY: Returned context points into the live process's owned kernel
+    // stack, just restored by schedule with IRQs disabled. Read only its RAX.
+    assert_eq!(unsafe { (*(context as *const scheduler::SavedContext)).rax }, 0,
+        "sleep must resume with the ABI success return value");
+    // SAFETY: Return to deterministic manual scheduling for the rest of the test.
+    unsafe { self_rust_os::interrupts::PICS.lock().write_masks(0xf9, 0xef); }
+    activate(child, &mut context);
+    assert_eq!(scheduler::sleep_ticks(1), scheduler::PROCESS_BLOCK_SENTINEL);
+    context = scheduler::schedule(context);
+    assert_eq!(scheduler::current_pid(), Some(0));
+    assert!(scheduler::kill(child).is_some());
+    // SAFETY: The live PID 0 context is established, as above.
+    unsafe { self_rust_os::interrupts::PICS.lock().write_masks(0xf8, 0xef); }
+    assert_eq!(scheduler::sleep_ticks(2), scheduler::PROCESS_BLOCK_SENTINEL);
+    scheduler::schedule(context);
+    // SAFETY: Mask IRQ0 again before returning to the harness.
+    unsafe { self_rust_os::interrupts::PICS.lock().write_masks(0xf9, 0xef); }
+    assert_eq!(scheduler::current_pid(), Some(0), "killed sleeper cannot run");
+    assert_eq!(scheduler::waitpid(child), 9);
+    x86_64::instructions::interrupts::enable();
 }
 
 // Use the scheduler's real page-table switch without restoring a Ring 3

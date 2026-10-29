@@ -22,7 +22,7 @@ do not change the OS toolchain merely to work around a missing host utility.
 | `cargo build --release --features grub` | Compile optimized GRUB kernel |
 | `./tools/build-user.sh` | Build every application; generate flat binaries and section metadata |
 | `./tools/build-user.sh portal` | Build one application and regenerate its artifacts |
-| `./tools/build-grub-disk.sh` | Build applications/kernel and overwrite `target/grub-disk.img` |
+| `./tools/build-grub-disk.sh` | Build applications/release kernel and overwrite `target/grub-disk.img` |
 | `cargo run` | Build the desktop disk and start graphical QEMU through the runner |
 | `RUSTOS_DISPLAY=none cargo run` | Same boot path without GUI; runs until terminated |
 | `python3 e2e/desktop.py` | Runtime desktop regression checks after a fresh disk build |

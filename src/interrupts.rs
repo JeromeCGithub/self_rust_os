@@ -177,6 +177,7 @@ extern "x86-interrupt" fn timer_entry(_frame: InterruptStackFrame) {
 /// New kernel RSP to switch to, or 0 to resume the interrupted context.
 extern "C" fn timer_dispatch(saved_rsp: u64) -> u64 {
     TICKS.fetch_add(1, Ordering::Relaxed);
+    crate::scheduler::wake_timers();
 
     // Notify the PIC that the interrupt has been handled.
     // SAFETY: We are in the timer IRQ handler.

@@ -66,6 +66,13 @@ pub const SYS_MKDIR: u64 = 12;
 /// Writes (width, height, pitch, bpp) as four u64 values to the user buffer.
 pub const SYS_FB_INFO: u64 = 13;
 
+/// Blocks the caller for a duration in PIT ticks.
+pub const SYS_SLEEP_TICKS: u64 = 17;
+/// Publishes a completed update to the caller's private drawing surface.
+pub const SYS_PRESENT_SURFACE: u64 = 18;
+/// Queries surface revision and exit status (display owner only).
+pub const SYS_SURFACE_STATUS: u64 = 19;
+
 /// Sentinel: the current process has exited, schedule another (don't save context).
 const PROCESS_EXIT_SENTINEL: u64 = u64::MAX;
 
@@ -230,6 +237,12 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
         SYS_WRITE => sys_write(arg1, arg2),
         SYS_READ => sys_read(arg1, arg2, arg3),
         SYS_TICKS => crate::interrupts::ticks(),
+        SYS_SLEEP_TICKS => crate::scheduler::sleep_ticks(arg1),
+        SYS_PRESENT_SURFACE => crate::scheduler::present_surface(),
+        SYS_SURFACE_STATUS => {
+            if crate::scheduler::current_pid() != Some(0) { return SYSCALL_ERROR; }
+            crate::scheduler::surface_status(arg1 as u32)
+        }
         SYS_READ_NB => sys_read_nb(arg1, arg2, arg3),
         SYS_LS => sys_ls(arg1, arg2, arg3),
         SYS_READ_FILE => sys_read_file(arg1, arg2, arg3),
@@ -242,9 +255,9 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
         SYS_FB_INFO => sys_fb_info(arg1),
         14 => {
             let size = crate::gfx::fb_info().pitch * crate::gfx::fb_info().height;
-            if crate::scheduler::current_pid() != Some(0) || arg3 != size as u64 || !validate_user_buffer(arg2, arg3) { return SYSCALL_ERROR; }
+            if crate::scheduler::current_pid() != Some(0) || (arg3 == 0 || arg3 > size as u64) || !validate_user_buffer(arg2, arg3) { return SYSCALL_ERROR; }
             // SAFETY: Caller and buffer were validated above.
-            let dest = unsafe { core::slice::from_raw_parts_mut(arg2 as *mut u8, size) };
+            let dest = unsafe { core::slice::from_raw_parts_mut(arg2 as *mut u8, arg3 as usize) };
             crate::scheduler::snapshot(arg1 as u32, dest)
         }
         16 => { crate::scheduler::graphics_mode(); 0 }
@@ -332,7 +345,6 @@ fn sys_write(buf_ptr: u64, len: u64) -> u64 {
 /// * `buf_ptr` - Virtual address of the user buffer.
 /// * `len` - Maximum bytes to read.
 fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
-    if !crate::scheduler::has_input_focus() { return crate::scheduler::block_on_keyboard(); }
     // Only stdin (fd 0) is supported.
     if fd != 0 {
         return SYSCALL_ERROR;
@@ -351,6 +363,8 @@ fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
         println!("[kernel] sys_read: invalid buffer range");
         return SYSCALL_ERROR;
     }
+
+    if !crate::scheduler::has_input_focus() { return crate::scheduler::block_on_keyboard(); }
 
     // SAFETY: The buffer range was validated to be within user-mapped memory.
     let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, len) };
@@ -422,30 +436,30 @@ fn sys_read_nb(fd: u64, buf_ptr: u64, len: u64) -> u64 {
         return 0;
     }
 
-    // Try to get a scancode without blocking.
-    let scancode = match crate::task::keyboard::try_pop_scancode() {
-        Some(sc) => sc,
-        None => return 0,
-    };
-
     let mut keyboard = INPUT_DECODER.lock();
-
-    if let Ok(Some(event)) = keyboard.add_byte(scancode) {
-        if let Some(key) = keyboard.process_keyevent(event) {
-            use pc_keyboard::DecodedKey;
-            if let DecodedKey::Unicode(c) = key {
-                let mut tmp = [0u8; 4];
-                let encoded = c.encode_utf8(&mut tmp);
-                if let Some(&b) = encoded.as_bytes().first() {
-                    // SAFETY: Buffer was validated.
-                    unsafe {
-                        core::ptr::write(buf_ptr as *mut u8, b);
+    // IRQs are disabled during the syscall, so at most the queue's 100
+    // existing scancodes can be consumed. Releases/modifiers must not hide
+    // a character already queued behind them from a nonblocking reader.
+    for _ in 0..100 {
+        let Some(scancode) = crate::task::keyboard::try_pop_scancode() else { return 0; };
+        if let Ok(Some(event)) = keyboard.add_byte(scancode) {
+            if let Some(key) = keyboard.process_keyevent(event) {
+                use pc_keyboard::DecodedKey;
+                if let DecodedKey::Unicode(c) = key {
+                    let mut tmp = [0u8; 4];
+                    let encoded = c.encode_utf8(&mut tmp);
+                    if let Some(&b) = encoded.as_bytes().first() {
+                        // SAFETY: Buffer was validated.
+                        unsafe {
+                            core::ptr::write(buf_ptr as *mut u8, b);
+                        }
+                        return 1;
                     }
-                    return 1;
                 }
             }
         }
     }
+
     0
 }
 
@@ -706,6 +720,15 @@ pub fn register_syscall_handler(idt: &mut x86_64::structures::idt::InterruptDesc
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test_case]
+    fn test_timed_wait_and_surface_metadata_reject_invalid_calls() {
+        assert_eq!(syscall_dispatch(17, 0, 0, 0), 0);
+        assert_eq!(syscall_dispatch(17, u64::MAX, 0, 0), SYSCALL_ERROR);
+        assert_eq!(syscall_dispatch(17, 1, 0, 0), SYSCALL_ERROR, "no current process");
+        assert_eq!(syscall_dispatch(18, 0, 0, 0), SYSCALL_ERROR);
+        assert_eq!(syscall_dispatch(19, 1, 0, 0), SYSCALL_ERROR, "metadata is compositor-only");
+    }
 
     #[test_case]
     fn test_unknown_syscall_returns_error() {

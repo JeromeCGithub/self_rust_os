@@ -4,15 +4,19 @@
 #![no_main]
 use font8x8::{UnicodeFonts, BASIC_FONTS};
 use userlib::{println, sys};
+mod damage;
+use damage::Damage;
 const MAX_W: usize = 1920;
 const MAX_H: usize = 1080;
 const MAX_PITCH: usize = 8192;
 struct Desktop {
     info: sys::FbInfo,
+    damage: Damage,
 }
 const MAX: usize = 6;
 static mut BACK: [u32; MAX_W * MAX_H] = [0; MAX_W * MAX_H];
 static mut SURFACE: [u32; MAX_PITCH / 4 * MAX_H] = [0; MAX_PITCH / 4 * MAX_H];
+static mut CACHE: [[u32; 488 * 288]; MAX] = [[0; 488 * 288]; MAX];
 static mut WALL: [u8; 57615] = [0; 57615];
 #[derive(Clone, Copy)]
 struct App {
@@ -30,29 +34,80 @@ struct Window {
     x: i32,
     y: i32,
     exited: bool,
+    cache_slot: usize,
+    revision: Option<(u64, bool)>,
 }
 fn string(bytes: &[u8]) -> &str {
     core::str::from_utf8(&bytes[..bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len())])
         .unwrap_or("")
 }
 impl Desktop {
-    fn pixel(&self, x: i32, y: i32, c: u32) {
+    fn pixel(&mut self, x: i32, y: i32, c: u32) {
         if x >= 0 && y >= 0 && x < self.info.width as i32 && y < self.info.height as i32 {
             // SAFETY: Validated dimensions and the coordinate bounds keep
             // this index inside BACK. Only this compositor writes its buffer.
             unsafe {
-                BACK[y as usize * self.info.width + x as usize] = c;
+                let pixel = core::ptr::addr_of_mut!(BACK)
+                    .cast::<u32>()
+                    .add(y as usize * self.info.width + x as usize);
+                if pixel.read() != c {
+                    pixel.write(c);
+                    self.damage.mark(x as usize, y as usize, 1, 1);
+                }
             }
         }
     }
-    fn rect(&self, x: i32, y: i32, w: i32, h: i32, c: u32) {
+    fn present(&mut self, mx: i32, my: i32) {
+        // Copy adjacent dirty tiles as runs, clipping the partial right/bottom
+        // tiles to the actual display. BACK holds the scene without the cursor.
+        let info = self.info;
+        self.damage.flush(info.width, info.height, |x, y, width| {
+            // SAFETY: Validated geometry and clipped tile bounds keep source
+            // rows inside exclusively owned BACK and destination rows inside
+            // the mapped, aligned pitch * height MMIO region. They are disjoint;
+            // no borrow survives presentation.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    core::ptr::addr_of!(BACK)
+                        .cast::<u32>()
+                        .add(y * info.width + x),
+                    (sys::FRAMEBUFFER_ADDR + y * info.pitch + x * 4) as *mut u32,
+                    width,
+                );
+            }
+        });
+        for y in 0..14 {
+            for x in 0..=y / 2 {
+                let (px, py) = (mx + x, my + y);
+                if px >= 0 && py >= 0 && px < self.info.width as i32 && py < self.info.height as i32
+                {
+                    let color = if x == 0 || x == y / 2 {
+                        0x081321
+                    } else {
+                        0xffffff
+                    };
+                    // SAFETY: Clipped coordinates address one aligned pixel in
+                    // this process's mapped display; the compositor is its sole
+                    // owner. The cursor is deliberately absent from BACK so its
+                    // previous position can be restored without repainting.
+                    unsafe {
+                        ((sys::FRAMEBUFFER_ADDR + py as usize * self.info.pitch + px as usize * 4)
+                            as *mut u32)
+                            .write_volatile(color);
+                    }
+                }
+            }
+        }
+    }
+
+    fn rect(&mut self, x: i32, y: i32, w: i32, h: i32, c: u32) {
         for yy in y.max(0)..(y + h).min(self.info.height as i32) {
             for xx in x.max(0)..(x + w).min(self.info.width as i32) {
                 self.pixel(xx, yy, c);
             }
         }
     }
-    fn text(&self, x: i32, y: i32, s: &str, c: u32) {
+    fn text(&mut self, x: i32, y: i32, s: &str, c: u32) {
         for (i, ch) in s.chars().enumerate() {
             if let Some(g) = BASIC_FONTS.get(ch) {
                 for (yy, b) in g.iter().enumerate() {
@@ -94,12 +149,14 @@ fn discover(apps: &mut [App; MAX]) -> usize {
     count
 }
 impl Desktop {
-    fn desktop(&self, apps: &[App], wallpaper: bool) {
-        for y in 0..self.info.height {
-            for x in 0..self.info.width {
+    fn desktop(&mut self, apps: &[App], wallpaper: bool, bounds: (usize, usize, usize, usize)) {
+        // Restore only the workspace exposed by a changed window layout.
+        let (left, top, right, bottom) = bounds;
+        for y in top..bottom {
+            let wall_row = 15 + (y * 120 / self.info.height) * 160 * 3;
+            for x in left..right {
                 let c = if wallpaper {
-                    let i =
-                        15 + ((y * 120 / self.info.height) * 160 + x * 160 / self.info.width) * 3;
+                    let i = wall_row + (x * 160 / self.info.width) * 3;
                     // SAFETY: Scaling bounds this RGB triplet to WALL's
                     // 160x120 payload, loaded before the rendering loop.
                     unsafe {
@@ -154,17 +211,47 @@ impl Desktop {
             0x9bb2c8,
         );
     }
-    fn window(&self, win: &mut Window, active: bool) {
-        // SAFETY: The validated geometry fits SURFACE, including pitch padding.
-        // This single-threaded compositor exclusively owns the scratch buffer.
+    fn update_surface(&self, win: &mut Window) -> bool {
+        let status = sys::surface_status(win.pid);
+        if win.revision == status.ok() && win.revision.is_some() {
+            return false;
+        }
+        let scale = string(&win.app.name) == "SNAKE";
+        let words = if scale {
+            self.info.pitch / 4 * self.info.height
+        } else {
+            287 * (self.info.pitch / 4) + 488
+        };
+        // SAFETY: Validated geometry bounds the full scratch surface, including
+        // pitch padding. This process exclusively owns SURFACE and CACHE;
+        // cache_slot is unique among live windows and bounded by MAX.
         let result = unsafe {
             sys::snapshot(
                 win.pid,
-                &mut (&mut *core::ptr::addr_of_mut!(SURFACE))
-                    [..self.info.pitch / 4 * self.info.height],
+                &mut (&mut *core::ptr::addr_of_mut!(SURFACE))[..words],
             )
         };
         win.exited = result == Ok(true);
+        win.revision = status.ok();
+        for y in 0..288 {
+            for x in 0..488 {
+                let sx = if scale { x * self.info.width / 488 } else { x };
+                let sy = if scale { y * self.info.height / 288 } else { y };
+                // SAFETY: Sampling is within the validated scratch dimensions;
+                // the exclusive snapshot borrow has ended. The cache index is
+                // bounded by 488x288, and only this compositor accesses it.
+                unsafe {
+                    CACHE[win.cache_slot][y * 488 + x] = if result.is_err() {
+                        0x101827
+                    } else {
+                        SURFACE[sy * (self.info.pitch / 4) + sx]
+                    };
+                }
+            }
+        }
+        true
+    }
+    fn window(&mut self, win: &Window, active: bool) {
         self.rect(win.x + 5, win.y + 5, 492, 326, 0x081321);
         self.rect(
             win.x - 1,
@@ -185,18 +272,11 @@ impl Desktop {
             self.text(win.x + 200, win.y + 10, "Exited", 0x99b4c9);
         }
         self.text(win.x + 465, win.y + 10, "x", 0xffa9a9);
-        let scale = string(&win.app.name) == "SNAKE";
         for y in 0..288 {
             for x in 0..488 {
-                let sx = if scale { x * self.info.width / 488 } else { x };
-                let sy = if scale { y * self.info.height / 288 } else { y };
-                let c = if result.is_err() {
-                    0x101827
-                } else {
-                    // SAFETY: Sampling stays within the validated width,
-                    // height and pitch. snapshot's mutable borrow has ended.
-                    unsafe { SURFACE[sy * (self.info.pitch / 4) + sx] }
-                };
+                // SAFETY: cache_slot uniquely belongs to this live window;
+                // update_surface initialized all in-bounds pixels before use.
+                let c = unsafe { CACHE[win.cache_slot][y * 488 + x] };
                 self.pixel(win.x + x as i32, win.y + 28 + y as i32, c);
             }
         }
@@ -224,7 +304,10 @@ pub extern "C" fn user_main() {
             sys::exit(1)
         }
     };
-    let display = Desktop { info };
+    let mut display = Desktop {
+        info,
+        damage: Damage::new(),
+    };
     // SAFETY: WALL is exclusively borrowed for this synchronous read. The
     // returned size and header are checked before rendering its pixel data.
     let wallpaper = unsafe {
@@ -239,11 +322,16 @@ pub extern "C" fn user_main() {
     let mut used = 0;
     let mut previous = 0;
     let mut drag: Option<(i32, i32)> = None;
+    let mut scene_dirty = true;
+    let mut old_bounds = (0, 0, info.width, info.height);
+    display.damage.mark(0, 0, info.width, info.height);
+    let mut old_mouse = None;
     loop {
         let (mx, my, buttons) = sys::mouse();
         let down = buttons & 1 != 0;
         let click = down && previous & 1 == 0;
         if click {
+            scene_dirty = true;
             let window_hit = (0..used).rev().find(|&i| {
                 let w = windows[i].unwrap();
                 hit(mx, my, w.x, w.y, 488, 316)
@@ -254,12 +342,22 @@ pub extern "C" fn user_main() {
                     let app = apps[index];
                     match sys::spawn(string(&app.path)) {
                         Ok(pid) => {
+                            let cache_slot = (0..MAX)
+                                .find(|slot| {
+                                    !windows[..used]
+                                        .iter()
+                                        .flatten()
+                                        .any(|window| window.cache_slot == *slot)
+                                })
+                                .expect("free window cache slot");
                             windows[used] = Some(Window {
                                 pid,
                                 app,
                                 x: 80 + used as i32 * 12,
                                 y: 126 + (used as i32 * 2).min(6),
                                 exited: false,
+                                cache_slot,
+                                revision: None,
                             });
                             used += 1;
                             focus(pid);
@@ -301,45 +399,52 @@ pub extern "C" fn user_main() {
         if let Some((dx, dy)) = drag {
             if used > 0 {
                 let w = windows[used - 1].as_mut().unwrap();
-                w.x = (mx - dx).clamp(0, info.width as i32 - 488);
-                w.y = (my - dy).clamp(28, info.height as i32 - 32 - 316);
+                let x = (mx - dx).clamp(0, info.width as i32 - 488);
+                let y = (my - dy).clamp(28, info.height as i32 - 32 - 316);
+                scene_dirty |= (w.x, w.y) != (x, y);
+                (w.x, w.y) = (x, y);
             }
         }
-        display.desktop(&apps[..count], wallpaper);
-        for i in 0..used {
-            display.window(windows[i].as_mut().unwrap(), i == used - 1);
+        let mut compose = scene_dirty;
+        for window in windows[..used].iter_mut().flatten() {
+            compose |= display.update_surface(window);
         }
-        for y in 0..14 {
-            for x in 0..=y / 2 {
-                display.pixel(
-                    mx + x,
-                    my + y,
-                    if x == 0 || x == y / 2 {
-                        0x081321
-                    } else {
-                        0xffffff
-                    },
-                );
+        if scene_dirty {
+            let mut bounds = (info.width, info.height, 0, 0);
+            for window in windows[..used].iter().flatten() {
+                bounds.0 = bounds.0.min((window.x - 1).max(0) as usize);
+                bounds.1 = bounds.1.min((window.y - 1).max(0) as usize);
+                bounds.2 = bounds.2.max((window.x as usize + 497).min(info.width));
+                bounds.3 = bounds.3.max((window.y as usize + 331).min(info.height));
+            }
+            display.desktop(
+                &apps[..count],
+                wallpaper,
+                (
+                    old_bounds.0.min(bounds.0),
+                    old_bounds.1.min(bounds.1),
+                    old_bounds.2.max(bounds.2),
+                    old_bounds.3.max(bounds.3),
+                ),
+            );
+            old_bounds = bounds;
+            scene_dirty = false;
+        }
+        if compose {
+            for i in 0..used {
+                display.window(windows[i].as_ref().unwrap(), i == used - 1);
             }
         }
-        // SAFETY: Geometry validation bounds every source row within BACK.
-        // The kernel maps the full pitch * height display at FRAMEBUFFER_ADDR;
-        // its writable MMIO pages are disjoint from BACK and u32-aligned.
-        // Only this process owns the display, and no references are retained.
-        unsafe {
-            let ptr = core::ptr::addr_of!(BACK) as *const u32;
-            for y in 0..info.height {
-                core::ptr::copy_nonoverlapping(
-                    ptr.add(y * info.width),
-                    (sys::FRAMEBUFFER_ADDR + y * info.pitch) as *mut u32,
-                    info.width,
-                );
+        let moved = old_mouse != Some((mx, my));
+        if moved {
+            if let Some((x, y)) = old_mouse {
+                display.damage.mark(x as usize, y as usize, 8, 14);
             }
+            display.damage.mark(mx as usize, my as usize, 8, 14);
         }
+        display.present(mx, my);
+        old_mouse = Some((mx, my));
         previous = buttons;
-        let tick = sys::ticks();
-        while sys::ticks() == tick {
-            core::hint::spin_loop();
-        }
+        sys::sleep_ticks(1).expect("desktop timed wait");
     }
 }

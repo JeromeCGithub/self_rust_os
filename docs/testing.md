@@ -78,6 +78,10 @@ host device. `file.locking=off` permits attachment; it does not make concurrent 
 ```bash
 ./tools/build-grub-disk.sh
 python3 e2e/desktop.py
+python3 e2e/desktop_perf.py
+bash e2e/build_profile.sh
+rustc --edition=2021 --test user_programs/wm/src/damage.rs -o /tmp/rustos-damage-tests
+/tmp/rustos-damage-tests
 python3 -B -m unittest discover -s tools/tests -p 'test_*.py'
 python3 -B tools/check_docs.py
 git diff --check
@@ -107,13 +111,14 @@ and observations. If unavailable, explicitly leave that criterion unverified.
 
 Reproduced on pulled `main` commit `26edbc9` when preparing these guides:
 
-- `cargo test --lib` exits abnormally before test-case output. Its startup passes a
-  fixed `0xffff8000000a0000` framebuffer address even though console initialization
-  clears it. Inspect mappings and startup before assuming any unit case executed;
-  the observed abnormal exit alone does not establish the precise fault cause.
-- `cargo test --test keyboard_timer` fails with `ticks: 0 -> 0`. Kernel initialization
-  masks IRQ0 until scheduler startup; this standalone test never starts the scheduler
-  or explicitly unmasks the timer. Preserve the failing assertion when repairing it.
+- The unit harness's assumed framebuffer address previously caused an abnormal exit
+  before any cases. It now uses mapped RAM. This exposed a read-validation test
+  panic because focus was checked before invalid arguments; validation now runs first.
+- The standalone keyboard/timer harness previously failed with `ticks: 0 -> 0`.
+  It now unmasks IRQ0 explicitly after initialization, retaining its tick assertion.
+- The debug heap suite's 33,554,432 allocation stress loop timed out at 60 seconds
+  during performance work. The unchanged release suite passes. Do not raise the
+  timeout, reduce the loop, or report the debug suite as passing.
 - `tests/userspace.rs` currently tests constants/vector selection. Despite its older
   comments, it does not execute a user program and does not prove Ring 3 transitions.
 - `e2e/grub_test.py` expects old mode-13h/loading messages; it is not the current
@@ -122,7 +127,7 @@ Reproduced on pulled `main` commit `26edbc9` when preparing these guides:
 - Bootloader dependency builds can emit an unsupported `rustc-abi` target-field
   warning under the pinned nightly. Distinguish dependency warnings from project warnings.
 
-These are repair targets, not permission to skip required coverage or to report green.
+The remaining gaps are repair targets, not permission to skip required coverage or to report green.
 For unrelated documentation changes, disclose this baseline without pretending to
 have repaired kernel behavior. Runtime changes touching these paths must add the
 missing regression coverage and resolve or explicitly report outstanding blockers.

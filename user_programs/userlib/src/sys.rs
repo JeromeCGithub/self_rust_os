@@ -30,6 +30,13 @@ pub const SYS_MOUSE: u64 = 11;
 pub const SYS_MKDIR: u64 = 12;
 pub const SYS_FB_INFO: u64 = 13;
 
+/// Blocks the caller for a duration in PIT ticks.
+pub const SYS_SLEEP_TICKS: u64 = 17;
+/// Publishes a completed update to the caller's private drawing surface.
+pub const SYS_PRESENT_SURFACE: u64 = 18;
+/// Queries surface revision and exit status (display owner only).
+pub const SYS_SURFACE_STATUS: u64 = 19;
+
 /// Return value indicating a failed syscall.
 pub const SYSCALL_ERROR: u64 = u64::MAX - 1;
 
@@ -265,7 +272,7 @@ pub fn waitpid(pid: u32) -> Result<u64, ()> {
 
 /// Returns the current mouse state as `(x, y, buttons)`.
 ///
-/// `x` in `[0, 320)`, `y` in `[0, 200)`, `buttons`: bit 0 = left,
+/// Coordinates span the dimensions returned by fb_info; buttons: bit 0 = left,
 /// bit 1 = right, bit 2 = middle.
 pub fn mouse() -> (i32, i32, u8) {
     let packed = unsafe { syscall(SYS_MOUSE, 0, 0, 0) };
@@ -275,7 +282,8 @@ pub fn mouse() -> (i32, i32, u8) {
     (x, y, buttons)
 }
 
-/// Copies an application's private drawing surface into the compositor's buffer.
+/// Copies a nonempty prefix of an application's private drawing surface.
+/// The buffer must fit within pitch * height bytes; full snapshots remain supported.
 /// Only PID 0 may call this. Returns whether the application has exited.
 pub fn snapshot(pid: u32, pixels: &mut [u32]) -> Result<bool, ()> {
     let result = unsafe { syscall(14, u64::from(pid), pixels.as_mut_ptr() as u64, core::mem::size_of_val(pixels) as u64) };
@@ -290,3 +298,26 @@ pub fn focus(pid: u32) -> Result<(), ()> {
 /// Uses client-side rendering for this application's surface; console writes
 /// continue to reach the serial log without drawing over graphical content.
 pub fn graphics_mode() { unsafe { syscall(16, 0, 0, 0); } }
+
+/// Deschedules this process for a duration in PIT ticks (~55 ms each).
+/// Zero returns immediately. Durations above i64::MAX or overflowing the
+/// absolute tick deadline return Err. No CPU time is consumed while waiting.
+pub fn sleep_ticks(duration: u64) -> Result<(), ()> {
+    // SAFETY: Syscall 17 takes only an integer duration and no pointers.
+    if unsafe { syscall(SYS_SLEEP_TICKS, duration, 0, 0) } == SYSCALL_ERROR { Err(()) } else { Ok(()) }
+}
+
+/// Publishes a completed update to this application's private drawing surface.
+/// Graphical apps call this after rendering, so the compositor can reuse cached
+/// content while it is unchanged. Console output publishes automatically.
+pub fn present_surface() -> Result<(), ()> {
+    // SAFETY: Syscall 18 has no arguments and publishes only the caller's surface.
+    if unsafe { syscall(SYS_PRESENT_SURFACE, 0, 0, 0) } == SYSCALL_ERROR { Err(()) } else { Ok(()) }
+}
+
+/// Queries a private surface's (revision, exited) metadata. PID 0 only.
+pub fn surface_status(pid: u32) -> Result<(u64, bool), ()> {
+    // SAFETY: Syscall 19 takes a PID and returns integer metadata, no pointers.
+    let result = unsafe { syscall(SYS_SURFACE_STATUS, u64::from(pid), 0, 0) };
+    if result == SYSCALL_ERROR { Err(()) } else { Ok((result >> 1, result & 1 != 0)) }
+}

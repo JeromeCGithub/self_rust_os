@@ -244,56 +244,69 @@ pub extern "C" fn user_main() {
 
     let mut char_buf = [0u8; 4];
 
+    let mut dirty = true;
+    let mut previous_blink = false;
     loop {
-        let (wx, wy) = (0, 0);
-        let cx = wx + CONTENT_X_OFF;
-        let cy = wy + CONTENT_Y_OFF;
-        let cw = WIN_W - 8;
-        let ch = WIN_H - TITLE_H - 8;
-
-        // Draw content background.
-        fill_rect(cx, cy, cw, ch, BLACK);
-
-        // Draw shell lines.
-        for (i, line) in shell.lines[..shell.line_count].iter().enumerate() {
-            let y = cy + 8 + (i as i32 * FONT_H);
-            if y + FONT_H > cy + ch {
+        let blink = (sys::ticks() / 9) % 2 == 0;
+        dirty |= blink != previous_blink;
+        // Bound each input batch so an active typist cannot starve rendering.
+        for _ in 0..64 {
+            let n = sys::read_nb(sys::STDIN_FD, &mut char_buf);
+            if n == 0 {
                 break;
             }
-            let len = line.iter().position(|&b| b == 0).unwrap_or(64);
-            let s = core::str::from_utf8(&line[..len]).unwrap_or("");
-            draw_str(cx + 8, y, s, GREEN);
-        }
-
-        // Draw input line with cursor.
-        let input_y = cy + 8 + (shell.line_count as i32 * FONT_H);
-        if input_y + FONT_H <= cy + ch {
-            draw_str(cx + 8, input_y, "> ", GREEN);
-            let input_str = core::str::from_utf8(&shell.input[..shell.input_len]).unwrap_or("");
-            let end_x = draw_str(cx + 8 + 16, input_y, input_str, WHITE);
-            if (sys::ticks() / 9) % 2 == 0 {
-                fill_rect(end_x, input_y, 8, FONT_H, WHITE);
-            }
-        }
-
-        // Handle keyboard input (non-blocking).
-        let n = sys::read_nb(sys::STDIN_FD, &mut char_buf);
-        if n > 0 {
-            let c = char_buf[0];
-            if c == b'\n' || c == b'\r' {
-                shell.handle_command();
-            } else if c == 8 || c == 127 {
-                if shell.input_len > 0 {
-                    shell.input_len -= 1;
+            dirty = true;
+            if n > 0 {
+                let c = char_buf[0];
+                if c == b'\n' || c == b'\r' {
+                    shell.handle_command();
+                } else if c == 8 || c == 127 {
+                    if shell.input_len > 0 {
+                        shell.input_len -= 1;
+                    }
+                } else if shell.input_len < 64 && c >= 32 && c < 127 {
+                    shell.input[shell.input_len] = c;
+                    shell.input_len += 1;
                 }
-            } else if shell.input_len < 64 && c >= 32 && c < 127 {
-                shell.input[shell.input_len] = c;
-                shell.input_len += 1;
             }
         }
+        if dirty {
+            let (wx, wy) = (0, 0);
+            let cx = wx + CONTENT_X_OFF;
+            let cy = wy + CONTENT_Y_OFF;
+            let cw = WIN_W - 8;
+            let ch = WIN_H - TITLE_H - 8;
 
-        let start = sys::ticks();
-        while sys::ticks() - start < 1 {}
+            // Draw content background.
+            fill_rect(cx, cy, cw, ch, BLACK);
+
+            // Draw shell lines.
+            for (i, line) in shell.lines[..shell.line_count].iter().enumerate() {
+                let y = cy + 8 + (i as i32 * FONT_H);
+                if y + FONT_H > cy + ch {
+                    break;
+                }
+                let len = line.iter().position(|&b| b == 0).unwrap_or(64);
+                let s = core::str::from_utf8(&line[..len]).unwrap_or("");
+                draw_str(cx + 8, y, s, GREEN);
+            }
+
+            // Draw input line with cursor.
+            let input_y = cy + 8 + (shell.line_count as i32 * FONT_H);
+            if input_y + FONT_H <= cy + ch {
+                draw_str(cx + 8, input_y, "> ", GREEN);
+                let input_str = core::str::from_utf8(&shell.input[..shell.input_len]).unwrap_or("");
+                let end_x = draw_str(cx + 8 + 16, input_y, input_str, WHITE);
+                if blink {
+                    fill_rect(end_x, input_y, 8, FONT_H, WHITE);
+                }
+            }
+
+            sys::present_surface().expect("terminal surface publication");
+            dirty = false;
+        }
+        previous_blink = blink;
+        sys::sleep_ticks(1).expect("terminal timed wait");
     }
 }
 
