@@ -63,7 +63,13 @@ file-descriptor table is exposed by the current syscall interface.
 
 PID 0 owns the hardware framebuffer mapping. Other processes map private backing
 frames at the same user virtual address. The compositor snapshots those frames,
-combines windows in stacking order into a back buffer, then presents it. Text apps
+caches the visible 488×288 content per window, combines changed windows in
+stacking order into a retained back buffer, and presents dirty 32×32 tiles. Cursor
+movement restores the old cursor tiles from that buffer. Graphical clients publish
+surface revisions after drawing; console output publishes automatically. Unchanged
+surfaces require only metadata queries. The six cache slots reserve 3.22 MiB in
+addition to the existing back/scratch buffers. Timed waits let the CPU halt when
+applications are waiting. See [performance validation](performance.md). Text apps
 receive kernel-rendered console output on their private surface. Graphical apps
 call `graphics_mode()`; their console writes remain serial diagnostics.
 

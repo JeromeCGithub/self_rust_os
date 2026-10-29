@@ -83,6 +83,8 @@ pub enum BlockReason {
     Keyboard,
     /// Waiting for a specific PID to exit (u32::MAX = any child).
     WaitPid(Pid),
+    /// Waiting for an absolute PIT tick deadline.
+    Timer(u64),
     /// Not blocked.
     None,
 }
@@ -110,6 +112,8 @@ pub struct Process {
     pub text_cursor: (usize, usize),
     /// Whether console writes are rendered on this surface.
     pub console_enabled: bool,
+    /// Revision of a completed client or console rendering update.
+    pub surface_revision: u64,
 }
 
 /// Saved CPU context layout.
@@ -447,12 +451,18 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
         surface,
         text_cursor: (8, 8),
         console_enabled: true,
+        surface_revision: 0,
     };
     // Ensure the vector is large enough.
     while sched.processes.len() <= pid as usize {
         sched.processes.push(None);
     }
     sched.processes[pid as usize] = Some(proc);
+    // IRQ wakeups must never grow the queue. At most one entry per live
+    // process is queued; reserve for the entire table in this non-IRQ path.
+    let capacity = sched.processes.len();
+    let queued = sched.ready_queue.len();
+    sched.ready_queue.reserve(capacity.saturating_sub(queued));
     sched.ready_queue.push_back(pid);
 
     crate::serial_println!("[sched] spawned process {} ({} bytes)", pid, binary.len());
@@ -597,6 +607,12 @@ pub extern "C" fn schedule(save_rsp: u64) -> u64 {
                 // Actually, blockers set state before returning sentinel, so we
                 // just save the RSP here.
                 pcb.kernel_rsp = save_rsp;
+                if matches!(pcb.block_reason, BlockReason::Timer(_)) {
+                    // SAFETY: save_rsp is the aligned SavedContext on this
+                    // process's live kernel stack, supplied by syscall_entry.
+                    // IRQs are disabled and no other context accesses it.
+                    unsafe { (*(save_rsp as *mut SavedContext)).rax = 0; }
+                }
             }
         }
     }
@@ -612,8 +628,9 @@ pub extern "C" fn schedule(save_rsp: u64) -> u64 {
         }
         // No runnable process: idle with interrupts enabled until one wakes.
         // (e.g., keyboard IRQ will wake a process blocked on input)
-        x86_64::instructions::interrupts::enable();
-        x86_64::instructions::hlt();
+        // STI's interrupt shadow makes enabling + halting indivisible with
+        // respect to IRQ delivery, avoiding a wakeup between enable and HLT.
+        x86_64::instructions::interrupts::enable_and_hlt();
         x86_64::instructions::interrupts::disable();
     }
 }
@@ -738,6 +755,42 @@ pub fn waitpid(pid: Pid) -> u64 {
     PROCESS_BLOCK_SENTINEL
 }
 
+/// Blocks for a duration in PIT ticks. Zero returns immediately; overflow fails.
+pub fn sleep_ticks(duration: u64) -> u64 {
+    if duration == 0 { return 0; }
+    if duration > i64::MAX as u64 { return u64::MAX - 1; }
+    let Some(deadline) = crate::interrupts::ticks().checked_add(duration) else {
+        return u64::MAX - 1;
+    };
+    let mut sched = SCHEDULER.lock();
+    let Some(current) = sched.current else { return u64::MAX - 1; };
+    let Some(pcb) = sched.processes[current as usize].as_mut() else { return u64::MAX - 1; };
+    pcb.state = ProcessState::Blocked;
+    pcb.block_reason = BlockReason::Timer(deadline);
+    PROCESS_BLOCK_SENTINEL
+}
+
+/// Wakes expired timers, including IRQs that interrupt the scheduler's idle loop.
+/// Called with interrupts disabled on this single-CPU kernel. No allocation or
+/// I/O occurs here; spawn reserves queue storage for every possible live entry.
+pub fn wake_timers() {
+    let now = crate::interrupts::ticks();
+    let mut sched = SCHEDULER.lock();
+    let Scheduler { processes, ready_queue, .. } = &mut *sched;
+    for pcb in processes.iter_mut().flatten() {
+        if pcb.state == ProcessState::Blocked {
+            if let BlockReason::Timer(deadline) = pcb.block_reason {
+                // Signed wrapping subtraction also handles tick-counter wrap.
+                if now.wrapping_sub(deadline) as i64 >= 0 {
+                    pcb.state = ProcessState::Ready;
+                    pcb.block_reason = BlockReason::None;
+                    ready_queue.push_back(pcb.pid);
+                }
+            }
+        }
+    }
+}
+
 /// Blocks the current process waiting for keyboard input.
 ///
 /// Called from sys_read when no scancode is available.
@@ -829,6 +882,25 @@ pub fn has_input_focus() -> bool {
     current_pid().map(u64::from) == Some(INPUT_FOCUS.load(Ordering::Relaxed))
 }
 
+/// Publishes a completed rendering update from the current application.
+pub fn present_surface() -> u64 {
+    let mut sched = SCHEDULER.lock();
+    let Some(pid) = sched.current else { return u64::MAX - 1; };
+    let Some(proc) = sched.processes[pid as usize].as_mut() else { return u64::MAX - 1; };
+    if proc.surface.is_empty() { return u64::MAX - 1; }
+    proc.surface_revision = (proc.surface_revision + 1) & ((1u64 << 62) - 1);
+    0
+}
+
+/// Returns revision * 2 + exit flag, or SYSCALL_ERROR for invalid targets.
+/// The dispatcher restricts this metadata query to the display owner.
+pub fn surface_status(pid: Pid) -> u64 {
+    let sched = SCHEDULER.lock();
+    let Some(proc) = sched.processes.get(pid as usize).and_then(Option::as_ref) else { return u64::MAX - 1; };
+    if proc.surface.is_empty() { return u64::MAX - 1; }
+    (proc.surface_revision << 1) | u64::from(proc.state == ProcessState::Zombie)
+}
+
 /// Copies a private surface to the compositor. Returns 1 for an exited process.
 /// The caller validates the destination and restricts access to PID 0.
 pub fn snapshot(pid: Pid, dest: &mut [u8]) -> u64 {
@@ -850,6 +922,9 @@ pub fn surface_write(bytes: &[u8]) {
     let Some(pid) = sched.current else { return; };
     let Some(proc) = sched.processes[pid as usize].as_mut() else { return; };
     if proc.surface.is_empty() || !proc.console_enabled { return; }
+    if !bytes.is_empty() {
+        proc.surface_revision = (proc.surface_revision + 1) & ((1u64 << 62) - 1);
+    }
     let info = crate::gfx::fb_info();
     for &byte in bytes {
         if byte == b'\n' || proc.text_cursor.0 + 8 > info.width {

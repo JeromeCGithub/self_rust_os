@@ -276,11 +276,13 @@ pub extern "C" fn user_main() {
             if !game.update() {
                 clear(BLACK);
                 println!("Game Over! Score: {}", game.score);
-                let end = sys::ticks() + 36;
-                while sys::ticks() < end {}
+                sys::present_surface().expect("game surface publication");
+                sys::sleep_ticks(36).expect("game over timed wait");
                 sys::exit(0);
             }
             game.draw();
+            sys::present_surface().expect("game surface publication");
         }
+        sys::sleep_ticks(1).expect("game input timed wait");
     }
 }

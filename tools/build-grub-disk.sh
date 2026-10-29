@@ -27,8 +27,8 @@ SECTOR=512
 "${ROOT}/tools/build-user.sh"
 
 echo "[grub-disk] Building kernel ELF (grub feature)..."
-cargo build --features grub
-KERNEL_ELF="${ROOT}/target/x86_64-self-rust-os/debug/self_rust_os"
+cargo build --release --features grub
+KERNEL_ELF="${ROOT}/target/x86_64-self-rust-os/release/self_rust_os"
 test -f "${KERNEL_ELF}"
 
 echo "[grub-disk] Creating ${SIZE_MB} MiB blank image at ${IMG}..."

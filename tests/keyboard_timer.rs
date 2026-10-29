@@ -23,6 +23,10 @@ fn main(boot_info: &'static BootInfo) -> ! {
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
     self_rust_os::init(phys_mem_offset, common::FRAMEBUFFER_INFO, common::framebuffer_addr());
 
+    // Standalone harness: no scheduler.start() will unmask IRQ0 for us.
+    // SAFETY: The IDT/PICs are initialized and timer IRQs interrupt only Ring 0
+    // here. No user context is restored; the scheduler's process table is empty.
+    unsafe { interrupts::PICS.lock().write_masks(0xf8, 0xef); }
     test_main();
     #[expect(clippy::empty_loop)]
     loop {}

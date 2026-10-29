@@ -37,9 +37,12 @@ Unused arguments are zero in SDK wrappers. `ptr` means a user virtual address.
 | 11 | `mouse` | none | Packed coordinates/buttons, decoded by SDK to `(x, y, buttons)` |
 | 12 | `mkdir` | path ptr | Zero on success; create directory with missing parents |
 | 13 | `fb_info` | output ptr (four aligned `u64` slots) | Writes width, height, pitch in bytes, bits per pixel; returns zero |
-| 14 | `snapshot` | PID, output ptr, byte length | PID 0 only; length must equal `pitch * height`; zero for live target, one for zombie; copies private surface |
+| 14 | `snapshot` | PID, output ptr, byte length | PID 0 only; nonempty length at most `pitch * height`; zero for live target, one for zombie; copies that prefix of the private surface |
 | 15 | `focus` | PID | PID 0 only; selects keyboard recipient; returns zero |
 | 16 | `graphics_mode` | none | Disables kernel console rendering on caller's surface; serial output remains; returns zero |
+| 17 | `sleep_ticks` | duration in PIT ticks | Zero on wake; zero duration returns immediately; durations above `i64::MAX`, overflowing absolute deadlines, or no calling process return error |
+| 18 | `present_surface` | none | Publishes an update to the caller's private surface by advancing its revision; zero on success, error if caller has no private surface |
+| 19 | `surface_status` | PID | PID 0 only; revision in bits 1–62, zombie flag in bit 0; error for missing target or display owner (no private surface) |
 
 Operations 14–16 currently appear as numeric dispatcher arms and numeric SDK calls.
 Do not assume the named `SYS_*` constants above operation 13 are a complete ABI inventory.
@@ -55,8 +58,9 @@ POSIX file descriptor model, or old ramfs API here. `STDIN_FD = 0` is keyboard i
 
 For `ls`, callers must reserve **at least `12 * max_entries` bytes**; the current SDK
 wrapper does not establish that relationship itself. For `fb_info`, ensure alignment
-as well as length; the SDK uses `[u64; 4]`. For snapshots, the destination is a full
-surface buffer. Do not form kernel slices from hostile pointers without verifying
+as well as length; the SDK uses `[u64; 4]`. For snapshots, the destination can be a
+nonempty prefix of the surface, including row padding. Full snapshots remain
+supported. Do not form kernel slices from hostile pointers without verifying
 mapping, permissions, overflow, alignment and lifetime; current numerical-range checks
 are incomplete hardening, as noted in [architecture](architecture.md).
 
@@ -73,6 +77,18 @@ stack. Apps use `userlib::sys::FRAMEBUFFER_ADDR`; rebuild all apps with
 `fb_info`/`snapshot` formats are unchanged. Surfaces cover `pitch * height`, including
 padding and the final partial page. User mappings occupy private page tables below
 `0x4000000`; unused gaps are unmapped. The kernel heap is 32 MiB to stage flat images.
+
+Graphical apps must call `present_surface()` after each rendering update. The WM
+queries `surface_status()` and retains cached window pixels until the revision or
+exit flag changes. Kernel console output publishes automatically; graphical serial
+logs do not. Publication is a change notification, not atomic buffer swapping or
+vsync. Existing numbers are preserved; snapshot accepts shorter buffers as well as
+the original full surface. Rebuild graphical apps with the SDK when migrating.
+
+`sleep_ticks()` deschedules the caller. Timer IRQs wake expired waits even while
+the kernel idles; the scheduler uses `sti; hlt` when nothing can run. The PIT rate
+remains approximately 18.2 Hz (~55 ms/tick), preserving game and cursor blink timing.
+This reduces idle CPU but does not introduce a 60 Hz display/input loop.
 
 ## Changing the interface
 

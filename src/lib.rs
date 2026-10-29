@@ -80,21 +80,21 @@ entry_point!(test_kernel_main);
 #[cfg(test)]
 fn test_kernel_main(boot_info: &'static BootInfo) -> ! {
     let phys_mem_offset = x86_64::VirtAddr::new(boot_info.physical_memory_offset);
-    // For unit tests, use a dummy framebuffer info. The actual framebuffer
-    // is not mapped in the test environment.
+    // The unit harness draws during console initialization. Back it with
+    // mapped RAM, just like the integration harnesses, rather than assuming
+    // the legacy VGA aperture is mapped at a fixed higher-half address.
+    static mut TEST_FRAMEBUFFER: [u32; 320 * 200] = [0; 320 * 200];
     let fb_info = gfx::FbInfo {
-        addr: 0xA0000,
+        addr: 0,
         width: 320,
         height: 200,
         pitch: 320 * 4,
         bpp: 32,
     };
-    // SAFETY: In tests, we don't actually draw to the framebuffer.
-    // This is just to satisfy the init signature.
     init(
         phys_mem_offset,
         fb_info,
-        x86_64::VirtAddr::new(0xFFFF_8000_000A_0000),
+        x86_64::VirtAddr::from_ptr(core::ptr::addr_of_mut!(TEST_FRAMEBUFFER)),
     );
 
     // Set up paging and the heap so unit tests can use `alloc`.
