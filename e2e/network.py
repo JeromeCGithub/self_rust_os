@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / 'tools'))
 from qemu_network import arguments as network_arguments
+from qemu_platform import arguments as platform_arguments
 
 
 def checksum(data):
@@ -127,9 +128,10 @@ def main():
             subprocess.run(['mcopy', '-i', f'{disk}@@1048576', str(config), '::/TMP/NET.CFG'], check=True)
         qmp_path = str(tmp / 'qmp')
         command = ['qemu-system-x86_64', '-machine', 'pc,i8042=on,vmport=on',
-                   '-drive', f'format=raw,file={disk}', '-m', '256', '-vga', 'std',
+                   '-drive', f'format=raw,file={disk}', '-vga', 'std',
                    '-display', 'none', '-serial', f'file:{log}', '-no-reboot',
                    '-qmp', f'unix:{qmp_path},server=on,wait=off']
+        command += platform_arguments()
         if args.no_nic:
             command += network_arguments('none')
         else:
@@ -184,7 +186,7 @@ def main():
             request('qmp_capabilities')
             wait_for('[desktop] ready:')
             request('input-send-event', {'events': [
-                {'type': 'abs', 'data': {'axis': 'x', 'value': (250*32767+1918)//1919}},
+                {'type': 'abs', 'data': {'axis': 'x', 'value': (350*32767+1918)//1919}},
                 {'type': 'abs', 'data': {'axis': 'y', 'value': (65*32767+1078)//1079}}]})
             time.sleep(.2)
             for down in (True, False):
@@ -192,10 +194,10 @@ def main():
                 time.sleep(.2)
             wait_for('Portal / RustOS shell')
             if args.probe:
-                # Sixth launcher is ZNETTEST; existing application positions stay
-                # unchanged because build-user installs binaries alphabetically.
+                # Build-user installs binaries alphabetically; CURL is first and
+                # ZNETTEST is the seventh launcher.
                 request('input-send-event', {'events': [
-                    {'type': 'abs', 'data': {'axis': 'x', 'value': (550*32767+1918)//1919}},
+                    {'type': 'abs', 'data': {'axis': 'x', 'value': (650*32767+1918)//1919}},
                     {'type': 'abs', 'data': {'axis': 'y', 'value': (65*32767+1078)//1079}}]})
                 time.sleep(.2)
                 for down in (True, False):

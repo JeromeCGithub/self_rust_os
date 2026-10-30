@@ -9,19 +9,22 @@ ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT/'tools'))
 from qemu_network import arguments as network_arguments
+from qemu_platform import arguments as platform_arguments
+from qemu_test import connect as connect_monitor, copy_disk
 WIDTH,HEIGHT=1920,1080
 OUT=ROOT/'docs/screenshots'
 OUT.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
+    disk=copy_disk(ROOT/'target/grub-disk.img',pathlib.Path(tmp))
     monpath=f'{tmp}/monitor'; qmppath=f'{tmp}/qmp'; log=pathlib.Path(tmp)/'serial.log'
-    qemu=subprocess.Popen(['qemu-system-x86_64','-drive',f'format=raw,file={ROOT}/target/grub-disk.img','-machine','pc,i8042=on,vmport=on','-vga','std','-m','256','-serial',f'file:{log}','-display','none','-no-reboot','-monitor',f'unix:{monpath},server,nowait','-qmp',f'unix:{qmppath},server,nowait'] + network_arguments())
+    qemu=subprocess.Popen(['qemu-system-x86_64','-drive',f'format=raw,file={disk}','-machine','pc,i8042=on,vmport=on','-vga','std','-serial',f'file:{log}','-display','none','-no-reboot','-monitor',f'unix:{monpath},server,nowait','-qmp',f'unix:{qmppath},server,nowait'] + platform_arguments() + network_arguments())
     try:
         deadline=time.monotonic()+60
         while not pathlib.Path(monpath).exists():
             assert time.monotonic()<deadline,'monitor timeout'
             time.sleep(.1)
-        mon=socket.socket(socket.AF_UNIX); mon.settimeout(3);mon.connect(monpath);mon.recv(4096)
-        qmp=socket.socket(socket.AF_UNIX);qmp.settimeout(3);qmp.connect(qmppath)
+        mon=connect_monitor(monpath,deadline,qemu);mon.recv(4096)
+        qmp=connect_monitor(qmppath,deadline,qemu)
         stream=qmp.makefile('rwb');json.loads(stream.readline())
         def qmp_command(execute, arguments=None):
             request={'execute':execute}
@@ -82,12 +85,12 @@ with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
         for x,y in [(WIDTH-1,HEIGHT-1),(WIDTH-8,HEIGHT//2),(WIDTH//2,HEIGHT-14),(0,0)]:
             move(x,y);time.sleep(.5)
             assert shot(None).getpixel((x,y))==(8,19,33),f'pointer did not reach {(x,y)}'
-        click(250,65);wait_for('Portal / RustOS shell');time.sleep(1)
+        click(350,65);wait_for('Portal / RustOS shell');time.sleep(1)
         for command,expected in [('help','help echo clear pwd ls cat write mkdir time exit'),('echo desktop-ok','desktop-ok'),('pwd','/'),('ls /bin','PORTAL.BIN'),('write /test.txt saved','file written'),('cat /test.txt','saved'),('mkdir /demo','directory created'),('time','ticks since boot')]:
             type_command(command);wait_for("[portal] output: "+expected+"\n" if command not in ("time",) else "ticks since boot")
         shot('desktop-terminal')
         # Opening Snake must leave the terminal intact and both processes scheduled.
-        click(350,65);wait_for("sys_spawn: '/BIN/SNAKE.BIN'");time.sleep(2);shot('desktop-multitasking')
+        click(450,65);wait_for("sys_spawn: '/BIN/SNAKE.BIN'");time.sleep(2);shot('desktop-multitasking')
         click(92+470,136+12);time.sleep(.5) # Close top (Snake) window.
         click(100,180);type_command('echo focus-restored');wait_for('focus-restored')
         # Drag beyond the old 640x480 bounds and clip the window above the bottom panel.
@@ -97,7 +100,7 @@ with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
         wait_pixel('desktop-1080p-drag',(WIDTH-488,HEIGHT-32-316),(0x23,0x3b,0x55))
         cmd('mouse_button 0');time.sleep(.5)
         click(WIDTH-18,HEIGHT-32-316+12);time.sleep(.5)
-        click(250,65);wait_for('[desktop] launched Terminal pid=');time.sleep(1)
+        click(350,65);wait_for('[desktop] launched Terminal pid=');time.sleep(1)
         # Drag the terminal using its titlebar, then close it.
         move(150,138);start=log.stat().st_size;cmd('mouse_button 1')
         wait_for('[desktop] drag started: ',after=start)
@@ -105,7 +108,7 @@ with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
         cmd('mouse_button 0');time.sleep(.5)
         click(120+470,128+12);time.sleep(.5)
         shot('desktop-after-close')
-        for x,name,expected in [(50,'FORGE','self_rust_os forge'),(150,'HELLO','Hello from user space!'),(450,'SPIN','spin: starting')]:
+        for x,name,expected in [(150,'FORGE','self_rust_os forge'),(250,'HELLO','Hello from user space!'),(550,'SPIN','spin: starting')]:
             click(x,65);wait_for(expected);time.sleep(.7)
             click(80+470,126+12);time.sleep(.4)
         assert 'Kernel panic' not in log.read_text()

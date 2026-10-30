@@ -10,12 +10,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustos-http"
+version = "0.1.0"
+dependencies = [
+ "rustos-net-abi",
+]
+
+[[package]]
 name = "rustos-net-abi"
+version = "0.1.0"
+
+[[package]]
+name = "rustos-platform-abi"
 version = "0.1.0"
 
 [[package]]
 name = "userlib"
 version = "0.1.0"
 dependencies = [
+ "rustos-http",
  "rustos-net-abi",
+ "rustos-platform-abi",
 ]

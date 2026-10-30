@@ -5,7 +5,16 @@ edition = "2021"
 description = "Minimal user-space standard library for self_rust_os."
 license = "MIT OR Apache-2.0"
 
+[features]
+tls = ["dep:rustos-tls", "dep:getrandom", "dep:linked_list_allocator", "dep:spin"]
+
 [dependencies]
+rustos-tls = { path = "../../crates/tls", optional = true }
+getrandom = { version = "=0.2.17", features = ["custom"], optional = true }
+linked_list_allocator = { version = "=0.9.1", default-features = false, features = ["const_mut_refs"], optional = true }
+spin = { version = "=0.9.9", default-features = false, features = ["mutex", "spin_mutex"], optional = true }
+rustos-platform-abi = { path = "../../crates/platform-abi" }
+rustos-http = { path = "../../crates/http" }
 rustos-net-abi = { path = "../../crates/net-abi" }
 
 [lib]

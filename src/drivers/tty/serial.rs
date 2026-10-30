@@ -36,7 +36,7 @@ pub fn _print(args: ::core::fmt::Arguments) {
 #[macro_export]
 macro_rules! serial_print {
     ($($args:tt)*) => {
-        $crate::serial::_print(format_args!($($args)*));
+        $crate::drivers::tty::serial::_print(format_args!($($args)*));
     };
 }
 

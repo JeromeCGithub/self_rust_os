@@ -1,4 +1,5 @@
 [build]
+rustflags = ["--cfg", "aes_force_soft", "--cfg", "polyval_force_soft", "--cfg", "chacha20_force_soft", "--cfg", "poly1305_force_soft", "--cfg", 'curve25519_dalek_backend="serial"']
 target = "x86_64-user-program.json"
 
 [unstable]

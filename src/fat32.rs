@@ -2,7 +2,7 @@
 //!
 //! A small, self-contained FAT32 implementation used as the on-disk filesystem.
 //! It is generic over a [`BlockDevice`] so the logic can be unit-tested
-//! against a RAM-backed mock and used with the real [`AtaDisk`](crate::ata::AtaDisk)
+//! against a RAM-backed mock and used with the real [`AtaDisk`](crate::drivers::block::ata::AtaDisk)
 //! in production.
 //!
 //! # Scope (v1)
@@ -15,7 +15,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use self_rust_os::ata::{AtaDisk, AtaDrive};
+//! use self_rust_os::drivers::block::ata::{AtaDisk, AtaDrive};
 //! use self_rust_os::fat32::Fat32;
 //!
 //! let disk = AtaDisk::secondary(AtaDrive::Master);
@@ -41,7 +41,7 @@
 use alloc::vec::Vec;
 use core::{cmp, fmt::Debug};
 
-use crate::ata::{AtaDisk, AtaError, SECTOR_SIZE};
+use crate::drivers::block::ata::{AtaDisk, AtaError, SECTOR_SIZE};
 
 /// A 512-byte sector addressable block device.
 pub trait BlockDevice {

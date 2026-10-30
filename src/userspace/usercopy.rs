@@ -1,4 +1,4 @@
-//! Mapping-aware validation for the networking syscall boundary.
+//! Mapping-aware validation shared by kernel syscall boundaries.
 /// Validate every paging level and page in a user range, using a read-only entry
 /// provider. Huge pages are permitted only with effective user permissions.
 pub fn validate_with(
@@ -105,4 +105,24 @@ mod tests {
             .map(|v| if t == bad_table { v & !2 } else { v })));
         }
     }
+}
+
+// Boot publishes this once before Ring 3; Acquire/Release makes publication
+// explicit. Validation/copy still relies on nonpreemptible single-CPU syscalls.
+#[cfg(target_os = "none")]
+static PHYS_OFFSET: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Publish the boot-established physical RAM mapping before user processes run.
+#[cfg(target_os = "none")]
+pub fn init(offset: u64) {
+    PHYS_OFFSET.store(offset, core::sync::atomic::Ordering::Release);
+}
+/// Validate a current-process buffer against all effective paging permissions.
+#[cfg(target_os = "none")]
+pub fn validate(ptr: u64, len: u64, write: bool) -> bool {
+    validate_current(
+        PHYS_OFFSET.load(core::sync::atomic::Ordering::Acquire),
+        ptr,
+        len,
+        write,
+    )
 }

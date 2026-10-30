@@ -22,7 +22,7 @@ use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use self_rust_os::{
     allocator,
-    ata::{AtaDisk, AtaDrive},
+    drivers::block::ata::{AtaDisk, AtaDrive},
     fat32::Fat32,
     memory::{self, BootInfoFrameAllocator},
     println, serial_println,

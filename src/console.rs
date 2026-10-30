@@ -2,7 +2,7 @@
 //!
 //! Replaces the VGA text-mode buffer: in graphics mode there is no text
 //! buffer, so characters are rendered as 8x8 glyphs into the framebuffer by
-//! [`gfx`](crate::gfx). The console scrolls; its size in characters is
+//! [`gfx`](crate::drivers::video::framebuffer). The console scrolls; its size in characters is
 //! derived from the framebuffer dimensions at init time.
 //!
 //! The [`print!`] and [`println!`] macros write here; [`serial_println!`]
@@ -14,7 +14,7 @@ use conquer_once::spin::OnceCell;
 use spin::Mutex;
 use x86_64::instructions::interrupts;
 
-use crate::gfx::{self, CHAR_HEIGHT, CHAR_WIDTH, COLOR_BLACK, COLOR_LIGHT_GRAY};
+use crate::drivers::video::framebuffer::{self as gfx, CHAR_HEIGHT, CHAR_WIDTH, COLOR_BLACK, COLOR_LIGHT_GRAY};
 
 /// A text console rendered into the graphics framebuffer.
 #[derive(Debug)]

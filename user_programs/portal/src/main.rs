@@ -87,7 +87,7 @@ struct Shell {
     ping_address: [u8; 4],
     lines: [[u8; 64]; 20], // 20 lines, 64 chars each
     line_count: usize,
-    input: [u8; 64],
+    input: [u8; 512],
     input_len: usize,
 }
 
@@ -98,7 +98,7 @@ impl Shell {
             ping_address: [0; 4],
             lines: [[0; 64]; 20],
             line_count: 0,
-            input: [0; 64],
+            input: [0; 512],
             input_len: 0,
         }
     }
@@ -153,9 +153,60 @@ impl Shell {
         true
     }
 
+    fn curl(&mut self, command: &str) {
+        let mut words = command.split_ascii_whitespace();
+        let _ = words.next();
+        let Some(url) = words.next() else {
+            self.push_line(b"usage: curl http[s]://host[:port]/path");
+            return;
+        };
+        if words.next().is_some() {
+            self.push_line(b"usage: curl http[s]://host[:port]/path");
+            return;
+        }
+        let mut line = [0; 64];
+        let mut len = 0;
+        let result = userlib::http::get(url, |bytes| {
+            for &byte in bytes {
+                if byte == b'\r' {
+                    continue;
+                }
+                if byte == b'\n' {
+                    self.push_line(&line[..len]);
+                    len = 0;
+                    continue;
+                }
+                line[len] = if byte.is_ascii_graphic() || byte == b' ' {
+                    byte
+                } else {
+                    b'.'
+                };
+                len += 1;
+                if len == line.len() {
+                    self.push_line(&line);
+                    len = 0;
+                }
+            }
+            Ok(())
+        });
+        if len != 0 {
+            self.push_line(&line[..len]);
+        }
+        match result {
+            Ok(response) => self.push_args(format_args!(
+                "curl: HTTP {}, {} bytes",
+                response.status, response.bytes
+            )),
+            Err(error) => self.push_args(format_args!(
+                "curl: {}",
+                userlib::http::error_message(error)
+            )),
+        }
+    }
+
     fn handle_command(&mut self) {
-        let mut cmd_buf = [0u8; 64];
-        let cmd_len = self.input_len.min(64);
+        let mut cmd_buf = [0u8; 512];
+        let cmd_len = self.input_len.min(512);
         cmd_buf[..cmd_len].copy_from_slice(&self.input[..cmd_len]);
         let cmd = &cmd_buf[..cmd_len];
         println!(
@@ -170,7 +221,9 @@ impl Shell {
         echo[2..2 + len].copy_from_slice(&cmd[..len]);
         self.push_line(&echo[..2 + len]);
 
-        if cmd == b"ping" || cmd.starts_with(b"ping ") {
+        if cmd == b"curl" || cmd.starts_with(b"curl ") {
+            self.curl(core::str::from_utf8(cmd).unwrap_or(""));
+        } else if cmd == b"ping" || cmd.starts_with(b"ping ") {
             if self.ping.is_some() {
                 self.push_line(b"ping: already running");
             } else if let Ok(config) = ping::Config::parse(core::str::from_utf8(cmd).unwrap_or("")) {
@@ -188,6 +241,7 @@ impl Shell {
         } else if cmd == b"help" {
             self.push_line(b"help echo clear pwd ls cat write mkdir time exit");
             self.push_line(b"ping [-c 1..16] IPv4");
+            self.push_line(b"curl http[s]://host[:port]/path");
         } else if cmd == b"pwd" {
             self.push_line(b"/");
         } else if cmd == b"exit" {
@@ -317,7 +371,7 @@ pub extern "C" fn user_main() {
                     if shell.input_len > 0 {
                         shell.input_len -= 1;
                     }
-                } else if shell.input_len < 64 && c >= 32 && c < 127 {
+                } else if shell.input_len < shell.input.len() && c >= 32 && c < 127 {
                     shell.input[shell.input_len] = c;
                     shell.input_len += 1;
                 }

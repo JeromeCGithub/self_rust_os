@@ -15,8 +15,8 @@ pub const USER_CODE_START: u64 = 0x40_0000;
 /// Top of the user-mode stack (stack grows downward).
 pub const USER_STACK_TOP: u64 = 0x200_0000;
 
-/// Size of the user-mode stack in bytes (16 KiB).
-pub const USER_STACK_SIZE: u64 = 4096 * 4;
+/// Size of the user-mode stack in bytes (4 MiB, mapped privately at process creation).
+pub const USER_STACK_SIZE: u64 = 4 * 1024 * 1024;
 
 /// Bottom of the user-mode stack.
 pub const USER_STACK_BOTTOM: u64 = USER_STACK_TOP - USER_STACK_SIZE;
@@ -33,7 +33,9 @@ pub const USER_REGION_END: u64 = 0x400_0000;
 
 /// Number of pages covering the complete boot-provided display, including pitch
 /// padding and the final partial page. Reject layouts outside the user region.
-pub fn framebuffer_pages(info: &crate::gfx::FbInfo) -> Result<u64, &'static str> {
+pub fn framebuffer_pages(
+    info: &crate::drivers::video::framebuffer::FbInfo,
+) -> Result<u64, &'static str> {
     let row_bytes = info
         .width
         .checked_mul(4)
@@ -57,3 +59,5 @@ pub fn framebuffer_pages(info: &crate::gfx::FbInfo) -> Result<u64, &'static str>
     }
     Ok(pages)
 }
+
+pub mod usercopy;

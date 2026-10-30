@@ -119,7 +119,7 @@ fn compositor_buffers_do_not_overlap_stack_or_display() {
 
 #[test_case]
 fn surface_pages_cover_pitch_and_reject_invalid_geometry() {
-    use self_rust_os::gfx::FbInfo;
+    use self_rust_os::drivers::video::framebuffer::FbInfo;
     let info = FbInfo {
         addr: 0xe0000000,
         width: 1920,

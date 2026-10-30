@@ -1,12 +1,13 @@
 //! Intel 82540EM Ethernet transport. Single CPU, polled legacy descriptors.
 //! MMIO is supervisor-only UC; DMA buffers are permanently device-owned frames.
 //! Only bounded service in ordinary syscall context accesses descriptor rings.
-use super::pci;
+use crate::drivers::pci;
+use super::e1000_caps::{self, COUNT, FRAME_BYTES};
 use crate::memory::RegionFrameAllocator;
 use core::sync::atomic::{fence, Ordering};
 use rustos_net_abi::Error;
 use smoltcp::{
-    phy::{self, Device, DeviceCapabilities, Medium},
+    phy::{self, Device, DeviceCapabilities},
     time::Instant,
 };
 use x86_64::{
@@ -18,8 +19,6 @@ use x86_64::{
 
 const MMIO: u64 = 0xffff_a000_0000_0000;
 const MMIO_BYTES: u64 = 0x20000;
-const COUNT: usize = 32;
-const FRAME_BYTES: usize = 1514;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -65,7 +64,7 @@ impl E1000 {
         frames: &mut RegionFrameAllocator,
         offset: VirtAddr,
     ) -> Result<Self, Error> {
-        let function = pci::discover(pci::read).ok_or(Error::NoDevice)?;
+        let function = pci::find_device(0x8086, 0x100e, pci::read).ok_or(Error::NoDevice)?;
         let physical = pci::memory_bar(pci::read(function, 0x10)).ok_or(Error::NoDevice)?;
         // The supported BAR has a fixed 128 KiB aperture. Reject firmware layouts
         // with a conflicting direct-map alias, or an unaligned/out-of-range BAR.
@@ -333,10 +332,6 @@ impl Device for E1000 {
         }
     }
     fn capabilities(&self) -> DeviceCapabilities {
-        let mut caps = DeviceCapabilities::default();
-        caps.medium = Medium::Ethernet;
-        caps.max_transmission_unit = FRAME_BYTES;
-        caps.max_burst_size = Some(1);
-        caps
+        e1000_caps::capabilities()
     }
 }

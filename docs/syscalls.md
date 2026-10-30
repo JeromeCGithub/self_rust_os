@@ -76,7 +76,7 @@ stack. Apps use `userlib::sys::FRAMEBUFFER_ADDR`; rebuild all apps with
 `tools/build-user.sh` when migrating from the old layout. Syscall numbers and
 `fb_info`/`snapshot` formats are unchanged. Surfaces cover `pitch * height`, including
 padding and the final partial page. User mappings occupy private page tables below
-`0x4000000`; unused gaps are unmapped. The kernel heap is 32 MiB to stage flat images.
+`0x4000000`; unused gaps are unmapped. The kernel heap is 64 MiB to stage flat images and service concurrent allocations.
 
 Graphical apps must call `present_surface()` after each rendering update. The WM
 queries `surface_status()` and retains cached window pixels until the revision or
@@ -116,3 +116,36 @@ page and effective user/write permission is checked before copying. Network erro
 use their own documented range below the existing control sentinels. Socket
 close/exit/kill releases owned buffers. DNS/HTTP logic stays in userspace; the
 kernel exposes no ping-command or HTTP-specific syscall.
+
+## Platform randomness and UTC
+
+The [shared platform ABI](../crates/platform-abi/src/lib.rs),
+[kernel implementation](../src/system.rs), and
+[typed SDK](../user_programs/userlib/src/system.rs) define these operations:
+
+| Number | SDK operation | Arguments (`rdi`, `rsi`, `rdx`) | Result |
+| --- | --- | --- | --- |
+| 27 | `system::random_bytes` | writable output ptr, byte length (0–256), zero | Exact byte count, or platform error; SDK chunks larger slices into calls |
+| 28 | `system::unix_time` | zero, zero, zero | UTC Unix seconds from validated CMOS, or platform error |
+
+Both require a current process and reject nonzero reserved arguments. Zero-byte
+random requests return zero without inspecting the pointer or accessing hardware.
+Nonempty output must have effective present/user/writable permission at every
+paging level and across every page, with checked address arithmetic and bounds
+`0x400000..0x4000000`. The kernel fills a bounded local record first and copies
+only after complete entropy success. A failed syscall never partially writes its
+output. A multi-call SDK request can have completed earlier chunks before a later
+chunk fails; callers must not use it after an error.
+
+RDRAND absence returns Unavailable; failure after ten attempts per 64-bit word
+returns Failed. No fallback PRNG is seeded with ticks. Clock reads are bounded to
+eight attempts for two matching stable samples, validate calendar/format, and
+return Unavailable for invalid or inaccessible RTC data. UTC is host-controlled
+wall time, not a monotonic clock; use `ticks` for deadlines. TLS additionally
+rejects dates before 2020. These drivers do not provide a clock-setting API.
+
+Platform errors encode as `u64::MAX - 511 + code`: Invalid=1, Unavailable=2,
+Failed=3, distinct from network errors and scheduler control sentinels. Existing
+syscall numbers and network ABI records remain unchanged. TLS, certificates,
+trust policy and HTTPS are [userspace library responsibilities](tls.md), with no
+TLS-specific kernel syscall.

@@ -18,21 +18,14 @@ ICMP. `nightly-2025-01-30` remains pinned; no toolchain migration was necessary.
 | Client transports | Nonblocking UDP and outgoing TCP through open/connect/send/recv/close/poll/info syscalls |
 | Application networking proof | Independent host fixture receives an HTTP/1.0 request from a real Ring 3 TCP client |
 
-Next steps toward a general userspace HTTP client:
+The [userspace HTTP SDK and curl](http.md) now deliver DNS A/CNAME resolution,
+URL parsing, partial TCP writes, streaming Content-Length/chunked/EOF framing,
+redirects, deadlines and socket cleanup. [TLS 1.3 and HTTPS](tls.md) now reuse
+Rustls in userspace with certificate verification, hardware entropy and UTC time.
+Next application networking work includes richer HTTP methods, TLS 1.2 compatibility
+and DNS TCP fallback/AAAA/cache support. Background protocol service, server sockets and
+graceful shutdown remain kernel/interface work.
 
-1. Implement DNS resolution over the UDP API, with request matching, bounded
-   retries, malformed/truncated reply tests and optional TCP fallback.
-2. Build a userspace HTTP library and command with URL parsing, explicit connect
-   and total deadlines, short reads/writes, bounded header/body storage,
-   Content-Length/chunked framing and redirect policy. Keep HTTP out of Ring 0.
-3. Add graceful TCP shutdown and a socket wait interface with cancellation and
-   process cleanup tests. Introduce a kernel worker when service must continue
-   independently of polling callers; preserve bounded IRQ work and lock order.
-4. Add TLS only with tested cryptographic entropy, certificate validation and
-   appropriate time support. A successful plain HTTP probe is not HTTPS support.
-5. Add DHCP, additional NICs, IPv6 or server sockets as separate tested milestones.
-
-Every behavior change continues to require red/green tests at its failure layer,
-including real Ring 3/QEMU traffic for new syscalls or hardware behavior. Pin any
+Keep the existing dated toolchain pin. Pin any
 future toolchain change to an exact dated release and verify all affected kernel,
 userspace, boot and runtime paths before accepting it.

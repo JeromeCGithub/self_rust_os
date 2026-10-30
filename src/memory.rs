@@ -98,13 +98,14 @@ impl RegionFrameAllocator {
         for slot in &mut result {
             match self.allocate_frame() {
                 Some(frame) => *slot = frame,
-                None => { self.next = checkpoint; return None; }
+                None => {
+                    self.next = checkpoint;
+                    return None;
+                }
             }
         }
         Some(result)
     }
-
-
 }
 
 /// Implement the `FrameAllocator` trait for `RegionFrameAllocator`.
@@ -121,7 +122,9 @@ unsafe impl FrameAllocator<Size4KiB> for RegionFrameAllocator {
             let frames = region.len().div_ceil(4096);
             if index < frames {
                 self.next += 1;
-                return Some(PhysFrame::containing_address(PhysAddr::new(region.start + index * 4096)));
+                return Some(PhysFrame::containing_address(PhysAddr::new(
+                    region.start + index * 4096,
+                )));
             }
             index -= frames;
         }
@@ -148,14 +151,6 @@ impl BootInfoFrameAllocator {
             next: 0,
         }
     }
-
-    fn usable_frames(&self) -> impl Iterator<Item = PhysFrame> {
-        let regions = self.memory_map.iter();
-        let usable_regions = regions.filter(|r| r.region_type == MemoryRegionType::Usable);
-        let addr_ranges = usable_regions.map(|r| r.range.start_addr()..r.range.end_addr());
-        let frame_addresses = addr_ranges.flat_map(|r| r.step_by(4096));
-        frame_addresses.map(|addr| PhysFrame::containing_address(PhysAddr::new(addr)))
-    }
 }
 
 /// Implement the `FrameAllocator` trait for `BootInfoFrameAllocator`.
@@ -165,9 +160,25 @@ impl BootInfoFrameAllocator {
 /// Unsafe because the caller must guarantee that the memory map is valid.
 unsafe impl FrameAllocator<Size4KiB> for BootInfoFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
-        let frame = self.usable_frames().nth(self.next);
-        self.next += 1;
-        frame
+        // Bootloader ranges are page-aligned. Skip whole usable regions rather
+        // than rescanning every previously allocated frame: a 64 MiB heap maps
+        // over 16,000 pages, making nth(next) quadratic during debug boot.
+        let mut index = self.next as u64;
+        for region in self
+            .memory_map
+            .iter()
+            .filter(|r| r.region_type == MemoryRegionType::Usable)
+        {
+            let count = (region.range.end_addr() - region.range.start_addr()) / 4096;
+            if index < count {
+                self.next += 1;
+                return Some(PhysFrame::containing_address(PhysAddr::new(
+                    region.range.start_addr() + index * 4096,
+                )));
+            }
+            index -= count;
+        }
+        None
     }
 }
 
@@ -176,14 +187,62 @@ mod batch_tests {
     use super::*;
     #[test_case]
     fn batch_failure_restores_allocator_cursor() {
-        static REGIONS: [MemRegion; 1] = [MemRegion { start: 0x2000, end: 0x4000 }];
+        static REGIONS: [MemRegion; 1] = [MemRegion {
+            start: 0x2000,
+            end: 0x4000,
+        }];
         // SAFETY: No memory is dereferenced; this allocator is local to the test.
         let mut frames = unsafe { RegionFrameAllocator::new(&REGIONS) };
         assert!(frames.allocate_batch::<3>().is_none());
-        let batch = frames.allocate_batch::<2>().expect("failed reservation must preserve frames");
+        let batch = frames
+            .allocate_batch::<2>()
+            .expect("failed reservation must preserve frames");
         assert_eq!(batch[0].start_address().as_u64(), 0x2000);
         assert_eq!(batch[1].start_address().as_u64(), 0x3000);
         assert!(frames.allocate_batch::<1>().is_none());
         assert!(frames.allocate_batch::<0>().is_some());
+    }
+}
+
+#[cfg(test)]
+mod boot_frame_tests {
+    use super::*;
+    use alloc::boxed::Box;
+    use bootloader::bootinfo::{FrameRange, MemoryRegion};
+
+    #[test_case]
+    fn usable_frames_skip_reserved_regions_and_never_repeat_after_exhaustion() {
+        let mut map = Box::new(MemoryMap::new());
+        for (start, end, region_type) in [
+            (0x1000, 0x4000, MemoryRegionType::Usable),
+            (0x4000, 0x8000, MemoryRegionType::Reserved),
+            (0x8000, 0xa000, MemoryRegionType::Usable),
+        ] {
+            map.add_region(MemoryRegion {
+                range: FrameRange::new(start, end),
+                region_type,
+            });
+        }
+        // SAFETY: This test never maps/dereferences the returned frames. The map
+        // is immutable and leaked for its required static lifetime; allocator is local.
+        let mut frames = unsafe { BootInfoFrameAllocator::new(Box::leak(map)) };
+        for expected in [0x1000, 0x2000, 0x3000, 0x8000, 0x9000] {
+            assert_eq!(
+                frames.allocate_frame().unwrap().start_address().as_u64(),
+                expected
+            );
+        }
+        for _ in 0..3 {
+            assert!(frames.allocate_frame().is_none());
+        }
+    }
+
+    #[test_case]
+    fn empty_memory_map_returns_no_frames() {
+        let map = Box::leak(Box::new(MemoryMap::new()));
+        // SAFETY: Empty immutable map has no frames to hand out or dereference.
+        let mut frames = unsafe { BootInfoFrameAllocator::new(map) };
+        assert!(frames.allocate_frame().is_none());
+        assert!(frames.allocate_frame().is_none());
     }
 }

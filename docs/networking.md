@@ -8,18 +8,18 @@ static IPv4 routing, ICMP Echo, connected UDP and outgoing TCP. Portal's Ring 3
 
 | Layer | Implementation | Responsibility |
 | --- | --- | --- |
-| Device discovery | [PCI](../src/net/pci.rs), Ring 0 | PCI configuration, supported device ID, BAR decoding and command bits |
-| Ethernet transport | [e1000](../src/net/e1000.rs), Ring 0 | UC MMIO mapping, physical DMA ownership, RX/TX descriptors, link/MAC, Ethernet frame transport |
+| Device discovery | [PCI](../src/drivers/pci/mod.rs), Ring 0 | PCI configuration, supported device ID, BAR decoding and command bits |
+| Ethernet transport | [e1000](../src/drivers/net/e1000.rs), Ring 0 | UC MMIO mapping, physical DMA ownership, RX/TX descriptors, link/MAC, Ethernet frame transport |
 | Link protocols | `smoltcp = 0.12.0`, Ring 0 | Ethernet II framing, ARP neighbor resolution and cache |
 | Internet | smoltcp, Ring 0 | IPv4 validation/checksums, local address, routing, ICMP encoding/validation |
 | Transport | smoltcp plus [network service](../crates/net-stack/src/lib.rs), Ring 0 | ICMP echo endpoints, connected UDP datagrams, TCP handshake/retransmission/stream state |
-| Resource and syscall boundary | [kernel facade](../src/net/mod.rs), [copy checks](../src/net/usercopy.rs), [shared ABI](../crates/net-abi/src/lib.rs) | PID ownership, quotas, generation handles, mapping/permission validation, owned copies and cleanup |
+| Resource and syscall boundary | [kernel facade](../src/net/mod.rs), [copy checks](../src/userspace/usercopy.rs), [shared ABI](../crates/net-abi/src/lib.rs) | PID ownership, quotas, generation handles, mapping/permission validation, owned copies and cleanup |
 | Application SDK | [userlib::net](../user_programs/userlib/src/net.rs), Ring 3 | Typed nonblocking socket calls and errors |
-| Applications | [ping policy](../crates/ping/src/lib.rs), [Portal adapter](../user_programs/portal/src/ping.rs), Ring 3 | Parsing, payload matching, timing, statistics, presentation; future DNS and HTTP clients |
+| Applications | [ping policy](../crates/ping/src/lib.rs), [Portal adapter](../user_programs/portal/src/ping.rs), Ring 3 | Parsing, payload matching, timing, statistics, presentation, DNS and HTTP clients |
 
 ```mermaid
 flowchart TB
-    A[Ring 3 ping / future DNS and HTTP clients] --> B[userlib::net]
+    A[Ring 3 ping / DNS and HTTP clients] --> B[userlib::net]
     B --> C[int 0x80: owned socket records]
     C --> D[Ring 0 ownership and buffer validation]
     D --> E[ICMP / UDP / TCP sockets]
@@ -29,13 +29,12 @@ flowchart TB
     H --> I[QEMU Ethernet backend]
 ```
 
-HTTP parsing, URLs, headers, body framing, redirects and TLS do not belong in the
-kernel. `ZNETTEST` demonstrates a userspace HTTP/1.0 request over the TCP API to
-an independent host fixture. It is a regression probe, not a general HTTP client.
-Future work is a userspace DNS resolver over UDP, an HTTP client with bounded
-headers/body framing and redirects, then TLS with a suitable entropy source,
-certificate validation and time support. Existing TCP ISN seeding is not a
-cryptographic entropy source. TCP server listen/accept, explicit UDP bind,
+HTTP parsing, URLs, headers, body framing and redirects run in the reusable
+[userspace HTTP library](http.md). Portal's curl command and the standalone CURL
+application both use `userlib::http`; DNS resolution uses connected UDP and GET
+uses outgoing TCP. [TLS 1.3](tls.md) runs in userspace over the same TCP ABI,
+with Rustls/WebPKI certificate verification and explicit entropy/UTC syscalls.
+Existing TCP ISN seeding is not a cryptographic entropy source. TCP server listen/accept, explicit UDP bind,
 graceful TCP shutdown, general socket waits, and background service remain future
 interfaces; no placeholders for them are exposed.
 
@@ -52,7 +51,9 @@ Each RX/TX ring has 32 legacy descriptors, in its own physical frame. Each buffe
 has its own frame; heap virtual contiguity is never treated as physical contiguity.
 The 66 frames (264 KiB) are a fixed boot lifetime reservation. Batch allocation
 rolls back its cursor on failure. Frames and descriptors are reused per packet.
-Completed RX is copied to CPU-owned storage before returning the frame to DMA;
+The driver advertises 31 usable receive descriptors to bound TCP receive bursts.
+See [network performance](network-performance.md) for the receive-window fix and
+measured HTTP throughput. Completed RX is copied to CPU-owned storage before returning the frame to DMA;
 TX is reused only after completion. Malformed/incomplete frames are discarded.
 Device reset polling is bounded. This is a single-CPU QEMU implementation, not
 tested support for arbitrary physical Intel NICs or SMP.
@@ -68,7 +69,7 @@ There are at most 16 sockets globally and four per PID. The socket table reserve
 capacity at boot. Socket buffers allocate fallibly: failure returns NoResources,
 leaves no live endpoint, and permits a subsequent retry. ICMP has four packet
 slots and 512-byte storage per direction; UDP has four packet slots and 4096-byte
-storage per direction; TCP has 4096-byte RX and TX buffers. New endpoints receive
+storage per direction; TCP has a 32 KiB RX buffer and a 4096-byte TX buffer. New endpoints receive
 fresh generation handles and automatically assigned local ports/identifiers.
 Close/exit/kill discard queued data and release socket storage. Close is abortive
 for TCP and does not promise a FIN or delivery of pending bytes.
@@ -188,9 +189,9 @@ cargo +nightly-2025-01-30 test --manifest-path "$REPO/crates/net-abi/Cargo.toml"
 cargo +nightly-2025-01-30 test --manifest-path "$REPO/crates/net-stack/Cargo.toml" --target x86_64-unknown-linux-gnu
 cargo +nightly-2025-01-30 test --manifest-path "$REPO/crates/ping/Cargo.toml" --target x86_64-unknown-linux-gnu
 cargo +nightly-2025-01-30 run --manifest-path "$REPO/crates/net-stack/Cargo.toml" --target x86_64-unknown-linux-gnu --example allocation_failure
-rustc +nightly-2025-01-30 --edition=2021 --test "$REPO/src/net/pci.rs" -o /tmp/rustos-pci-tests
+rustc +nightly-2025-01-30 --edition=2021 --test "$REPO/src/drivers/pci/mod.rs" -o /tmp/rustos-pci-tests
 /tmp/rustos-pci-tests
-rustc +nightly-2025-01-30 --edition=2021 --test "$REPO/src/net/usercopy.rs" -o /tmp/rustos-usercopy-tests
+rustc +nightly-2025-01-30 --edition=2021 --test "$REPO/src/userspace/usercopy.rs" -o /tmp/rustos-usercopy-tests
 /tmp/rustos-usercopy-tests
 ```
 

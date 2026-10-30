@@ -1,0 +1,14 @@
+[package]
+name = "rustos-tls"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+[dependencies]
+rustls = { version = "=0.23.46", default-features = false, features = ["custom-provider"] }
+rustls-rustcrypto = { version = "=0.0.2-alpha", default-features = false, features = ["alloc", "zeroize"] }
+webpki-roots = { version = "=1.0.11", default-features = false }
+getrandom = { version = "=0.2.17", features = ["custom"] }
+sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
+
+[dev-dependencies]
+rustls = { version = "=0.23.46", default-features = false, features = ["std", "custom-provider"] }

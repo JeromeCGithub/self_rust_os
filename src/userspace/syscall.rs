@@ -244,6 +244,7 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
             crate::scheduler::surface_status(arg1 as u32)
         }
         20..=26 => crate::net::syscall(num, arg1, arg2, arg3),
+        27..=28 => crate::system::syscall(num, arg1, arg2, arg3),
         SYS_READ_NB => sys_read_nb(arg1, arg2, arg3),
         SYS_LS => sys_ls(arg1, arg2, arg3),
         SYS_READ_FILE => sys_read_file(arg1, arg2, arg3),
@@ -255,7 +256,7 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
         SYS_MKDIR => sys_mkdir(arg1),
         SYS_FB_INFO => sys_fb_info(arg1),
         14 => {
-            let size = crate::gfx::fb_info().pitch * crate::gfx::fb_info().height;
+            let size = crate::drivers::video::framebuffer::fb_info().pitch * crate::drivers::video::framebuffer::fb_info().height;
             if crate::scheduler::current_pid() != Some(0) || (arg3 == 0 || arg3 > size as u64) || !validate_user_buffer(arg2, arg3) { return SYSCALL_ERROR; }
             // SAFETY: Caller and buffer were validated above.
             let dest = unsafe { core::slice::from_raw_parts_mut(arg2 as *mut u8, arg3 as usize) };
@@ -379,7 +380,7 @@ fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
     // would prevent preemption). The keyboard IRQ will wake us.
     // Drain queued scancodes (including key releases) until we get a character.
     loop {
-        let scancode = match crate::task::keyboard::try_pop_scancode() {
+        let scancode = match crate::drivers::input::keyboard::try_pop_scancode() {
             Some(sc) => sc,
             None => return crate::scheduler::block_on_keyboard(),
         };
@@ -442,7 +443,7 @@ fn sys_read_nb(fd: u64, buf_ptr: u64, len: u64) -> u64 {
     // existing scancodes can be consumed. Releases/modifiers must not hide
     // a character already queued behind them from a nonblocking reader.
     for _ in 0..100 {
-        let Some(scancode) = crate::task::keyboard::try_pop_scancode() else { return 0; };
+        let Some(scancode) = crate::drivers::input::keyboard::try_pop_scancode() else { return 0; };
         if let Ok(Some(event)) = keyboard.add_byte(scancode) {
             if let Some(key) = keyboard.process_keyevent(event) {
                 use pc_keyboard::DecodedKey;
@@ -545,7 +546,7 @@ fn sys_fb_info(buf_ptr: u64) -> u64 {
     if !validate_user_buffer(buf_ptr, 32) {
         return SYSCALL_ERROR;
     }
-    let info = crate::gfx::fb_info();
+    let info = crate::drivers::video::framebuffer::fb_info();
     // SAFETY: Buffer validated above; 32 bytes for 4 u64 values.
     unsafe {
         let buf = buf_ptr as *mut u64;
@@ -687,8 +688,8 @@ fn sys_waitpid(pid: u64) -> u64 {
 /// Bits: `[63:32]` = buttons (bit 0 = left, 1 = right, 2 = middle),
 /// `[31:16]` = y (0-199), `[15:0]` = x (0-319).
 fn sys_mouse() -> u64 {
-    let (x, y) = crate::mouse::position();
-    let buttons = crate::mouse::buttons();
+    let (x, y) = crate::drivers::input::mouse::position();
+    let buttons = crate::drivers::input::mouse::buttons();
     // Clamp to u16 ranges (driver already clamps to screen, but be safe).
     let x = x.clamp(0, 0xFFFF) as u64;
     let y = y.clamp(0, 0xFFFF) as u64;

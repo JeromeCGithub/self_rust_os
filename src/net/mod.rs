@@ -1,28 +1,21 @@
 //! Kernel networking layers: PCI -> Ethernet DMA -> smoltcp -> process sockets.
 //! Only this facade crosses into scheduler/syscall ownership. Protocol service
 //! code is hardware independent in crates/net-stack; application policy is Ring 3.
-mod e1000;
-pub mod pci;
-pub mod usercopy;
+use crate::drivers::net::e1000;
+pub use crate::userspace::usercopy;
 
-use core::sync::atomic::{AtomicU64, Ordering};
 use rustos_net_abi::{self as abi, Error, Info, Kind, Packet};
 use rustos_net_stack::Network;
 use spin::Mutex;
 use x86_64::{structures::paging::OffsetPageTable, VirtAddr};
 
 static NETWORK: Mutex<Option<Network<e1000::E1000>>> = Mutex::new(None);
-// Boot publishes this once. No concurrent boot or SMP is supported; Release /
-// Acquire also makes the one-time publication explicit to later syscall copies.
-static PHYS_OFFSET: AtomicU64 = AtomicU64::new(0);
-
 /// Initialize optional Ethernet before scheduler ownership of the frame allocator.
 pub fn init(
     mapper: &mut OffsetPageTable<'_>,
     frames: &mut crate::memory::RegionFrameAllocator,
     offset: VirtAddr,
 ) {
-    PHYS_OFFSET.store(offset.as_u64(), Ordering::Release);
     match e1000::E1000::init(mapper, frames, offset) {
         Ok(device) => {
             let mac = device.mac();
@@ -67,7 +60,7 @@ pub fn syscall(number: u64, first: u64, second: u64, third: u64) -> u64 {
 }
 
 fn valid(ptr: u64, len: u64, write: bool) -> bool {
-    usercopy::validate_current(PHYS_OFFSET.load(Ordering::Acquire), ptr, len, write)
+    usercopy::validate(ptr, len, write)
 }
 
 fn dispatch(number: u64, first: u64, second: u64, third: u64) -> Result<u64, Error> {

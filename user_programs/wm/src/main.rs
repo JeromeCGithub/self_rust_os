@@ -14,6 +14,8 @@ struct Desktop {
     damage: Damage,
 }
 const MAX: usize = 6;
+// Installed launchers and simultaneous window backing have separate limits.
+const MAX_APPS: usize = 16;
 static mut BACK: [u32; MAX_W * MAX_H] = [0; MAX_W * MAX_H];
 static mut SURFACE: [u32; MAX_PITCH / 4 * MAX_H] = [0; MAX_PITCH / 4 * MAX_H];
 static mut CACHE: [[u32; 488 * 288]; MAX] = [[0; 488 * 288]; MAX];
@@ -124,12 +126,12 @@ impl Desktop {
 fn hit(mx: i32, my: i32, x: i32, y: i32, w: i32, h: i32) -> bool {
     mx >= x && mx < x + w && my >= y && my < y + h
 }
-fn discover(apps: &mut [App; MAX]) -> usize {
+fn discover(apps: &mut [App; MAX_APPS]) -> usize {
     let mut entries = [0u8; 12 * 32];
     let mut count = 0;
     if let Some(n) = sys::ls("/BIN", &mut entries, 32) {
         for e in entries.chunks_exact(12).take(n.min(32)) {
-            if &e[8..11] != b"BIN" || &e[..8] == b"WM      " || count == MAX {
+            if &e[8..11] != b"BIN" || &e[..8] == b"WM      " || count == MAX_APPS {
                 continue;
             }
             let len = e[..8].iter().position(|b| *b == b' ').unwrap_or(8);
@@ -315,7 +317,7 @@ pub extern "C" fn user_main() {
             && &WALL[..15] == b"P6\n160 120\n255\n"
     };
     println!("[desktop] wallpaper loaded: {}", wallpaper);
-    let mut apps = [EMPTY_APP; MAX];
+    let mut apps = [EMPTY_APP; MAX_APPS];
     let count = discover(&mut apps);
     println!("[desktop] ready: {} applications", count);
     let mut windows: [Option<Window>; MAX] = [None; MAX];

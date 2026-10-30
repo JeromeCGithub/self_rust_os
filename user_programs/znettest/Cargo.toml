@@ -13,5 +13,5 @@ opt-level = "z"
 lto = true
 
 [dependencies]
-userlib = { path = "../userlib" }
+userlib = { path = "../userlib", features = ["tls"] }
 rustos-net-abi = { path = "../../crates/net-abi" }

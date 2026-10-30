@@ -38,17 +38,23 @@ pub fn send(handle: u64, packet: &Packet) -> Result<usize, Error> {
 /// A zero-length TCP result means EOF. A zero-length UDP datagram remains valid.
 pub fn recv(handle: u64) -> Result<Packet, Error> {
     let mut packet = Packet::empty();
-    // SAFETY: Exclusive initialized writable output remains live throughout the
-    // synchronous call; the kernel validates the entire buffer before copying.
+    recv_into(handle, &mut packet)?;
+    Ok(packet)
+}
+/// Receive into reusable caller storage to bound stack use for streaming clients.
+/// Only read the record after success; the kernel initializes its complete output.
+pub fn recv_into(handle: u64, packet: &mut Packet) -> Result<usize, Error> {
+    // SAFETY: The exclusive writable record lives for the call. The kernel checks
+    // its complete mapping, copies initialized bytes and retains no reference.
     abi::decode(unsafe {
         syscall(
             abi::SYS_RECV,
             handle,
-            &mut packet as *mut Packet as u64,
+            packet as *mut Packet as u64,
             core::mem::size_of::<Packet>() as u64,
         )
-    })?;
-    Ok(packet)
+    })
+    .map(|n| n as usize)
 }
 /// Return readiness while also making bounded protocol/device progress.
 pub fn poll(handle: u64) -> Result<u64, Error> {

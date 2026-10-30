@@ -13,6 +13,9 @@ use smoltcp::{
 
 const SLOTS: usize = 16;
 const PER_PROCESS: usize = 4;
+// Enough receive credit for a burst of full Ethernet frames, within the
+// e1000's usable DMA ring. Allocate fallibly only when a TCP socket opens.
+const TCP_RX_BYTES: usize = 32 * 1024;
 
 fn buffer<T: Clone>(value: T, len: usize) -> Result<Vec<T>, Error> {
     let mut data = Vec::new();
@@ -159,7 +162,7 @@ impl<D: Device> Network<D> {
             }
             Kind::Tcp => {
                 let mut socket = tcp::Socket::new(
-                    tcp::SocketBuffer::new(buffer(0, 4096)?),
+                    tcp::SocketBuffer::new(buffer(0, TCP_RX_BYTES)?),
                     tcp::SocketBuffer::new(buffer(0, 4096)?),
                 );
                 socket.set_timeout(Some(Duration::from_secs(10)));

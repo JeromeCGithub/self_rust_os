@@ -5,6 +5,10 @@
 Run commands from the repository root. The pinned [toolchain](../rust-toolchain.toml)
 is `nightly-2025-01-30`, with `rust-src` and `llvm-tools-preview`. Keep it pinned:
 new compiler releases can change naked assembly, target JSON, and `build-std` behavior.
+Active desktop/E2E launchers use the shared QEMU platform profile with 1 GiB RAM;
+bootimage tests also request 1 GiB. Private user stacks are 4 MiB, TLS-enabled
+userspace heaps 16 MiB, and the kernel heap 64 MiB. These are fixed, eagerly
+mapped capacities; rebuilding all apps and the disk is required after changes.
 The root [.cargo config](../.cargo/config.toml) selects the custom bare-metal target
 and builds `core`, `compiler_builtins`, and `alloc`; host `cargo test` semantics do not apply.
 

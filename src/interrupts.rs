@@ -7,12 +7,11 @@ use pc_keyboard::{layouts, HandleControl, ScancodeSet1};
 use pic8259::ChainedPics;
 use spin::Mutex;
 use x86_64::{
-    instructions::port::Port,
     structures::idt::{InterruptDescriptorTable, InterruptStackFrame},
     VirtAddr,
 };
 
-use crate::{gdt, println, task::keyboard, userspace};
+use crate::{gdt, println, drivers::input::keyboard, userspace};
 
 /// The offset for the Programmable Interrupt Controller (PIC) 1 (starting after interrupt table
 /// max offset).
@@ -207,14 +206,7 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
                 HandleControl::Ignore,
             ));
     }
-    let mut port = Port::new(0x60);
-
-    // Read the scancode from the keyboard port.
-    //
-    // SAFETY:
-    // We are reading from the keyboard port which is known to be safe.
-    let scancode: u8 = unsafe { port.read() };
-    keyboard::add_scancode(scancode);
+    keyboard::handle_interrupt();
 
     // Wake any processes blocked waiting for keyboard input.
     crate::scheduler::wake_keyboard_waiters();
@@ -230,24 +222,7 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
 }
 
 extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    let mut status_port = Port::<u8>::new(0x64);
-    let mut data_port = Port::<u8>::new(0x60);
-
-    // SAFETY: Reading the PS/2 status/data ports is side-effect free apart
-    // from consuming the pending output byte, which is exactly what the
-    // IRQ signals.
-    unsafe {
-        let status: u8 = status_port.read();
-        // Only consume the byte if the output buffer is full and the byte
-        // came from the mouse; a keyboard byte must never enter the mouse
-        // packet assembler.
-        if status & crate::mouse::STATUS_OUTPUT_READY != 0
-            && status & crate::mouse::STATUS_MOUSE_DATA != 0
-        {
-            let byte: u8 = data_port.read();
-            crate::mouse::handle_byte(byte);
-        }
-    }
+    crate::drivers::input::mouse::handle_interrupt();
 
     // Notify the PICs that the interrupt has been handled.
     //

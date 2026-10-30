@@ -79,6 +79,11 @@ host device. `file.locking=off` permits attachment; it does not make concurrent 
 ```bash
 ./tools/build-grub-disk.sh
 python3 e2e/desktop.py
+python3 -B e2e/http.py
+python3 -B e2e/tls.py --site https://google.com/
+python3 -B e2e/tls.py --no-rng
+python3 -B e2e/tls.py --bad-clock
+python3 -B e2e/net_perf.py --label current --assert-fast
 python3 e2e/desktop_perf.py
 bash e2e/build_profile.sh
 rustc --edition=2021 --test user_programs/wm/src/damage.rs -o /tmp/rustos-damage-tests
@@ -100,7 +105,8 @@ large compositor mappings, padded pitch, final partial pages, independent snapsh
 preserved parent code and three pairs of spawn/kill/reap operations. Existing frame/stack leaks
 remain; a bounded repetition test does not establish resource reclamation.
 See [1080p validation](1080p-validation.md) for recorded red/green evidence and limits.
-The test writes files inside the development disk. It needs Pillow and permission to
+The desktop and CPU tests now boot private copies of the development disk,
+so file operations in the test cannot mutate an interactive VM's image. It needs Pillow and permission to
 create local QEMU monitor/QMP sockets.
 
 For a manual input check, run `cargo run` on the reported host, move the pointer
@@ -119,6 +125,10 @@ local deterministic tests and depends on the host's ICMP support. The network
 probe also exercises spawn with live socket buffers, blocked waitpid return/reap,
 foreign handles, quotas and close/exit/kill cleanup. Record each result and actual
 captured packets; do not infer transport behavior from unit harness compilation.
+
+TLS checks and host commands: [TLS](tls.md), with recorded [validation](tls-validation.md).
+The HTTPS harness uses disposable OpenSSL certificates, an independent host TLS server,
+private disk copies, and real Ring 3 callers. OpenSSL is a host test prerequisite.
 
 ## Known baseline gaps
 
@@ -139,6 +149,11 @@ Reproduced on pulled `main` commit `26edbc9` when preparing these guides:
   Other old scripts may also assume superseded boot paths; inspect before relying on them.
 - Bootloader dependency builds can emit an unsupported `rustc-abi` target-field
   warning under the pinned nightly. Distinguish dependency warnings from project warnings.
+
+After expanding the kernel heap to 64 MiB, the same debug stress loop runs
+67,108,864 allocations because it iterates HEAP_SIZE. Its assertion and 60-second
+timeout remain unchanged. [Expanded-limit validation](http-limits-validation.md)
+records current results and the boot-frame allocation performance fix.
 
 The remaining gaps are repair targets, not permission to skip required coverage or to report green.
 For unrelated documentation changes, disclose this baseline without pretending to

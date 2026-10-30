@@ -20,8 +20,8 @@ impl Function {
     }
 }
 
-/// Find the supported Intel 82540EM among PCI functions.
-pub fn discover(mut read: impl FnMut(Function, u8) -> u32) -> Option<Function> {
+/// Find a vendor/device pair among PCI functions. Device selection belongs to the caller.
+pub fn find_device(vendor: u16, device_id: u16, mut read: impl FnMut(Function, u8) -> u32) -> Option<Function> {
     for bus in 0..=255 {
         for device in 0..32 {
             let first = Function {
@@ -43,7 +43,7 @@ pub fn discover(mut read: impl FnMut(Function, u8) -> u32) -> Option<Function> {
                     device,
                     function,
                 };
-                if read(address, 0) == 0x100e_8086 {
+                if read(address, 0) == (u32::from(device_id) << 16 | u32::from(vendor)) {
                     return Some(address);
                 }
             }
@@ -109,7 +109,7 @@ mod tests {
             device: 4,
             function: 2,
         };
-        let found = discover(|f, offset| {
+        let found = find_device(0x8086, 0x100e, |f, offset| {
             if f == wanted && offset == 0 {
                 0x100e_8086
             } else if f.bus == 0 && f.device == 4 && f.function == 0 {
@@ -123,7 +123,7 @@ mod tests {
             }
         });
         assert_eq!(found, Some(wanted));
-        assert_eq!(discover(|_, _| u32::MAX), None);
+        assert_eq!(find_device(0x8086, 0x100e, |_, _| u32::MAX), None);
     }
     #[test]
     fn validates_memory_bar_and_config_address() {

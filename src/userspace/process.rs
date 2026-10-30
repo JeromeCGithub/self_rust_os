@@ -251,9 +251,9 @@ pub(crate) fn map_user_framebuffer(
     let flags = if display_owner { flags | PageTableFlags::NO_CACHE } else { flags };
     let mut frames = alloc::vec::Vec::new();
 
-    let num_pages = userspace::framebuffer_pages(&crate::gfx::fb_info())?;
+    let num_pages = userspace::framebuffer_pages(&crate::drivers::video::framebuffer::fb_info())?;
     let fb_virt_start = VirtAddr::new(userspace::USER_FRAMEBUFFER);
-    let fb_phys_start = PhysAddr::new(crate::gfx::framebuffer_phys_addr());
+    let fb_phys_start = PhysAddr::new(crate::drivers::video::framebuffer::framebuffer_phys_addr());
 
     for i in 0..num_pages {
         let page: Page<Size4KiB> = Page::containing_address(fb_virt_start + i * 4096);

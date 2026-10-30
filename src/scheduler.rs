@@ -942,7 +942,7 @@ pub fn surface_write(bytes: &[u8]) {
     if !bytes.is_empty() {
         proc.surface_revision = (proc.surface_revision + 1) & ((1u64 << 62) - 1);
     }
-    let info = crate::gfx::fb_info();
+    let info = crate::drivers::video::framebuffer::fb_info();
     for &byte in bytes {
         if byte == b'\n' || proc.text_cursor.0 + 8 > info.width {
             proc.text_cursor.0 = 8;

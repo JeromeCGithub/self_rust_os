@@ -264,6 +264,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustos-platform-abi"
+version = "0.1.0"
+
+[[package]]
 name = "rustversion"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -290,6 +294,7 @@ dependencies = [
  "pic8259",
  "rustos-net-abi",
  "rustos-net-stack",
+ "rustos-platform-abi",
  "smoltcp",
  "spin 0.5.2",
  "uart_16550",

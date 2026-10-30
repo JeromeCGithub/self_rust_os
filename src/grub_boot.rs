@@ -216,7 +216,7 @@ pub extern "C" fn grub_entry_rust(magic: u64, info_ptr: u64) -> ! {
     }
 
     // Construct FbInfo from the Multiboot2 framebuffer tag.
-    let fb_info = self_rust_os::gfx::FbInfo {
+    let fb_info = self_rust_os::drivers::video::framebuffer::FbInfo {
         addr: fb.addr,
         width: fb.width as usize,
         height: fb.height as usize,

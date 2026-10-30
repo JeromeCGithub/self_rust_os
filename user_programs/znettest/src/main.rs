@@ -2,6 +2,10 @@
 //! provisions /TMP/NET.CFG and local UDP/HTTP peers on a disposable guest disk.
 #![no_std]
 #![no_main]
+extern crate alloc;
+mod http;
+mod net_perf;
+mod tls_test;
 use rustos_net_abi as abi;
 use userlib::{
     net::{self, Error, Kind, Packet},
@@ -60,7 +64,9 @@ fn child(mode: u8) {
 }
 
 fn boundary(handle: u64) {
-    for pointer in [0, u64::MAX - 100, 0x1000000, 0x1ffbfff, 0xffff800000000000] {
+    // The lower/upper stack boundaries cross unmapped guards. The old 16 MiB
+    // address is now inside the deliberately expanded private BSS heap.
+    for pointer in [0, u64::MAX - 100, 0x1bfffff, 0x1ffffff, 0xffff800000000000] {
         // SAFETY: Deliberately invalid pointers are never dereferenced in Ring 3.
         // The tested syscall must reject them before copying or forming a slice.
         let result = unsafe {
@@ -214,6 +220,12 @@ fn transports(udp_port: u16, tcp_port: u16) {
 
 #[no_mangle]
 pub extern "C" fn user_main() {
+    let mut tls_config=[0;12];
+    if sys::read_file("/TMP/TLS.CFG",&mut tls_config)==Some(12){tls_test::run(tls_config);}
+    let mut marker=[0;256];
+    if sys::read_file("/TMP/PERF.URL",&mut marker).is_some(){net_perf::run();}
+    let mut http_config=[0;4];
+    if sys::read_file("/TMP/HTTP.CFG",&mut http_config)==Some(4){http::run(http_config);}
     sys::graphics_mode();
     let mut setting = [0];
     if sys::read_file("/TMP/NET.MOD", &mut setting) == Some(1)

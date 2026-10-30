@@ -1,3 +1,5 @@
+#[path = "../../../src/drivers/net/e1000_caps.rs"]
+mod e1000_caps;
 use rustos_net_abi::{Error, Kind, Packet};
 use rustos_net_stack::Network;
 use smoltcp::{
@@ -121,4 +123,33 @@ fn pending_tcp_handshake_is_not_eof() {
     net.connect(1, h, [10, 0, 2, 2], 80).unwrap();
     assert_eq!(net.poll(1, h).unwrap() & rustos_net_abi::EOF, 0);
     assert_eq!(net.recv(1, h), Err(Error::WouldBlock));
+}
+
+#[derive(Clone, Default)]
+struct E1000Mock(Mock);
+impl Device for E1000Mock {
+    type RxToken<'a> = Rx;
+    type TxToken<'a> = Tx;
+    fn receive(&mut self, now:Instant)->Option<(Rx,Tx)>{self.0.receive(now)}
+    fn transmit(&mut self, now:Instant)->Option<Tx>{self.0.transmit(now)}
+    fn capabilities(&self)->DeviceCapabilities{e1000_caps::capabilities()}
+}
+#[test]
+fn e1000_tcp_advertises_a_useful_window_within_dma_capacity() {
+    let mock=E1000Mock::default();let mac=[2,1,2,3,4,5];
+    let mut net=Network::new(mock.clone(),mac);
+    let h=net.open(1,Kind::Tcp).unwrap();net.connect(1,h,[10,0,2,2],80).unwrap();
+    net.progress(0);
+    let peer=[2,0,0,0,0,2];let mut arp=vec![];
+    arp.extend_from_slice(&mac);arp.extend_from_slice(&peer);
+    arp.extend_from_slice(&[8,6,0,1,8,0,6,4,0,2]);
+    arp.extend_from_slice(&peer);arp.extend_from_slice(&[10,0,2,2]);
+    arp.extend_from_slice(&mac);arp.extend_from_slice(&[10,0,2,15]);
+    mock.0.0.borrow_mut().rx.push_back(arp);net.progress(1);
+    let queues=mock.0.0.borrow();
+    let syn=queues.tx.iter().find(|f| f.get(12..14)==Some(&[8,0]) && f.get(23)==Some(&6)).expect("wire SYN after ARP");
+    let tcp=14+usize::from(syn[14]&15)*4;
+    let advertised=usize::from(u16::from_be_bytes([syn[tcp+14],syn[tcp+15]]));
+    assert!(advertised>=32768,"TCP advertised only {advertised} bytes despite a 32-descriptor DMA ring");
+    assert!(advertised<=(e1000_caps::COUNT-1)*(e1000_caps::FRAME_BYTES-54),"peer burst must fit usable DMA descriptors");
 }
