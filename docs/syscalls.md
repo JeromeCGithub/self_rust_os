@@ -25,7 +25,7 @@ Unused arguments are zero in SDK wrappers. `ptr` means a user virtual address.
 | --- | --- | --- | --- |
 | 0 | `exit` | exit code | Terminates current process; no return |
 | 1 | `console_write` | byte ptr, byte length | Bytes written; text renders to private surface unless client drawing enabled; also serial diagnostics |
-| 2 | `read` | fd, buffer ptr, byte capacity | Blocking keyboard read; only fd 0 supported; focused process only |
+| 2 | `read` | fd, buffer ptr, byte capacity | Keyboard read; only fd 0 supported; focused process only; after blocking/wakeup, zero means retry (the wake itself does not fill the buffer) |
 | 3 | `ticks` | none | Monotonic PIT tick count, not milliseconds/wall time |
 | 4 | `read_nb` | fd, buffer ptr, byte capacity | Nonblocking keyboard read; zero when no input or unfocused |
 | 5 | `ls` | path ptr, output ptr, max entries | Entry count; each entry is 11 raw 8.3 filename bytes plus one attribute byte; directory bit `0x10` |
@@ -43,6 +43,8 @@ Unused arguments are zero in SDK wrappers. `ptr` means a user virtual address.
 | 17 | `sleep_ticks` | duration in PIT ticks | Zero on wake; zero duration returns immediately; durations above `i64::MAX`, overflowing absolute deadlines, or no calling process return error |
 | 18 | `present_surface` | none | Publishes an update to the caller's private surface by advancing its revision; zero on success, error if caller has no private surface |
 | 19 | `surface_status` | PID | PID 0 only; revision in bits 1–62, zombie flag in bit 0; error for missing target or display owner (no private surface) |
+| 20 | `send_message` | target PID (`u32`), payload (`u32`), zero | Zero on enqueue, one when full, error for forbidden/missing/dead target or invalid integer arguments |
+| 21 | `receive_message` | zero, zero, zero | Zero if empty, otherwise `((sender + 1) << 32) \| payload`; error without a current process or with nonzero arguments |
 
 Operations 14–16 currently appear as numeric dispatcher arms and numeric SDK calls.
 Do not assume the named `SYS_*` constants above operation 13 are a complete ABI inventory.
@@ -89,6 +91,26 @@ the original full surface. Rebuild graphical apps with the SDK when migrating.
 the kernel idles; the scheduler uses `sti; hlt` when nothing can run. The PIT rate
 remains approximately 18.2 Hz (~55 ms/tick), preserving game and cursor blink timing.
 This reduces idle CPU but does not introduce a 60 Hz display/input loop.
+
+## Display-owner message channel
+
+Each PCB owns a fixed sixteen-entry FIFO of scalar messages. A client can send
+only to PID 0; PID 0 can send to any live process. The kernel supplies sender
+identity and does not interpret payloads. Full queues return backpressure without
+overwriting earlier messages. Receive consumes one message and never blocks.
+Reaping drops the inbox; sends to zombies or reaped processes fail. New calls use
+only register values, so they introduce no user-pointer dereferences or retained
+user references. Target/payload truncation and nonzero reserved args are rejected.
+
+The SDK returns `MessageError::Full` or `MessageError::Unavailable`, and decodes
+received values to `Option<(u32, u32)>`. PID 0 remains the existing privileged
+display-owner exception; this is not general IPC permission/capability management.
+The [Ring 3 window protocol](ui.md#window-protocol-version-1) uses this transport.
+The [desktop shell extension](desktop-environment.md#shell-message-extension)
+also runs entirely in userspace. The kernel does not interpret shell-role or
+workspace messages; PID 0 authenticates its spawned DE and accepts/rejects requests.
+Native clients retain immutable submitted surface pixels until the WM acknowledges
+its snapshot copy. Existing syscalls 0–19 and legacy XRGB applications are preserved.
 
 ## Changing the interface
 

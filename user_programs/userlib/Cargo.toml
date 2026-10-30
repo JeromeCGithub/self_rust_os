@@ -8,6 +8,9 @@ license = "MIT OR Apache-2.0"
 [lib]
 crate-type = ["rlib"]
 
+[dependencies]
+font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
+
 [profile.dev]
 panic = "abort"
 

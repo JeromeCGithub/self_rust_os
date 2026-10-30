@@ -114,6 +114,10 @@ pub struct Process {
     pub console_enabled: bool,
     /// Revision of a completed client or console rendering update.
     pub surface_revision: u64,
+    /// Bounded scalar inbox. Sender identity is filled by the kernel.
+    inbox: [u64; 16],
+    inbox_head: usize,
+    inbox_len: usize,
 }
 
 /// Saved CPU context layout.
@@ -452,6 +456,9 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
         text_cursor: (8, 8),
         console_enabled: true,
         surface_revision: 0,
+        inbox: [0; 16],
+        inbox_head: 0,
+        inbox_len: 0,
     };
     // Ensure the vector is large enough.
     while sched.processes.len() <= pid as usize {
@@ -607,7 +614,10 @@ pub extern "C" fn schedule(save_rsp: u64) -> u64 {
                 // Actually, blockers set state before returning sentinel, so we
                 // just save the RSP here.
                 pcb.kernel_rsp = save_rsp;
-                if matches!(pcb.block_reason, BlockReason::Timer(_)) {
+                if matches!(pcb.block_reason, BlockReason::Timer(_) | BlockReason::Keyboard) {
+                    // A keyboard wake does not fill the user buffer: returning
+                    // zero makes read callers retry, rather than reusing stale
+                    // bytes with the saved syscall number as a fake byte count.
                     // SAFETY: save_rsp is the aligned SavedContext on this
                     // process's live kernel stack, supplied by syscall_entry.
                     // IRQs are disabled and no other context accesses it.
@@ -880,6 +890,39 @@ pub static INPUT_FOCUS: AtomicU64 = AtomicU64::new(0);
 /// Whether this process owns keyboard focus.
 pub fn has_input_focus() -> bool {
     current_pid().map(u64::from) == Some(INPUT_FOCUS.load(Ordering::Relaxed))
+}
+
+/// Sends an opaque scalar message between a client and the display owner.
+pub fn send_message(target: u32, payload: u32) -> u64 {
+    // Single CPU: syscall entry masks interrupts; scheduler lock serializes the
+    // multi-field queue update. No allocation or borrowed user memory is involved.
+    let mut sched = SCHEDULER.lock();
+    let Some(sender) = sched.current else { return u64::MAX - 1; };
+    if sender != 0 && target != 0 { return u64::MAX - 1; }
+    let Some(proc) = sched.processes.get_mut(target as usize).and_then(Option::as_mut) else {
+        return u64::MAX - 1;
+    };
+    if proc.state == ProcessState::Zombie { return u64::MAX - 1; }
+    if proc.inbox_len == proc.inbox.len() { return 1; }
+    let tail = (proc.inbox_head + proc.inbox_len) % proc.inbox.len();
+    proc.inbox[tail] = ((u64::from(sender) + 1) << 32) | u64::from(payload);
+    proc.inbox_len += 1;
+    0
+}
+
+/// Receives an authenticated sender/payload pair, or zero for an empty queue.
+pub fn receive_message() -> u64 {
+    let mut sched = SCHEDULER.lock();
+    let Some(pid) = sched.current else { return u64::MAX - 1; };
+    let Some(proc) = sched.processes.get_mut(pid as usize).and_then(Option::as_mut) else {
+        return u64::MAX - 1;
+    };
+    if proc.inbox_len == 0 { return 0; }
+    let message = proc.inbox[proc.inbox_head];
+    proc.inbox[proc.inbox_head] = 0;
+    proc.inbox_head = (proc.inbox_head + 1) % proc.inbox.len();
+    proc.inbox_len -= 1;
+    message
 }
 
 /// Publishes a completed rendering update from the current application.

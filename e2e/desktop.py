@@ -46,8 +46,8 @@ with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
             image=Image.open(ppm).convert('RGB')
             if name:image.save(OUT/f'{name}.png')
             return image
-        def wait_pixel(name,position,color):
-            end=time.monotonic()+45
+        def wait_pixel(name,position,color,timeout=45):
+            end=time.monotonic()+timeout
             while True:
                 image=shot(name)
                 if image.getpixel(position)==color:return image
@@ -70,12 +70,18 @@ with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
             for c in text:cmd('sendkey '+keys.get(c,c),.08)
             cmd('sendkey ret',.3)
         wait_for('[mouse] absolute pointer enabled');wait_for('[desktop] ready: ');time.sleep(1)
+        wait_for("sys_spawn: '/BIN/DE.BIN'")
+        wait_for('[compositor] desktop surface committed')
+        assert log.read_text().count('[compositor] desktop surface committed')>=2,'DE redraw was not copied/released'
         image=shot('desktop')
         assert image.size==(WIDTH,HEIGHT),f'expected 1920x1080 framebuffer, got {image.size}'
         # Panels and wallpaper must fill the new geometry, including the final row/column.
         assert image.getpixel((WIDTH-1,0))==(0x11,0x1d,0x30),'top panel does not span display'
         assert image.getpixel((WIDTH-1,HEIGHT-1))==(0x10,0x1c,0x2e),'bottom panel misplaced'
         assert image.getpixel((WIDTH-1,HEIGHT//2))!=(0,0,0),'wallpaper missing at right edge'
+        with Image.open(ROOT/'user_programs/de/wallpaper.ppm') as wallpaper:
+            for point in [(1000,300),(1500,700),(1800,900)]:
+                assert image.getpixel(point)==wallpaper.getpixel(point),'default space wallpaper was not presented by DE'
         for x,y in [(WIDTH-1,HEIGHT-1),(WIDTH-8,HEIGHT//2),(WIDTH//2,HEIGHT-14),(0,0)]:
             move(x,y);time.sleep(.5)
             assert shot(None).getpixel((x,y))==(8,19,33),f'pointer did not reach {(x,y)}'
@@ -91,22 +97,37 @@ with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
         move(150,138);start=log.stat().st_size;cmd('mouse_button 1')
         wait_for('[desktop] drag started: ',after=start)
         move(WIDTH-1,HEIGHT-1)
-        wait_pixel('desktop-1080p-drag',(WIDTH-488,HEIGHT-32-316),(0x23,0x3b,0x55))
+        # Glass samples the backdrop, so its titlebar has no fixed flat color.
+        # The close control remains a stable pixel at the negotiated window edge.
+        wait_pixel('desktop-1080p-drag',(WIDTH-18,HEIGHT-32-316+14),(0xff,0x6b,0x79))
         cmd('mouse_button 0');time.sleep(.5)
         click(WIDTH-18,HEIGHT-32-316+12);time.sleep(.5)
         click(250,65);wait_for('[desktop] launched Terminal pid=');time.sleep(1)
         # Drag the terminal using its titlebar, then close it.
         move(150,138);start=log.stat().st_size;cmd('mouse_button 1')
         wait_for('[desktop] drag started: ',after=start)
-        move(190,140);wait_pixel(None,(120,128),(0x23,0x3b,0x55))
+        move(190,140);wait_pixel(None,(120+488-18,128+14),(0xff,0x6b,0x79))
         cmd('mouse_button 0');time.sleep(.5)
         click(120+470,128+12);time.sleep(.5)
         shot('desktop-after-close')
         for x,name,expected in [(50,'FORGE','self_rust_os forge'),(150,'HELLO','Hello from user space!'),(450,'SPIN','spin: starting')]:
             click(x,65);wait_for(expected);time.sleep(.7)
-            click(80+470,126+12);time.sleep(.4)
+            width=640 if name=='HELLO' else 488
+            click(80+width-18,126+14);time.sleep(.4)
+        # The shell can die without taking the compositor or other apps down.
+        shell_pid=re.search(r"sys_spawn: '/BIN/DE.BIN' -> pid (\d+)",log.read_text()).group(1)
+        start=log.stat().st_size
+        click(50,65);wait_for('self_rust_os forge',after=start)
+        type_command('kill '+shell_pid)
+        wait_for('[compositor] desktop disconnected',after=start)
+        wait_pixel('desktop-compositor-alone',(1800,900),(0x0e,0x17,0x2b),timeout=5)
+        start=log.stat().st_size
+        type_command('echo compositor-alive');wait_for('\ncompositor-alive\n',after=start)
+        click(80+488-18,126+14)
+        move(1800,950) # Inspect the exposed scene, away from the software cursor.
+        wait_pixel(None,(80+488-18,126+14),(0x0e,0x17,0x2b),timeout=5)
         assert 'Kernel panic' not in log.read_text()
-        print('PASS: 1920x1080 framebuffer, edge pixels/pointer, wallpaper, application icons, terminal commands, concurrent Snake, focus, dragging and close')
+        print('PASS: separate compositor/DE, space wallpaper, 1920x1080 edges/pointer, launchers, commands, concurrency, focus/drag/close, and compositor survival after DE exit')
     except Exception:
         if log.exists():print(log.read_text(errors='replace')[-8000:])
         raise

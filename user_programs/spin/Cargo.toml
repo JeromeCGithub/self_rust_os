@@ -8,4 +8,4 @@ userlib = { path = "../userlib" }
 
 [[bin]]
 name = "spin"
-path = "src/main.rs"
+path = "../userlib/src/application.rs"
