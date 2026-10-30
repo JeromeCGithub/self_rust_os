@@ -29,7 +29,9 @@ notification is best effort. No threads or background kernel worker were added.
 
 Rustls' unbuffered connection state machine consumes fragmented records, produces
 handshake flights, verifies the peer, and encrypts/decrypts application records.
-The HTTP adapter upgrades before sending a GET. Certificate or TLS errors never
+Fatal handshake errors attempt to send Rustls's queued alert before teardown;
+failed sessions reject subsequent application reads/writes. The HTTP adapter
+upgrades before sending a GET. Certificate or TLS errors never
 retry in plaintext. HTTPS-to-HTTP redirects fail before contacting the destination;
 HTTP-to-HTTPS is allowed. HTTP framing still runs over authenticated plaintext.
 A raw TCP EOF is a TLS truncation error; TLS EOF requires `close_notify`.
@@ -75,7 +77,7 @@ There is no `--insecure` mode.
 
 ## Platform trust and ABI
 
-[Syscalls 27 and 28](syscalls.md#platform-randomness-and-utc) expose random bytes
+[Syscalls 80 and 81](syscalls.md#platform-randomness-and-utc) expose random bytes
 and UTC seconds. The kernel reads RDRAND with bounded retries and fails if the
 CPU lacks it; no timestamp, MAC, TCP state or deterministic seed substitutes for
 entropy. QEMU launchers explicitly request `qemu64,rdrand=on` and UTC RTC time.
@@ -98,7 +100,7 @@ allocation exhaustion prints a fixed diagnostic and exits that process with code
 12; process exit releases its sockets. Existing kernel process frame/stack leaks
 remain separate and are not repaired by this allocator.
 
-All user stacks are 4 MiB (`0x1c00000..0x2000000`) with unmapped guards. Kernel
+All user stacks are 4 MiB (`0x2c00000..0x3000000`) with unmapped guards. Kernel
 stacks remain 16 KiB. Two encrypted buffers are bounded at 18,437 bytes each;
 queued plaintext is capped at 64 KiB. Application writes are limited to 16 KiB,
 and an additional DER CA to 16 KiB. HTTP streams bodies and retains its independent

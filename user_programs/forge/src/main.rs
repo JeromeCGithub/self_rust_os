@@ -1,11 +1,9 @@
-//! Terminal user-space program for `self_rust_os`, built on `userlib`.
-//!
-//! A simple interactive shell running in Ring 3.
-//!
-//! Commands: help, echo <text>, clear, time, ls [path], mkdir <path>, cat <file>, exit
+// Terminal user-space program for `self_rust_os`, built on `userlib`.
+//
+// A simple interactive shell running in Ring 3.
+//
+// Commands: help, echo <text>, clear, time, ls [path], mkdir <path>, cat <file>, exit
 
-#![no_std]
-#![no_main]
 
 use userlib::{println, sys};
 
@@ -93,8 +91,7 @@ fn eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// Entry point called by `userlib`'s runtime after `_start`.
-#[no_mangle]
-pub extern "C" fn user_main() {
+fn main() {
     println!("self_rust_os forge v1.0");
     println!("Type 'help' for commands.\n");
 

@@ -66,7 +66,7 @@ code; they are not required for a wording-only fix.
 ## Building and changing userspace
 
 Use `userlib` rather than hand-written syscall assembly. Programs implement
-`user_main`; [the runtime](../user_programs/userlib/src/rt.rs) supplies `_start` and
+`fn main()`; [the runtime](../user_programs/userlib/src/rt.rs) supplies `_start` and
 the panic handler. Keep linker scripts/custom targets aligned with kernel loading.
 
 The unified builder converts ELF to flat `.bin`, materializes `.bss`, and writes
@@ -93,3 +93,38 @@ Before requesting review, run the applicable tests, `git diff --check`, inspect
 `git diff`/`git status`, and verify the branch base. Do not commit build caches, logs,
 temporary sockets, unrelated fixture changes, or disk images. Preserve user work.
 Disclose baseline runtime failures independently of passing documentation/tool tests.
+
+
+## Writing an application
+
+Application source uses ordinary Rust functions:
+
+```rust
+use userlib::println;
+
+fn main() {
+    println!("Hello from RustOS");
+}
+```
+
+Each application manifest selects the SDK's shared executable root:
+
+```toml
+[[bin]]
+name = "myapp"
+path = "../userlib/src/application.rs"
+```
+
+Keep application code in `src/main.rs`. The shared root includes that file,
+supplies the target's `no_std`/`no_main` attributes, and bridges `main` to the
+existing runtime. Returning from `main` exits with status zero; use
+`userlib::sys::exit(code)` for an explicit status. Panics report through userlib
+and exit with status one. The supported entry signature is `fn main()`, with no
+arguments or return value. Use regular comments in the included application root;
+crate-level attributes and inner documentation belong in the shared root.
+
+This is a Cargo convention for the current custom target, not a port of Rust's
+standard library. `core` and `userlib` are available; APIs such as `std::fs` and threads are not. Networking is provided by
+`userlib::net`, `userlib::http` and the optional `userlib::tls` feature. Dependencies must support `no_std` and the pinned
+target. The OS still loads fixed-address flat binaries rather than Linux ELF files.
+The shared root does not change syscall numbers, linker layout, or privileges.

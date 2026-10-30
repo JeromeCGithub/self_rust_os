@@ -13,7 +13,7 @@ pub mod syscall;
 pub const USER_CODE_START: u64 = 0x40_0000;
 
 /// Top of the user-mode stack (stack grows downward).
-pub const USER_STACK_TOP: u64 = 0x200_0000;
+pub const USER_STACK_TOP: u64 = 0x300_0000;
 
 /// Size of the user-mode stack in bytes (4 MiB, mapped privately at process creation).
 pub const USER_STACK_SIZE: u64 = 4 * 1024 * 1024;
@@ -25,7 +25,7 @@ pub const USER_STACK_BOTTOM: u64 = USER_STACK_TOP - USER_STACK_SIZE;
 pub const SYSCALL_INTERRUPT_INDEX: u8 = 0x80;
 
 /// Virtual address of the display owner's MMIO or a client's private surface.
-pub const USER_FRAMEBUFFER: u64 = 0x210_0000;
+pub const USER_FRAMEBUFFER: u64 = 0x310_0000;
 
 /// Exclusive end of the private user page-table region (64 MiB).
 /// Unmapped gaps between code, stack and display remain guard regions.

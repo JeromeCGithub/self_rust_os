@@ -27,6 +27,7 @@ version = "0.1.0"
 name = "userlib"
 version = "0.1.0"
 dependencies = [
+ "font8x8",
  "rustos-http",
  "rustos-net-abi",
  "rustos-platform-abi",

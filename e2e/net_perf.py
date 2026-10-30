@@ -18,6 +18,7 @@ sys.dont_write_bytecode=True
 sys.path.insert(0,str(ROOT/'tools'))
 from qemu_network import arguments as network_arguments
 from qemu_platform import arguments as platform_arguments
+from qemu_test import disk_image
 
 
 def trace(path):
@@ -124,7 +125,7 @@ def main():
     worker=threading.Thread(target=peer,daemon=True);worker.start()
     try:
         with tempfile.TemporaryDirectory(prefix='rustos-net-perf-') as tmp:
-            tmp=Path(tmp);disk=tmp/'disk.img';shutil.copyfile(ROOT/'target/grub-disk.img',disk)
+            tmp=Path(tmp);disk=tmp/'disk.img';shutil.copyfile(disk_image(ROOT),disk)
             config=tmp/'perf.url';config.write_text(f'http://10.0.2.2:{server.getsockname()[1]}/bulk')
             subprocess.run(['mcopy','-i',f'{disk}@@1048576',str(config),'::/TMP/PERF.URL'],check=True)
             log=out/'serial.log';capture=out/'ethernet.pcap';path=tmp/'qmp'

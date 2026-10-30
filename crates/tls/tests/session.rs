@@ -21,6 +21,7 @@ struct Peer {
     checks: Cell<usize>,
     tamper: bool,
     eof: bool,
+    alert_received: bool,
 }
 impl Peer {
     fn new(cert: &[u8], key: &[u8]) -> Self {
@@ -48,6 +49,7 @@ impl Peer {
             checks: Cell::new(0),
             tamper: false,
             eof: false,
+            alert_received: false,
         }
     }
 }
@@ -77,7 +79,14 @@ impl Io for Peer {
         let mut cursor = Cursor::new(data);
         while (cursor.position() as usize) < data.len() {
             self.server.read_tls(&mut cursor).map_err(|_| Error::Io)?;
-            self.server.process_new_packets().map_err(|_| Error::Io)?;
+            match self.server.process_new_packets() {
+                Ok(_) => (),
+                Err(rustls::Error::AlertReceived(_)) => {
+                    self.alert_received = true;
+                    return Ok(()); // TCP accepted the alert, even though TLS rejects it.
+                }
+                Err(_) => return Err(Error::Io),
+            }
         }
         let mut b = [0; 1024];
         while let Ok(n) = self.server.reader().read(&mut b) {
@@ -225,4 +234,30 @@ fn expired_deadline_also_rejects_buffered_plaintext() {
     assert_eq!(client.read(&mut peer, &mut byte), Ok(1));
     peer.checks.set(10000);
     assert_eq!(client.read(&mut peer, &mut byte), Err(Error::Timeout));
+}
+
+#[test]
+fn certificate_rejection_flushes_fatal_alert_without_waiting_for_peer() {
+    let mut peer = Peer::new(VALID, KEY);
+    let mut client = Session::new("wrong.test", NOW, Some(CA)).unwrap();
+    assert_eq!(client.handshake(&mut peer), Err(Error::Certificate));
+    let checks = peer.checks.get();
+    let _ = client.close(&mut peer);
+    assert!(
+        peer.alert_received,
+        "fatal rejection must reach the TLS peer"
+    );
+    assert!(
+        peer.checks.get() - checks < 16,
+        "fatal close must never wait for input"
+    );
+    assert!(peer.request.is_empty());
+    assert_eq!(
+        client.write(&mut peer, b"no plaintext"),
+        Err(Error::Certificate)
+    );
+    assert_eq!(client.read(&mut peer, &mut [0; 1]), Err(Error::Certificate));
+    let checks = peer.checks.get();
+    client.close(&mut peer).unwrap();
+    assert_eq!(peer.checks.get(), checks, "fatal close is idempotent");
 }

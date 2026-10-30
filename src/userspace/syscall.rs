@@ -72,6 +72,10 @@ pub const SYS_SLEEP_TICKS: u64 = 17;
 pub const SYS_PRESENT_SURFACE: u64 = 18;
 /// Queries surface revision and exit status (display owner only).
 pub const SYS_SURFACE_STATUS: u64 = 19;
+/// Sends an opaque u32 message to/from the display owner.
+pub const SYS_SEND_MESSAGE: u64 = 20;
+/// Receives an authenticated scalar message without blocking.
+pub const SYS_RECEIVE_MESSAGE: u64 = 21;
 
 /// Sentinel: the current process has exited, schedule another (don't save context).
 const PROCESS_EXIT_SENTINEL: u64 = u64::MAX;
@@ -239,12 +243,22 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
         SYS_TICKS => crate::interrupts::ticks(),
         SYS_SLEEP_TICKS => crate::scheduler::sleep_ticks(arg1),
         SYS_PRESENT_SURFACE => crate::scheduler::present_surface(),
+        SYS_SEND_MESSAGE => {
+            if arg1 > u32::MAX as u64 || arg2 > u32::MAX as u64 || arg3 != 0 {
+                return SYSCALL_ERROR;
+            }
+            crate::scheduler::send_message(arg1 as u32, arg2 as u32)
+        }
+        SYS_RECEIVE_MESSAGE => {
+            if arg1 != 0 || arg2 != 0 || arg3 != 0 { return SYSCALL_ERROR; }
+            crate::scheduler::receive_message()
+        }
         SYS_SURFACE_STATUS => {
             if crate::scheduler::current_pid() != Some(0) { return SYSCALL_ERROR; }
             crate::scheduler::surface_status(arg1 as u32)
         }
-        20..=26 => crate::net::syscall(num, arg1, arg2, arg3),
-        27..=28 => crate::system::syscall(num, arg1, arg2, arg3),
+        64..=70 => crate::net::syscall(num, arg1, arg2, arg3),
+        80..=81 => crate::system::syscall(num, arg1, arg2, arg3),
         SYS_READ_NB => sys_read_nb(arg1, arg2, arg3),
         SYS_LS => sys_ls(arg1, arg2, arg3),
         SYS_READ_FILE => sys_read_file(arg1, arg2, arg3),
@@ -730,6 +744,14 @@ mod tests {
         assert_eq!(syscall_dispatch(17, 1, 0, 0), SYSCALL_ERROR, "no current process");
         assert_eq!(syscall_dispatch(18, 0, 0, 0), SYSCALL_ERROR);
         assert_eq!(syscall_dispatch(19, 1, 0, 0), SYSCALL_ERROR, "metadata is compositor-only");
+        assert_eq!(syscall_dispatch(20, 0, 0, 0), SYSCALL_ERROR, "messages need a calling process");
+        assert_eq!(syscall_dispatch(20, 1u64 << 32, 0, 0), SYSCALL_ERROR, "target must not truncate");
+        assert_eq!(syscall_dispatch(20, 0, 1u64 << 32, 0), SYSCALL_ERROR, "payload must not truncate");
+        assert_eq!(syscall_dispatch(20, 0, 0, 1), SYSCALL_ERROR, "reserved args must be zero");
+        assert_eq!(syscall_dispatch(21, 0, 0, 0), SYSCALL_ERROR);
+        assert_eq!(syscall_dispatch(21, 1, 0, 0), SYSCALL_ERROR);
+        assert_eq!(syscall_dispatch(21, 0, 1, 0), SYSCALL_ERROR);
+        assert_eq!(syscall_dispatch(21, 0, 0, 1), SYSCALL_ERROR);
     }
 
     #[test_case]

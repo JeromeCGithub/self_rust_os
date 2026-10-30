@@ -18,6 +18,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / 'tools'))
 from qemu_network import arguments as network_arguments
 from qemu_platform import arguments as platform_arguments
+from qemu_test import disk_image
 
 
 def main():
@@ -98,7 +99,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix='rustos-http-') as tmp:
             tmp = Path(tmp)
             disk = tmp / 'disk.img'
-            shutil.copyfile(ROOT / 'target/grub-disk.img', disk)
+            shutil.copyfile(disk_image(ROOT), disk)
             config = tmp / 'http.cfg'
             config.write_bytes(struct.pack('<HH', port, dns_port))
             subprocess.run(['mcopy', '-i', f'{disk}@@1048576', str(config), '::/TMP/HTTP.CFG'], check=True)

@@ -7,6 +7,7 @@ sys.dont_write_bytecode=True
 sys.path.insert(0,str(ROOT/'tools'))
 from qemu_network import arguments as network_arguments
 from qemu_platform import arguments as platform_arguments
+from qemu_test import disk_image
 from tls_fixtures import create
 
 
@@ -67,7 +68,7 @@ def main():
      except OSError:break
      dns.sendto(raw[:2]+b'\x81\x80\0\x01\0\x01\0\0\0\0'+raw[12:]+b'\xc0\x0c\0\x01\0\x01\0\0\0\x1e\0\x04\x0a\0\x02\x02',peer)
    worker=threading.Thread(target=resolve,daemon=True);worker.start();workers.append(worker)
-   disk=tmp/'disk.img';shutil.copyfile(ROOT/'target/grub-disk.img',disk)
+   disk=tmp/'disk.img';shutil.copyfile(disk_image(ROOT),disk)
    config=tmp/'tls.cfg';config.write_bytes(struct.pack('<6H',*[s.getsockname()[1] for s in servers],1))
    mode=tmp/'tls.mode';mode.write_bytes(b'R' if args.no_rng else b'C' if args.bad_clock else b'V')
    for source,destination in [(config,'::/TMP/TLS.CFG'),(mode,'::/TMP/TLS.MOD'),(certs/'ca.der','::/ETC/TEST.CA')]:subprocess.run(['mcopy','-i',f'{disk}@@1048576',str(source),destination],check=True)

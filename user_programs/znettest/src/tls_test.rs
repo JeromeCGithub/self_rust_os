@@ -60,17 +60,17 @@ pub fn run(config: [u8; 12]) -> ! {
         (u64::MAX - 4, 16),
         (0x4000000 - 8, 16),
         (0xffff800000000000, 32),
-        (0x1ffffff, 2),   // mapped final stack byte crosses its upper guard
-        (0x1bfffff, 2),   // lower stack guard crosses into mapped stack
-        (0x1c00000, 257), // request exceeds bounded syscall output
+        (0x2ffffff, 2),   // mapped final stack byte crosses its upper guard
+        (0x2bfffff, 2),   // lower stack guard crosses into mapped stack
+        (0x2c00000, 257), // request exceeds bounded syscall output
     ] {
         // SAFETY: Deliberately malformed output ranges exercise validation; they must
         // be rejected by the kernel before any memory access or entropy operation.
-        let result = unsafe { sys::syscall(27, pointer, length, 0) };
+        let result = unsafe { sys::syscall(80, pointer, length, 0) };
         assert_eq!(result, system::Error::Invalid.encode());
     }
     for (number, first, second, third) in
-        [(27, 0, 0, 1), (28, 1, 0, 0), (28, 0, 1, 0), (28, 0, 0, 1)]
+        [(80, 0, 0, 1), (81, 1, 0, 0), (81, 0, 1, 0), (81, 0, 0, 1)]
     {
         // SAFETY: Invalid scalar/reserved arguments must fail before memory access.
         assert_eq!(
@@ -79,7 +79,7 @@ pub fn run(config: [u8; 12]) -> ! {
         );
     }
     // SAFETY: Zero-length entropy requests accept a null pointer without access.
-    assert_eq!(unsafe { sys::syscall(27, 0, 0, 0) }, 0);
+    assert_eq!(unsafe { sys::syscall(80, 0, 0, 0) }, 0);
     let heap = tls::heap_used();
     for _ in 0..2 {
         let mut allocation = alloc::vec::Vec::<u8>::new();
@@ -168,7 +168,14 @@ pub fn run(config: [u8; 12]) -> ! {
                 },
             );
             if let Some(error) = expected {
-                assert_eq!(result, Err(error));
+                assert_eq!(
+                    result,
+                    Err(error),
+                    "fixture host={} server={} path={}",
+                    host,
+                    server,
+                    path
+                );
                 assert_eq!(length, 0);
             } else {
                 assert_eq!(result.unwrap().bytes, length);

@@ -1,9 +1,9 @@
 //! Platform services shared by kernel and Ring 3: randomness and UTC time.
 #![no_std]
 /// Fill a validated output buffer with hardware random bytes.
-pub const SYS_RANDOM: u64 = 27;
+pub const SYS_RANDOM: u64 = 80;
 /// Return validated RTC UTC seconds since the Unix epoch.
-pub const SYS_UNIX_TIME: u64 = 28;
+pub const SYS_UNIX_TIME: u64 = 81;
 /// Bound the work and temporary storage of a single randomness syscall.
 pub const MAX_RANDOM_BYTES: usize = 256;
 /// Platform failures occupy a range distinct from socket and scheduler returns.

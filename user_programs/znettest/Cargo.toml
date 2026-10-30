@@ -15,3 +15,7 @@ lto = true
 [dependencies]
 userlib = { path = "../userlib", features = ["tls"] }
 rustos-net-abi = { path = "../../crates/net-abi" }
+
+[[bin]]
+name = "znettest"
+path = "../userlib/src/application.rs"

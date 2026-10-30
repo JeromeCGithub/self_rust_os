@@ -17,6 +17,8 @@ rustos-platform-abi = { path = "../../crates/platform-abi" }
 rustos-http = { path = "../../crates/http" }
 rustos-net-abi = { path = "../../crates/net-abi" }
 
+font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
+
 [lib]
 crate-type = ["rlib"]
 

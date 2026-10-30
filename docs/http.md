@@ -1,7 +1,7 @@
 # Userspace HTTP client and curl
 
 HTTP and DNS execute entirely in Ring 3. The kernel's existing ICMP/UDP/TCP ABI
-preserves syscalls 20–26. The reusable no_std [protocol crate](../crates/http/src/lib.rs)
+uses networking syscalls 64–70. The reusable no_std [protocol crate](../crates/http/src/lib.rs)
 handles URLs, DNS A/CNAME responses, TCP request writes, HTTP response framing,
 redirects and deadlines. The [SDK adapter](../user_programs/userlib/src/http.rs)
 uses typed socket syscalls and sleeps between retries. It owns socket cleanup on

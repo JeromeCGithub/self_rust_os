@@ -20,3 +20,7 @@ userlib = { path = "../userlib" }
 version = "0.3"
 default-features = false
 features = ["unicode"]
+
+[[bin]]
+name = "wm"
+path = "../userlib/src/application.rs"

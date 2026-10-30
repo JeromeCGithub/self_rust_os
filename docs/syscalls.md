@@ -25,7 +25,7 @@ Unused arguments are zero in SDK wrappers. `ptr` means a user virtual address.
 | --- | --- | --- | --- |
 | 0 | `exit` | exit code | Terminates current process; no return |
 | 1 | `console_write` | byte ptr, byte length | Bytes written; text renders to private surface unless client drawing enabled; also serial diagnostics |
-| 2 | `read` | fd, buffer ptr, byte capacity | Blocking keyboard read; only fd 0 supported; focused process only |
+| 2 | `read` | fd, buffer ptr, byte capacity | Keyboard read; only fd 0 supported; focused process only; after blocking/wakeup, zero means retry (the wake itself does not fill the buffer) |
 | 3 | `ticks` | none | Monotonic PIT tick count, not milliseconds/wall time |
 | 4 | `read_nb` | fd, buffer ptr, byte capacity | Nonblocking keyboard read; zero when no input or unfocused |
 | 5 | `ls` | path ptr, output ptr, max entries | Entry count; each entry is 11 raw 8.3 filename bytes plus one attribute byte; directory bit `0x10` |
@@ -43,6 +43,8 @@ Unused arguments are zero in SDK wrappers. `ptr` means a user virtual address.
 | 17 | `sleep_ticks` | duration in PIT ticks | Zero on wake; zero duration returns immediately; durations above `i64::MAX`, overflowing absolute deadlines, or no calling process return error |
 | 18 | `present_surface` | none | Publishes an update to the caller's private surface by advancing its revision; zero on success, error if caller has no private surface |
 | 19 | `surface_status` | PID | PID 0 only; revision in bits 1–62, zombie flag in bit 0; error for missing target or display owner (no private surface) |
+| 20 | `send_message` | target PID (`u32`), payload (`u32`), zero | Zero on enqueue, one when full, error for forbidden/missing/dead target or invalid integer arguments |
+| 21 | `receive_message` | zero, zero, zero | Zero if empty, otherwise `((sender + 1) << 32) \| payload`; error without a current process or with nonzero arguments |
 
 Operations 14–16 currently appear as numeric dispatcher arms and numeric SDK calls.
 Do not assume the named `SYS_*` constants above operation 13 are a complete ABI inventory.
@@ -67,11 +69,11 @@ are incomplete hardening, as noted in [architecture](architecture.md).
 Mouse packing is x in bits 0–15, y in bits 16–31, buttons above bit 31. Button bits
 0/1/2 mean left/right/middle. Coordinates are clamped to current display dimensions,
 not historical 320×200 values found in some source comments. Query `fb_info`; honor
-pitch, bounds and 32-bit XRGB format. Mapping at `0x2100000` is physical display memory
+pitch, bounds and 32-bit XRGB format. Mapping at `0x3100000` is physical display memory
 only for the compositor; other processes see private surface frames.
 
-The 1080p layout moves the stack top from `0x800000` to `0x2000000` and the drawing
-surface from `0x900000` to `0x2100000`, making room for compositor buffers below the
+The 1080p layout moves the stack top from `0x800000` to `0x3000000` and the drawing
+surface from `0x900000` to `0x3100000`, making room for compositor buffers below the
 stack. Apps use `userlib::sys::FRAMEBUFFER_ADDR`; rebuild all apps with
 `tools/build-user.sh` when migrating from the old layout. Syscall numbers and
 `fb_info`/`snapshot` formats are unchanged. Surfaces cover `pitch * height`, including
@@ -90,6 +92,26 @@ the kernel idles; the scheduler uses `sti; hlt` when nothing can run. The PIT ra
 remains approximately 18.2 Hz (~55 ms/tick), preserving game and cursor blink timing.
 This reduces idle CPU but does not introduce a 60 Hz display/input loop.
 
+## Display-owner message channel
+
+Each PCB owns a fixed sixteen-entry FIFO of scalar messages. A client can send
+only to PID 0; PID 0 can send to any live process. The kernel supplies sender
+identity and does not interpret payloads. Full queues return backpressure without
+overwriting earlier messages. Receive consumes one message and never blocks.
+Reaping drops the inbox; sends to zombies or reaped processes fail. New calls use
+only register values, so they introduce no user-pointer dereferences or retained
+user references. Target/payload truncation and nonzero reserved args are rejected.
+
+The SDK returns `MessageError::Full` or `MessageError::Unavailable`, and decodes
+received values to `Option<(u32, u32)>`. PID 0 remains the existing privileged
+display-owner exception; this is not general IPC permission/capability management.
+The [Ring 3 window protocol](ui.md#window-protocol-version-1) uses this transport.
+The [desktop shell extension](desktop-environment.md#shell-message-extension)
+also runs entirely in userspace. The kernel does not interpret shell-role or
+workspace messages; PID 0 authenticates its spawned DE and accepts/rejects requests.
+Native clients retain immutable submitted surface pixels until the WM acknowledges
+its snapshot copy. Existing syscalls 0–19 and legacy XRGB applications are preserved.
+
 ## Changing the interface
 
 First add a failing kernel boundary test and a userspace caller test. Update the
@@ -101,11 +123,11 @@ Do not expose kernel pointers, internal scheduling sentinels, or Rust layout wit
 an explicit representation and ABI contract.
 
 
-## Network client sockets (version 1)
+## Network client sockets (version 2)
 
-Syscalls 20–26 are open, connect, send, receive, close, poll and interface info.
+Syscalls 64–70 are open, connect, send, receive, close, poll and interface info.
 The kernel dispatcher and userlib share [record definitions/constants](../crates/net-abi/src/lib.rs).
-[The networking ABI](networking.md#socket-abi-version-1) specifies the complete
+[The networking ABI](networking.md#socket-abi-version-2) specifies the complete
 argument table, exact sizes, byte order, quotas, readiness bits and error encoding.
 The typed SDK is [userlib::net](../user_programs/userlib/src/net.rs).
 
@@ -125,8 +147,8 @@ The [shared platform ABI](../crates/platform-abi/src/lib.rs),
 
 | Number | SDK operation | Arguments (`rdi`, `rsi`, `rdx`) | Result |
 | --- | --- | --- | --- |
-| 27 | `system::random_bytes` | writable output ptr, byte length (0–256), zero | Exact byte count, or platform error; SDK chunks larger slices into calls |
-| 28 | `system::unix_time` | zero, zero, zero | UTC Unix seconds from validated CMOS, or platform error |
+| 80 | `system::random_bytes` | writable output ptr, byte length (0–256), zero | Exact byte count, or platform error; SDK chunks larger slices into calls |
+| 81 | `system::unix_time` | zero, zero, zero | UTC Unix seconds from validated CMOS, or platform error |
 
 Both require a current process and reject nonzero reserved arguments. Zero-byte
 random requests return zero without inspecting the pointer or accessing hardware.

@@ -4,21 +4,21 @@
 /// Maximum bytes in one socket operation (stream transfers can be short).
 pub const MAX_DATA: usize = 1024;
 /// Networking ABI version.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 /// Create an ICMP echo, UDP, or TCP socket.
-pub const SYS_SOCKET: u64 = 20;
+pub const SYS_SOCKET: u64 = 64;
 /// Associate a remote IPv4 address/port; starts an asynchronous TCP handshake.
-pub const SYS_CONNECT: u64 = 21;
+pub const SYS_CONNECT: u64 = 65;
 /// Send a packet or stream chunk.
-pub const SYS_SEND: u64 = 22;
+pub const SYS_SEND: u64 = 66;
 /// Receive a packet or stream chunk without blocking.
-pub const SYS_RECV: u64 = 23;
+pub const SYS_RECV: u64 = 67;
 /// Release a socket and its queued data.
-pub const SYS_CLOSE: u64 = 24;
+pub const SYS_CLOSE: u64 = 68;
 /// Make bounded network progress and return readiness bits.
-pub const SYS_POLL: u64 = 25;
+pub const SYS_POLL: u64 = 69;
 /// Query interface configuration and resource usage.
-pub const SYS_INFO: u64 = 26;
+pub const SYS_INFO: u64 = 70;
 /// Data can be read.
 pub const READABLE: u64 = 1;
 /// Data can be queued for transmission.

@@ -1,7 +1,5 @@
-//! Actual Ring 3 boundary/lifecycle/transport regression probe. The E2E runner
-//! provisions /TMP/NET.CFG and local UDP/HTTP peers on a disposable guest disk.
-#![no_std]
-#![no_main]
+// Actual Ring 3 boundary/lifecycle/transport regression probe. The E2E runner
+// provisions /TMP/NET.CFG and local UDP/HTTP peers on a disposable guest disk.
 extern crate alloc;
 mod http;
 mod net_perf;
@@ -66,7 +64,7 @@ fn child(mode: u8) {
 fn boundary(handle: u64) {
     // The lower/upper stack boundaries cross unmapped guards. The old 16 MiB
     // address is now inside the deliberately expanded private BSS heap.
-    for pointer in [0, u64::MAX - 100, 0x1bfffff, 0x1ffffff, 0xffff800000000000] {
+    for pointer in [0, u64::MAX - 100, 0x2bfffff, 0x2ffffff, 0xffff800000000000] {
         // SAFETY: Deliberately invalid pointers are never dereferenced in Ring 3.
         // The tested syscall must reject them before copying or forming a slice.
         let result = unsafe {
@@ -218,8 +216,7 @@ fn transports(udp_port: u16, tcp_port: u16) {
     net::close(tcp).unwrap();
 }
 
-#[no_mangle]
-pub extern "C" fn user_main() {
+fn main() {
     let mut tls_config=[0;12];
     if sys::read_file("/TMP/TLS.CFG",&mut tls_config)==Some(12){tls_test::run(tls_config);}
     let mut marker=[0;256];

@@ -48,3 +48,9 @@ class DiskIsolation(unittest.TestCase):
             self.assertEqual(clone.read_bytes(), b'original disk')
             clone.write_bytes(b'private changes')
             self.assertEqual(source.read_bytes(), b'original disk')
+
+
+class ImageSelection(unittest.TestCase):
+    def test_selects_explicit_integration_image_without_replacing_development_disk(self):
+        with patch.dict('os.environ', {'RUSTOS_TEST_DISK': '/tmp/merged-main.img'}):
+            self.assertEqual(monitor.disk_image(Path('/repo')), Path('/tmp/merged-main.img'))

@@ -85,16 +85,27 @@ python3 -B e2e/tls.py --no-rng
 python3 -B e2e/tls.py --bad-clock
 python3 -B e2e/net_perf.py --label current --assert-fast
 python3 e2e/desktop_perf.py
+python3 e2e/glass_ui.py
 bash e2e/build_profile.sh
 rustc --edition=2021 --test user_programs/wm/src/damage.rs -o /tmp/rustos-damage-tests
 /tmp/rustos-damage-tests
+rustc --edition=2021 --test user_programs/userlib/src/ui/host_tests.rs -o /tmp/rustos-ui-tests
+/tmp/rustos-ui-tests
+rustc --edition=2021 --test user_programs/wm/src/glass.rs -o /tmp/rustos-glass-tests
+/tmp/rustos-glass-tests
 python3 -B -m unittest discover -s tools/tests -p 'test_*.py'
 python3 -B tools/check_docs.py
 git diff --check
 ```
 
+Use `RUSTOS_TEST_DISK=target/merged-main.img` to select a separately built integration
+image for desktop, glass, HTTP/TLS and networking suites. Each VM boots its own
+writable copy. See [integration evidence](networking-main-integration.md).
+
 The desktop test builds no image itself: rebuilding first is mandatory. Its current
 checks cover wallpaper/launch readiness, Portal commands and file writes/reads,
+separate compositor/DE processes, two desktop-surface commits, exact default space
+wallpaper pixels, and DE-exit isolation while a foreground client remains usable,
 concurrent Snake, focus restoration, drag/close interactions, and launching Forge,
 Hello and Spin. Review the actual assertions before making stronger coverage claims.
 For example, an echoed command does not by itself verify successful execution.

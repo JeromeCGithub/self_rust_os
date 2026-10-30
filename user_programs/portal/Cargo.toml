@@ -21,3 +21,7 @@ userlib = { path = "../userlib", features = ["tls"] }
 version = "0.3"
 default-features = false
 features = ["unicode"]
+
+[[bin]]
+name = "portal"
+path = "../userlib/src/application.rs"

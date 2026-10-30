@@ -1,9 +1,6 @@
-//! Standalone HTTP client. The current process ABI has no argv; prompt for a URL.
-#![no_std]
-#![no_main]
+// Standalone HTTP client. The current process ABI has no argv; prompt for a URL.
 use userlib::{http, println, sys};
-#[no_mangle]
-pub extern "C" fn user_main() {
+fn main() {
     println!("curl: enter an http:// or https:// URL (empty line exits)");
     loop {
         sys::console_write(b"curl> ");

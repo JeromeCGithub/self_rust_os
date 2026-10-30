@@ -20,8 +20,9 @@ microkernel.
 | Kernel storage | [MBR](../src/mbr.rs), [FAT32](../src/fat32.rs), [mount](../src/fs.rs) | Partition offsets and filesystem mechanisms above the ATA driver |
 | Kernel networking | [facade](../src/net/mod.rs), [protocol service](../crates/net-stack/src/lib.rs) | Ethernet/ARP/IPv4 protocols, ICMP/UDP/TCP, bounded progress, PID/socket ownership and syscall checks above the Ethernet driver |
 | Kernel console | [console](../src/console.rs) | Boot text console using the framebuffer driver |
-| User SDK/runtime | [userlib](../user_programs/userlib/src/lib.rs), [syscalls](../user_programs/userlib/src/sys.rs), [runtime](../user_programs/userlib/src/rt.rs) | Ring 3 syscall wrappers, `_start`, panic handler, console formatting |
-| User compositor | [wm](../user_programs/wm/src/main.rs) | Wallpaper, icons, application discovery, stacking, decorations, focus policy, presentation |
+| User SDK/runtime | [userlib](../user_programs/userlib/src/lib.rs), [syscalls](../user_programs/userlib/src/sys.rs), [UI](../user_programs/userlib/src/ui/mod.rs), [runtime](../user_programs/userlib/src/rt.rs) | Ring 3 syscall wrappers, windows, canvas, widgets, `_start`, panic handler, console formatting |
+| User compositor | [wm](../user_programs/wm/src/main.rs) | Stacking, placement, decorations, focus/input routing, surface ownership, glass and presentation |
+| Desktop environment | [de](../user_programs/de/src/main.rs) | Wallpaper, panels, launchers, application discovery and executable launch policy; requests compositor services |
 | User shells/apps | [portal](../user_programs/portal/src/main.rs), [forge](../user_programs/forge/src/main.rs), [hello](../user_programs/hello/src/main.rs), [snake](../user_programs/snake/src/main.rs), [spin](../user_programs/spin/src/main.rs) | Commands, UI, executable selection, application behavior |
 | Host tooling | [tools](../tools), [E2E](../e2e) | Building images, QEMU execution and verification; never guest privilege code |
 
@@ -72,6 +73,9 @@ build and QEMU, and routes test executables to `bootimage runner`. GRUB supplies
 1920×1080×32 framebuffer. The kernel establishes memory mappings, GDT/IDT/PICs, heap,
 input queues, and the FAT32 root mount. It loads `/BIN/WM.BIN`, creates the initial
 PID 0 process, and enters Ring 3 through the scheduler. See [boot details](grub-boot.md).
+The compositor then spawns `/BIN/DE.BIN` in Ring 3. That process requests a desktop
+surface and panel work-area reservations over the scalar message channel; no
+shell-widget rendering or application-discovery policy executes in PID 0. See [the split](desktop-environment.md).
 
 A process has a private page-table subtree, user code/data and stack, a kernel stack,
 and a saved register context. Timer preemption switches user processes; IRQs that
@@ -84,8 +88,8 @@ Current virtual layout, defined in [kernel constants](../src/userspace/mod.rs):
 | Region | Current address |
 | --- | --- |
 | Flat user binary entry | `0x400000` |
-| User stack bottom/top | `0x1c00000` / `0x2000000` (4 MiB) |
-| Application framebuffer/surface | `0x2100000`, `pitch * height` bytes rounded up to pages |
+| User stack bottom/top | `0x2c00000` / `0x3000000` (4 MiB) |
+| Application framebuffer/surface | `0x3100000`, `pitch * height` bytes rounded up to pages |
 | Private user page-table region | `0x400000` through `0x4000000` (exclusive); gaps stay unmapped |
 | GRUB physical-memory offset | `0xffff800000000000` |
 | GRUB kernel framebuffer mapping | `0xffff900000000000` |
@@ -101,15 +105,22 @@ file-descriptor table is exposed by the current syscall interface.
 
 PID 0 owns the hardware framebuffer mapping. Other processes map private backing
 frames at the same user virtual address. The compositor snapshots those frames,
-caches the visible 488×288 content per window, combines changed windows in
+caches window content (up to 640×400 for native SDK clients), combines changed windows in
 stacking order into a retained back buffer, and presents dirty 32×32 tiles. Cursor
 movement restores the old cursor tiles from that buffer. Graphical clients publish
-surface revisions after drawing; console output publishes automatically. Unchanged
-surfaces require only metadata queries. The six cache slots reserve 3.22 MiB in
-addition to the existing back/scratch buffers. Timed waits let the CPU halt when
+surface revisions after drawing; console output publishes automatically. Native
+SDK clients also send frame serials and wait for copy acknowledgements before
+reusing their pixels. Unchanged surfaces require only metadata queries. The six
+cache slots reserve 5.86 MiB, plus 151 KiB of glass blur scratch storage, in
+addition to the pitched composition buffer, full-resolution packed desktop cache,
+and bounded 480-row application snapshot scratch. The DE's full-display surface
+is copied before release and does not consume an application window slot.
+Timed waits let the CPU halt when
 applications are waiting. See [performance validation](performance.md). Text apps
 receive kernel-rendered console output on their private surface. Graphical apps
-call `graphics_mode()`; their console writes remain serial diagnostics.
+call `graphics_mode()` (automatically through the window SDK); their console writes
+remain serial diagnostics. The WM renders glass materials from lower layers;
+widgets and layout stay in the client. See [the UI API and protocol](ui.md).
 
 The WM decides which application has keyboard focus; the kernel enforces it.
 Mouse input uses QEMU's VMware-compatible absolute protocol when available, otherwise
@@ -122,8 +133,9 @@ GRUB boots from the primary master's first FAT32 partition. The root mount uses
 MBR-relative sector offsets. Files use FAT32 8.3 names and directory traversal;
 the current root filesystem is not the old ramfs described in historical notes.
 
-The disk builder installs `/BIN`, `/ETC`, `/HOME`, and `/TMP`. The WM discovers
-launchers from `/BIN` and reads `/ETC/WALL.PPM`; shells decide command semantics.
+The disk builder installs `/BIN`, `/ETC`, `/HOME`, and `/TMP`. The DE discovers
+launchers from `/BIN` and reads `/ETC/WALL.PPM`; the compositor understands neither
+the wallpaper path/format nor executable names. Shells decide command semantics.
 `spawn` receives an explicit path. Do not add PATH lookup, wallpaper selection,
 or application-specific filename handling to a generic driver or syscall.
 
@@ -144,7 +156,7 @@ existing process frame/stack leaks remain. Network progress is bounded and drive
 by callers; there is no background network worker. Static IPv4, connected UDP and
 outgoing TCP are supported. The [HTTP SDK and curl](http.md) implement DNS A
 resolution and streaming HTTP/HTTPS GET in Ring 3. [TLS](tls.md) uses Rustls,
-WebPKI verification and a RustCrypto provider; platform syscalls 27/28 supply
+WebPKI verification and a RustCrypto provider; platform syscalls 80/81 supply
 hardware entropy and UTC. TLS-enabled apps reserve a private 16 MiB BSS heap; all
 processes receive 4 MiB user stacks with unmapped guards. Kernel stacks remain
 16 KiB. Server socket interfaces remain future work. Independent host fixtures verify framing,
@@ -162,7 +174,8 @@ waitpid receives the exit code in its saved return register and reaps the child.
   syscalls are not a full permissions model.
 - Desktop rendering supports 640×480 through 1920×1080 at 32 bpp, with pitch up to
   8192 bytes, and allows six simultaneous windows. The default boot requests 1080p.
-  Window content remains 488×288 pixels; more display pixels provide workspace.
+  Legacy content remains 488×288 pixels; native SDK clients request content sizes
+  from 160×96 through 640×400. One mapped window per process is currently exposed.
 - Address-space frames and leaked kernel stacks are not reclaimed on process exit;
   repeated launch/close can exhaust memory. Reaping a PCB does not reclaim all resources.
 - User-pointer checks include numerical range checks; these do not prove every page

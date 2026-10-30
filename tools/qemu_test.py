@@ -1,5 +1,6 @@
 """Private QEMU test images and bounded control-socket startup."""
 from pathlib import Path
+import os
 import shutil
 import socket
 import time
@@ -30,3 +31,8 @@ def copy_disk(source, directory):
     destination = Path(directory) / "disk.img"
     shutil.copyfile(source, destination)
     return destination
+
+
+def disk_image(root):
+    """Return the integration fixture selected for this test run."""
+    return Path(os.environ.get('RUSTOS_TEST_DISK', Path(root) / 'target/grub-disk.img'))

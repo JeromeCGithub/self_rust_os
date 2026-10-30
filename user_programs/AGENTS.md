@@ -14,7 +14,7 @@ Read [architecture](../docs/architecture.md) and [ABI](../docs/syscalls.md).
 - Only the focused app consumes keyboard input. Keep key release/modifier handling
   correct across reads. Test actual pointer motion, buttons, focus, and drag events;
   seeing an emulated mouse device does not prove host input reaches the guest.
-- Use `userlib`'s runtime; programs define `user_main`, not a second `_start` or
+- Use `userlib`'s runtime; programs define `fn main()` and select the shared SDK binary root, not a second `_start` or
   panic handler. Preserve linker entry/base, stack bounds, and flat-binary format.
 - TDD must cover shell commands, long/empty input, scrolling, filesystem errors,
   failed launches, and exit behavior as relevant. Exercise independent simultaneous

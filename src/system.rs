@@ -46,7 +46,7 @@ fn dispatch(number: u64, first: u64, second: u64, third: u64) -> Result<u64, Err
 mod tests {
     #[test_case]
     fn rejects_requests_without_a_user_process() {
-        for n in [27, 28] {
+        for n in [super::abi::SYS_RANDOM, super::abi::SYS_UNIX_TIME] {
             assert_eq!(
                 super::syscall(n, 0, 0, 0),
                 rustos_platform_abi::Error::Invalid.encode()

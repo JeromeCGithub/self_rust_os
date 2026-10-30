@@ -80,23 +80,30 @@ copied with every page and all paging-level permissions validated. No user
 reference crosses a scheduling, mapping or protocol operation. Existing older
 syscalls' numerical pointer checks are not retroactively hardened by this work.
 
-## Socket ABI version 1
+## Socket ABI version 2
+
+Integration preserves main's compositor message operations 20/21. This version
+moves networking from the unmerged version 1 range 20–26 to 64–70, and platform
+randomness/UTC from 27/28 to 80/81. Record layouts are unchanged. Rebuild every
+app and the kernel together; old networking binaries cannot use the new dispatcher.
+The lower range remains available for main's established and future core services.
+
 
 All operations use the existing `int 0x80` register convention. The constants and
-padding-free record definitions are shared by kernel and SDK. Existing syscall
-numbers/control sentinels are preserved. Version 1 is reported by `net::info()`;
+padding-free record definitions are shared by kernel and SDK. Main's established core syscall
+numbers and control sentinels are preserved; the migration above is explicit. Version 2 is reported by `net::info()`;
 packet record sizes must match exactly. These are socket handles, independent
 of stdin and any future file descriptor interface.
 
 | Number | Operation | Arguments (`rdi`, `rsi`, `rdx`) | Result |
 | --- | --- | --- | --- |
-| 20 | `net::open(kind)` | kind 1=ICMP Echo, 2=UDP, 3=TCP; zero; zero | Opaque PID-owned generation handle |
-| 21 | `net::connect(handle, address, port)` | handle; packed IPv4/port; zero | Zero after association/handshake initiation |
-| 22 | `net::send(handle, packet)` | handle; readable Packet pointer; 1032 | Accepted payload bytes; TCP may accept a short write |
-| 23 | `net::recv(handle)` | handle; writable Packet pointer; 1032 | Received bytes; WouldBlock if no data; TCP zero means EOF |
-| 24 | `net::close(handle)` | handle; zero; zero | Zero, resources released immediately |
-| 25 | `net::poll(handle)` | handle; zero; zero | Readiness bitmask, after bounded protocol progress |
-| 26 | `net::info()` | writable Info pointer; 32; zero | Zero; interface snapshot written even if NIC absent |
+| 64 | `net::open(kind)` | kind 1=ICMP Echo, 2=UDP, 3=TCP; zero; zero | Opaque PID-owned generation handle |
+| 65 | `net::connect(handle, address, port)` | handle; packed IPv4/port; zero | Zero after association/handshake initiation |
+| 66 | `net::send(handle, packet)` | handle; readable Packet pointer; 1032 | Accepted payload bytes; TCP may accept a short write |
+| 67 | `net::recv(handle)` | handle; writable Packet pointer; 1032 | Received bytes; WouldBlock if no data; TCP zero means EOF |
+| 68 | `net::close(handle)` | handle; zero; zero | Zero, resources released immediately |
+| 69 | `net::poll(handle)` | handle; zero; zero | Readiness bitmask, after bounded protocol progress |
+| 70 | `net::info()` | writable Info pointer; 32; zero | Zero; interface snapshot written even if NIC absent |
 
 Connect packs `u32::from_be_bytes(address) << 16 | port` into a u64; high 16 bits
 must be zero. ICMP uses port zero; UDP/TCP require a nonzero remote port. Numeric

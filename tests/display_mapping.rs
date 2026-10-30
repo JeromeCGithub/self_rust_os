@@ -119,7 +119,7 @@ fn drawing_at_display_edges_preserves_padding_and_guards() {
 /// Exercise a compositor-sized image, full padded snapshots and repeated reaping.
 #[test_case]
 fn large_binary_and_padded_surfaces_survive_spawn_snapshot_and_reap() {
-    let binary = alloc::vec![0xc3u8; 2 * 1920 * 1080 * 4 + 65536];
+    let binary = alloc::vec![0xc3u8; 30 * 1024 * 1024];
     scheduler::spawn_process(&binary, 0).expect("1080p compositor mapping");
     drop(binary);
     // Establish PID 0 as current (and activate its page tables). Keep running
@@ -150,6 +150,22 @@ fn large_binary_and_padded_surfaces_survive_spawn_snapshot_and_reap() {
         // SAFETY: The full stack mapping was just validated for the active
         // process. These aligned endpoints are distinct from its running kernel stack.
         unsafe{(stack_low as *mut u64).write_volatile(0x51515151);((self_rust_os::userspace::USER_STACK_TOP-8) as *mut u64).write_volatile(0x52525252);}
+        assert_eq!(scheduler::receive_message(), 0, "new clients have empty inboxes");
+        assert_eq!(scheduler::send_message(0, 0x12345678), 0, "clients can contact the display owner");
+        activate(0, &mut context);
+        assert_eq!(scheduler::receive_message(), ((u64::from(first) + 1) << 32) | 0x12345678,
+            "transport supplies the actual sender");
+        assert_eq!(scheduler::receive_message(), 0, "messages are consumed once");
+        for payload in 0..16 {
+            assert_eq!(scheduler::send_message(first, payload), 0);
+        }
+        assert_eq!(scheduler::send_message(first, 99), 1, "full inbox applies backpressure");
+        activate(first, &mut context);
+        for payload in 0..16 {
+            assert_eq!(scheduler::receive_message(), (1u64 << 32) | payload);
+        }
+        assert_eq!(scheduler::receive_message(), 0);
+        assert_eq!(scheduler::send_message(u32::MAX, 0), u64::MAX - 1);
         assert_eq!(scheduler::present_surface(), 0);
         assert_eq!(scheduler::surface_status(first), 2, "publication advances revision");
         scheduler::surface_write(b"x");
@@ -171,6 +187,8 @@ fn large_binary_and_padded_surfaces_survive_spawn_snapshot_and_reap() {
         // SAFETY: second owns a complete validated stack at the same addresses;
         // its zeroed contents must not alias the first process's stack markers.
         unsafe{assert_eq!((stack_low as *const u64).read_volatile(),0);assert_eq!(((self_rust_os::userspace::USER_STACK_TOP-8) as *const u64).read_volatile(),0);}
+        assert_eq!(scheduler::send_message(first, 0), u64::MAX - 1,
+            "clients cannot inject events into another client's inbox");
         // SAFETY: second now owns the active mapping at the same address.
         // The last byte is within its complete surface (partial final page).
         unsafe {
@@ -189,6 +207,8 @@ fn large_binary_and_padded_surfaces_survive_spawn_snapshot_and_reap() {
                 "snapshot must not alias its destination"
             );
             assert!(scheduler::kill(pid).is_some());
+            assert_eq!(scheduler::send_message(pid, 0), u64::MAX - 1,
+                "dead recipients reject new messages");
             assert_eq!(scheduler::snapshot(pid, &mut pixels), 1);
             assert_eq!(scheduler::surface_status(pid) & 1, 1, "exit is observable without copying pixels");
             scheduler::waitpid(pid);
@@ -197,10 +217,59 @@ fn large_binary_and_padded_surfaces_survive_spawn_snapshot_and_reap() {
         }
         // SAFETY: PID 0's live code mapping covers this byte. Spawning a
         // child must preserve its physical backing and supervisor mappings.
-        let last = self_rust_os::userspace::USER_CODE_START + 2 * 1920 * 1080 * 4 + 65535;
+        let last = self_rust_os::userspace::USER_CODE_START + 30 * 1024 * 1024 - 1;
         assert_eq!(unsafe { (last as *const u8).read_volatile() }, 0xc3);
     }
+    context = keyboard_wait_checks(context);
     timed_wait_checks(context);
+}
+
+/// A blocking keyboard read resumes with zero so its caller retries the buffer
+/// read, instead of interpreting the old syscall number as newly read bytes.
+fn keyboard_wait_checks(mut context: u64) -> u64 {
+    x86_64::instructions::interrupts::disable();
+    let child = scheduler::spawn_process(&[0xc3], 0).expect("keyboard child");
+    activate(child, &mut context);
+    // SAFETY: activate returned this live child's aligned, owned kernel-stack
+    // SavedContext. Only this single-CPU harness accesses it, with IRQs masked.
+    unsafe {
+        (*(context as *mut scheduler::SavedContext)).rax = 2;
+    }
+    assert_eq!(
+        scheduler::block_on_keyboard(),
+        scheduler::PROCESS_BLOCK_SENTINEL
+    );
+    context = scheduler::schedule(context);
+    assert_eq!(scheduler::current_pid(), Some(0));
+    scheduler::wake_keyboard_waiters();
+    activate(child, &mut context);
+    // SAFETY: This is again the current child's live saved context; the previous
+    // exclusive access ended before scheduling. IRQs remain disabled.
+    assert_eq!(
+        unsafe { (*(context as *const scheduler::SavedContext)).rax },
+        0,
+        "keyboard wake must not replay stale user-buffer bytes"
+    );
+    assert_eq!(
+        scheduler::block_on_keyboard(),
+        scheduler::PROCESS_BLOCK_SENTINEL
+    );
+    context = scheduler::schedule(context);
+    assert!(scheduler::kill(child).is_some());
+    scheduler::wake_keyboard_waiters();
+    for _ in 0..3 {
+        let next = scheduler::on_timer(context);
+        if next != 0 {
+            context = next;
+        }
+    }
+    assert_eq!(
+        scheduler::current_pid(),
+        Some(0),
+        "killed keyboard waiter cannot wake"
+    );
+    assert_eq!(scheduler::waitpid(child), 9);
+    context
 }
 
 /// A sleeping compositor yields, wakes from a kernel-mode timer, and can be killed.

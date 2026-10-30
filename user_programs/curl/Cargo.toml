@@ -14,3 +14,7 @@ lto = true
 
 [dependencies]
 userlib = { path = "../userlib", features = ["tls"] }
+
+[[bin]]
+name = "curl"
+path = "../userlib/src/application.rs"

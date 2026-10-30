@@ -15,7 +15,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode=True
 sys.path.insert(0,str(ROOT/'tools'))
 from qemu_platform import arguments as platform_arguments
-from qemu_test import copy_disk
+from qemu_test import disk_image, copy_disk
 
 
 def cpu_seconds(pid):
@@ -26,7 +26,7 @@ def cpu_seconds(pid):
 def main():
     with tempfile.TemporaryDirectory(prefix='rustos-perf-') as tmp:
         tmp = pathlib.Path(tmp)
-        disk = copy_disk(ROOT / 'target/grub-disk.img', tmp)
+        disk = copy_disk(disk_image(ROOT), tmp)
         log = tmp / 'serial.log'
         sock = tmp / 'qmp'
         qemu = subprocess.Popen([
