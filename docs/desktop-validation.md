@@ -122,3 +122,46 @@ resource reclamation. The toolkit still exposes one surface per process, six app
 windows, bounded current viewport sizes, CPU effects and approximately 18.2 Hz
 polling. Optical refraction, GPU acceleration and fluid 60 Hz animation are not
 claimed by these changes.
+
+## Architecture and application entry refactor (2026-10-30)
+
+The WM and DE were reorganized by responsibility; see the
+[source module map](desktop-environment.md#source-organization). Renderer buffers
+are private to the display module, and application launch/rollback policy belongs
+to the DE application module. This preserves the existing protocol and privilege
+boundaries. A shared SDK executable root now supplies target attributes and bridges
+ordinary application `fn main()` to the existing runtime in all seven binaries.
+See the [application convention](development.md#writing-an-application).
+
+Red: after converting Hello to ordinary `fn main()` without the shared root,
+`CARGO_NET_OFFLINE=true ./tools/build-user.sh hello` failed with E0463:
+“can't find crate for std”. This demonstrated the missing target integration.
+The module refactor itself preserved behavior and started from passing desktop,
+glass (6 cases), and damage (4 cases) baseline checks.
+
+Checks run on this change:
+
+- `CARGO_NET_OFFLINE=true ./tools/build-user.sh` and
+  `CARGO_NET_OFFLINE=true ./tools/build-grub-disk.sh`: all seven applications,
+  matching flat images/metadata, and the release GRUB disk rebuilt.
+- `python3 e2e/desktop.py`, `python3 e2e/glass_ui.py`, and
+  `python3 e2e/desktop_perf.py`: passed on the fresh shared-root build.
+  The desktop test launches all five ordinary apps and checks compositor/DE
+  lifetime separation. Glass checks preserve button capture, lower-layer updates,
+  focus, close and reopen. Performance retained existing thresholds (idle 0%,
+  terminal 8.5%, terminal/Snake 19%, loaded pointer 41 ms on this run).
+- `cargo build`, `cargo build --features grub`, `cargo test --no-run`:
+  passed; release GRUB compilation also passed through the disk builder.
+- `cargo test --test display_mapping --test userspace --test basic_boot`
+  and `cargo test --lib --test gfx --test keyboard_timer --test should_panic --test stack_overflow`:
+  passed.
+- Native Rust host harnesses: UI 18, glass 6, damage 4 cases passed.
+- Documentation checker, all 7 checker regression cases and whitespace checks passed.
+
+The screenshots produced by the desktop/glass tests show unchanged presentation;
+`desktop-glass.png` was inspected from this run. Screenshots cannot establish
+module boundaries; those are visible in source dependencies and private buffer
+visibility. No manual host GUI check was performed. The existing debug heap timeout
+was not rerun or fixed; memory reclamation and other previously documented OS
+limitations remain. The bootloader still emits its existing unused `rustc-abi`
+target-field warning. Full Rust `std` support is not provided by the new wrapper.

@@ -5,16 +5,14 @@
 //! ([`io`]), and the program runtime (entry point + panic handler, linked
 //! automatically).
 //!
-//! A program using `userlib` looks like this:
+//! Applications select `userlib/src/application.rs` as their Cargo binary root
+//! and put ordinary `fn main()` code in their own `src/main.rs`:
 //!
 //! ```rust,no_run
-//! #![no_std]
-//! #![no_main]
 //!
 //! use userlib::{println, sys};
 //!
-//! #[no_mangle]
-//! pub extern "C" fn user_main() {
+//! fn main() {
 //!     println!("Hello from user space!");
 //!     sys::exit(0);
 //! }

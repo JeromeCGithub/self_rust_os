@@ -100,3 +100,32 @@ desktop, glass and performance checks. QMP assertions and screenshots supplement
 each other; host GUI input remains a separate manual check.
 See [executed red/green evidence](desktop-validation.md) for this change's results,
 the keyboard-wakeup regression and remaining limits.
+
+
+## Source organization
+
+Each executable has a small entry point. Modules follow ownership rather than
+sharing a desktop implementation between the two processes.
+
+| Process/module | Owns |
+| --- | --- |
+| WM [entry point](../user_programs/wm/src/main.rs) | Runtime entry and service startup |
+| WM [session](../user_programs/wm/src/session.rs) | Message dispatch, shell identity, work area, stacking, focus, input routing and client lifecycle |
+| WM [window](../user_programs/wm/src/window.rs) | Per-client state, initial placement and bounded cache-slot allocation |
+| WM [display](../user_programs/wm/src/display.rs) | Private framebuffer/cache storage, snapshots, composition, decorations, cursor and presentation |
+| WM [damage](../user_programs/wm/src/damage.rs) / [glass](../user_programs/wm/src/glass.rs) | Independent tile tracking and material algorithms |
+| DE [entry/event loop](../user_programs/de/src/main.rs) | Surface connection, initial frames and event coordination |
+| DE [applications](../user_programs/de/src/applications.rs) | Discovery, executable naming, compatibility policy, launch and rollback |
+| DE [view](../user_programs/de/src/view.rs) | Wallpaper/panel/launcher painting through the SDK canvas |
+| DE [wallpaper](../user_programs/de/src/wallpaper.rs) | File loading, format validation and immutable image storage |
+
+The session asks the display to snapshot a desktop frame or reset window content;
+it cannot directly borrow the renderer's static buffers. The display depends on
+window state and the SDK, without importing session coordination. Both programs
+communicate solely through the existing SDK protocol. Application launch policy
+and wallpaper file handling remain inside the DE.
+
+Wallpaper storage is initialized once. An atomic claim prevents a second caller
+from mutating storage after an immutable image slice has escaped; relaxed ordering
+is sufficient because other callers only return failure and never read that storage.
+This is not a general concurrent image cache. The compositor remains single threaded.

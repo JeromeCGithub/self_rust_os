@@ -7,10 +7,9 @@ scalar messages. No widget, blur or theme policy executes in the kernel.
 
 ## A complete application
 
-```rust
-#![no_std]
-#![no_main]
+Use the [shared Cargo executable root](development.md#writing-an-application) for this application.
 
+```rust
 use userlib::{rsx, sys, ui::{Material, Style, View, Window, WindowOptions}};
 
 #[derive(Default)]
@@ -18,8 +17,7 @@ struct State { enabled: bool }
 #[derive(Clone)]
 enum Action { Toggle }
 
-#[no_mangle]
-pub extern "C" fn user_main() {
+fn main() {
     let window = Window::create(
         WindowOptions::new("Settings")
             .content_size(640, 400)

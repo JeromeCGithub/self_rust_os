@@ -15,3 +15,7 @@ lto = true
 
 [dependencies]
 userlib = { path = "../userlib" }
+
+[[bin]]
+name = "snake"
+path = "../userlib/src/application.rs"

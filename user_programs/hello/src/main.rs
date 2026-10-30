@@ -1,14 +1,11 @@
-//! A complete glass application using only the public Ring 3 UI toolkit.
-#![no_std]
-#![no_main]
+// A complete glass application using only the public Ring 3 UI toolkit.
 
 use userlib::{
     println, rsx, sys,
     ui::{Color, Error, Material, Style, View, Window, WindowOptions},
 };
 
-#[no_mangle]
-pub extern "C" fn user_main() {
+fn main() {
     println!("Hello from user space!");
     assert!(matches!(
         Window::create(WindowOptions::new("bad").content_size(0, 100)),

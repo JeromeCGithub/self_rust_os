@@ -1,12 +1,10 @@
-//! Snake game for `self_rust_os`, built on `userlib`.
-//!
-//! Runs in Ring 3, draws into its private framebuffer mapping.
-//! Uses `sys::ticks` for timing and `sys::read_nb` for non-blocking input.
-//!
-//! Controls: WASD or Arrow keys to move, Q to quit.
+// Snake game for `self_rust_os`, built on `userlib`.
+//
+// Runs in Ring 3, draws into its private framebuffer mapping.
+// Uses `sys::ticks` for timing and `sys::read_nb` for non-blocking input.
+//
+// Controls: WASD or Arrow keys to move, Q to quit.
 
-#![no_std]
-#![no_main]
 
 use userlib::{println, sys};
 
@@ -221,8 +219,7 @@ impl Game {
 }
 
 /// Entry point called by `userlib`'s runtime after `_start`.
-#[no_mangle]
-pub extern "C" fn user_main() {
+fn main() {
     sys::graphics_mode();
     println!("Snake game starting (720p)...");
     println!("Controls: WASD / Arrows, Q to quit");

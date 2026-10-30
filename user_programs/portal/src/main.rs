@@ -1,10 +1,8 @@
-//! Portal: graphical terminal window for `self_rust_os`, built on `userlib`.
-//!
-//! Renders a shell into a private surface; the compositor owns window
-//! decorations, placement, focus, and presentation.
+// Portal: graphical terminal window for `self_rust_os`, built on `userlib`.
+//
+// Renders a shell into a private surface; the compositor owns window
+// decorations, placement, focus, and presentation.
 
-#![no_std]
-#![no_main]
 
 use userlib::{
     println, sys,
@@ -161,8 +159,7 @@ impl Shell {
 }
 
 /// Entry point.
-#[no_mangle]
-pub extern "C" fn user_main() {
+fn main() {
     println!("[portal] Portal starting...");
     let mut window = Window::create(
         WindowOptions::new("Terminal")

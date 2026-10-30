@@ -1,6 +1,6 @@
 //! Program runtime: entry point and panic handler.
 //!
-//! Linked automatically with `userlib`. Programs define `user_main`; this
+//! Linked automatically with `userlib`. The shared application root bridges `fn main()` to `user_main`; this
 //! module provides the `_start` symbol the kernel jumps to and a panic
 //! handler that reports the panic before exiting.
 
