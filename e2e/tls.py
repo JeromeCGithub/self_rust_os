@@ -103,7 +103,7 @@ def main():
      for char in line+'\n':
       key={' ':'spc',':':'shift-semicolon','/':'slash','.':'dot','-':'minus','\n':'ret'}.get(char,char)
       call('human-monitor-command',{'command-line':'sendkey '+key});time.sleep(.075)
-    call('qmp_capabilities');wait('[desktop] ready: 7 applications');click(350);wait('Portal / RustOS shell')
+    call('qmp_capabilities');wait('[desktop] ready: 7 applications');click(350);wait('self_rust_os forge v1.0')
     type_line(f'curl https://10.0.2.2:{servers[0].getsockname()[1]}/')
     error='secure randomness unavailable' if args.no_rng else 'UTC clock unavailable' if args.bad_clock else 'TLS certificate rejected'
     wait('[portal] output: curl: '+error)

@@ -84,6 +84,7 @@ python3 -B e2e/tls.py --site https://google.com/
 python3 -B e2e/tls.py --no-rng
 python3 -B e2e/tls.py --bad-clock
 python3 -B e2e/net_perf.py --label current --assert-fast
+cargo test --test stdio
 python3 e2e/desktop_perf.py
 python3 e2e/glass_ui.py
 bash e2e/build_profile.sh
@@ -185,3 +186,12 @@ behaviors tested. List required checks that failed/could not run, unexpected war
 manual checks still needed, and remaining risks. Do not claim exhaustive security,
 correctness, cleanup, or host compatibility from limited QEMU tests. Inspect final
 artifacts and the complete diff after tests; do not silently weaken acceptance criteria.
+
+
+The connected terminal/shell checks use `cargo test --test stdio` for endpoint
+isolation, FIFO ordering, full-queue backpressure, endpoint reuse and owner-death
+cleanup in a small RAM display fixture. Native text-model checks use
+`rustc --edition=2021 --test user_programs/portal/src/screen.rs -o /tmp/rustos-screen-tests`
+followed by `/tmp/rustos-screen-tests`. The desktop E2E verifies actual independent
+Forge spawning, shell-only commands through Portal, filesystem results, shell exit
+and reaping of hosted shells after terminal close.

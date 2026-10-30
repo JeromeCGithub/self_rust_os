@@ -22,6 +22,7 @@ current behavior; architecture targets are not evidence of implemented features.
 | [Networking validation](networking-validation.md) | Red/green evidence, packet captures and remaining limits |
 | [Ethernet networking plan](networking-plan.md) | Delivered ping/client sockets and roadmap toward DNS, HTTP and TLS |
 | [Window and UI toolkit](ui.md) | Native window API, canvas/widgets, glass materials and protocol |
+| [Terminal and shell](terminal-shell.md) | Separate terminal presentation, shell execution and connected standard I/O |
 | [Desktop environment](desktop-environment.md) | Separate DE/compositor processes, shell protocol and default space wallpaper |
 | [GRUB boot](grub-boot.md) | Current disk layout and boot sequence |
 

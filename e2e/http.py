@@ -148,11 +148,14 @@ def main():
                 wait('[desktop] ready: 7 applications')
                 # Before CURL is installed, Portal is third; afterwards fourth.
                 click(350 if (ROOT/'user_programs/curl/curl.bin').exists() else 250)
-                wait('Portal / RustOS shell')
+                wait('self_rust_os forge v1.0')
                 mark=log.stat().st_size
                 type_line(f'curl http://10.0.2.2:{port}/chunked')
                 wait('[portal] output: http-fixture-ok', mark)
                 wait('[portal] output: curl: HTTP 200, 15 bytes',mark)
+                mark = log.stat().st_size
+                type_line(f'curl http://10.0.2.2:{port}/large')
+                wait('[portal] output: curl: HTTP 200, 20000 bytes', mark)
                 type_line('curl ftp://example.com/')
                 wait('[portal] output: curl: unsupported URL scheme')
                 type_line('echo http-prompt-ok')

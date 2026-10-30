@@ -108,7 +108,7 @@ def main():
 
                 click(350, 65)
                 end = time.monotonic() + 10
-                while 'Portal / RustOS shell' not in log.read_text(errors='replace'):
+                while 'self_rust_os forge v1.0' not in log.read_text(errors='replace'):
                     assert time.monotonic() < end, 'terminal launch timeout'
                     time.sleep(.05)
                 end = time.monotonic() + 1

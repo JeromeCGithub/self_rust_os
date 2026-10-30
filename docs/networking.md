@@ -15,7 +15,7 @@ static IPv4 routing, ICMP Echo, connected UDP and outgoing TCP. Portal's Ring 3
 | Transport | smoltcp plus [network service](../crates/net-stack/src/lib.rs), Ring 0 | ICMP echo endpoints, connected UDP datagrams, TCP handshake/retransmission/stream state |
 | Resource and syscall boundary | [kernel facade](../src/net/mod.rs), [copy checks](../src/userspace/usercopy.rs), [shared ABI](../crates/net-abi/src/lib.rs) | PID ownership, quotas, generation handles, mapping/permission validation, owned copies and cleanup |
 | Application SDK | [userlib::net](../user_programs/userlib/src/net.rs), Ring 3 | Typed nonblocking socket calls and errors |
-| Applications | [ping policy](../crates/ping/src/lib.rs), [Portal adapter](../user_programs/portal/src/ping.rs), Ring 3 | Parsing, payload matching, timing, statistics, presentation, DNS and HTTP clients |
+| Applications | [ping policy](../crates/ping/src/lib.rs), [Forge adapter](../user_programs/forge/src/ping.rs), Ring 3 | Parsing, payload matching, timing, statistics, presentation, DNS and HTTP clients |
 
 ```mermaid
 flowchart TB
@@ -30,7 +30,7 @@ flowchart TB
 ```
 
 HTTP parsing, URLs, headers, body framing and redirects run in the reusable
-[userspace HTTP library](http.md). Portal's curl command and the standalone CURL
+[userspace HTTP library](http.md). Forge's hosted curl command and the standalone CURL
 application both use `userlib::http`; DNS resolution uses connected UDP and GET
 uses outgoing TCP. [TLS 1.3](tls.md) runs in userspace over the same TCP ABI,
 with Rustls/WebPKI certificate verification and explicit entropy/UTC syscalls.

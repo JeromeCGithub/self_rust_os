@@ -94,6 +94,7 @@ def main():
                 click(250, 65)
                 wait('[hello-ui] ready: 640x400 glass')
                 wait('[hello-ui] invalid requests rejected')
+                wait('[hello-ui] stdio invalid requests rejected')
                 wait('[hello-ui] desktop role denied')
                 move(900, 700)
                 time.sleep(.5)
@@ -154,7 +155,7 @@ def main():
                 wait('[hello-ui] accent changed: 1', offset)
                 # A second native app owns focused input while covering Hello.
                 click(350, 65)
-                wait('Portal / RustOS shell')
+                wait('self_rust_os forge v1.0')
                 offset = log.stat().st_size
                 click(140, 298)
                 assert '[hello-ui] accent changed' not in log.read_text()[offset:], 'covered window received pointer input'

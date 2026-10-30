@@ -31,7 +31,7 @@ Unused arguments are zero in SDK wrappers. `ptr` means a user virtual address.
 | 5 | `ls` | path ptr, output ptr, max entries | Entry count; each entry is 11 raw 8.3 filename bytes plus one attribute byte; directory bit `0x10` |
 | 6 | `read_file` | path ptr, output ptr, byte capacity | Bytes read from a file by path |
 | 7 | `write_file` | path ptr, input ptr, byte length | Bytes written; create/overwrite by path |
-| 8 | `spawn` | explicit executable path ptr | New PID; parent continues; flat binary loaded from FAT32 |
+| 8 | `spawn` / `Child::spawn` | explicit executable path ptr, flags (0 ordinary, 1 connected stdio), zero | New PID; parent continues; flat binary loaded from FAT32 |
 | 9 | `kill` | PID | Zero on success; killing self does not resume the caller |
 | 10 | `waitpid` | PID | Exit code; blocks while running, reaps zombie when applicable |
 | 11 | `mouse` | none | Packed coordinates/buttons, decoded by SDK to `(x, y, buttons)` |
@@ -45,6 +45,8 @@ Unused arguments are zero in SDK wrappers. `ptr` means a user virtual address.
 | 19 | `surface_status` | PID | PID 0 only; revision in bits 1–62, zombie flag in bit 0; error for missing target or display owner (no private surface) |
 | 20 | `send_message` | target PID (`u32`), payload (`u32`), zero | Zero on enqueue, one when full, error for forbidden/missing/dead target or invalid integer arguments |
 | 21 | `receive_message` | zero, zero, zero | Zero if empty, otherwise `((sender + 1) << 32) \| payload`; error without a current process or with nonzero arguments |
+
+| 22 | connected standard I/O (SDK `process` module) | operation (0 metadata, 1 send, 2 receive), scalar payload for send, zero | See connected-child contract below; no pointers |
 
 Operations 14–16 currently appear as numeric dispatcher arms and numeric SDK calls.
 Do not assume the named `SYS_*` constants above operation 13 are a complete ABI inventory.
@@ -171,3 +173,34 @@ Failed=3, distinct from network errors and scheduler control sentinels. Existing
 syscall numbers and network ABI records remain unchanged. TLS, certificates,
 trust policy and HTTPS are [userspace library responsibilities](tls.md), with no
 TLS-specific kernel syscall.
+## Connected child standard I/O
+
+`spawn` flags zero retains ordinary spawning. Flag one creates an owned duplex
+connection before the child can run. Unknown flags, nonzero reserved arguments
+and an occupied endpoint fail before loading a child. This is generic process I/O;
+the kernel does not know whether the executable is a shell.
+
+Syscall 22 operates only on the caller's endpoint:
+
+- Operation 0: metadata, zero if unconnected, otherwise
+  `((peer_pid + 1) << 1) | child_side`. A closed endpoint keeps metadata until reaped.
+- Operation 1: enqueue a `u32` scalar in the peer's private 4096-entry FIFO;
+  zero success, one full, general error if unavailable. Scalars are opaque to the kernel.
+- Operation 2: consume the oldest incoming scalar, encoded as `u64(payload) + 1`.
+  Zero means empty but live. General error means disconnected. Buffered packets
+  can still be drained after the peer exits.
+- Unknown operations, values above `u32::MAX`, nonzero unused/reserved arguments
+  and operations on unavailable endpoints are rejected.
+
+Queues are separate from syscalls 20/21 and cannot be addressed by arbitrary PID.
+SDK byte framing uses count bits 24–31 and up to three low bytes in little-endian
+order. Host-to-child packets have count one. Standard console wrappers redirect
+on the child side; the host uses `process::Child` and keeps ordinary keyboard I/O.
+No new kernel pointer dereference or retained user reference is introduced by
+operation 22. Spawn retains its existing path-buffer validation limitations.
+
+The host owns the child lifetime. Host exit/kill stops its connected child;
+reaping the host also removes that child's PCB. Reaping a child releases its host
+endpoint and drops queued packets. Killing a host from its own child schedules away
+from the stopped child. General frame/stack leaks and process-control permission
+limitations still apply. See [terminal architecture](terminal-shell.md).

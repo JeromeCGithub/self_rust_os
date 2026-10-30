@@ -135,7 +135,9 @@ the current root filesystem is not the old ramfs described in historical notes.
 
 The disk builder installs `/BIN`, `/ETC`, `/HOME`, and `/TMP`. The DE discovers
 launchers from `/BIN` and reads `/ETC/WALL.PPM`; the compositor understands neither
-the wallpaper path/format nor executable names. Shells decide command semantics.
+the wallpaper path/format nor executable names. Portal hosts Forge over an owned standard-I/O connection; terminal rendering and
+shell execution live in different processes. See [terminal architecture](terminal-shell.md).
+Shells decide command semantics.
 `spawn` receives an explicit path. Do not add PATH lookup, wallpaper selection,
 or application-specific filename handling to a generic driver or syscall.
 
@@ -145,7 +147,7 @@ The optional QEMU e1000 device feeds a kernel smoltcp stack through a polled
 Ethernet adapter. Link protocols (Ethernet/ARP), Internet mechanisms (IPv4/routing/
 ICMP), transport state (UDP/TCP), and process/socket validation have separate
 responsibilities. A common padding-free ABI crosses int 0x80 into typed Ring 3
-SDK calls. Portal's ping/curl policy, DNS resolution and the HTTP SDK stay in userspace.
+SDK calls. Forge's ping/curl policy, DNS resolution and the HTTP SDK stay in userspace.
 See [networking](networking.md) for the layer diagram, exact syscall contracts,
 execution model and resource limits.
 

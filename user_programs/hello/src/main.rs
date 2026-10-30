@@ -15,6 +15,13 @@ fn main() {
         Window::create(WindowOptions::new("bad\n")),
         Err(Error::InvalidTitle)
     ));
+    assert!(userlib::process::Child::spawn("/MISSING.BIN").is_err());
+    for (op, payload, reserved) in [(3,0,0),(1,u64::MAX,0),(0,1,0),(2,1,0),(0,0,1)] {
+        // SAFETY: These register-only probes contain no user pointers. The
+        // kernel must reject malformed values without truncating them.
+        assert_eq!(unsafe { sys::syscall(sys::SYS_STDIO,op,payload,reserved) }, sys::SYSCALL_ERROR);
+    }
+    println!("[hello-ui] stdio invalid requests rejected");
     verify_desktop_role();
     let window = Window::create(
         WindowOptions::new("Hello / Glass")

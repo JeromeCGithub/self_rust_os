@@ -76,6 +76,8 @@ pub const SYS_SURFACE_STATUS: u64 = 19;
 pub const SYS_SEND_MESSAGE: u64 = 20;
 /// Receives an authenticated scalar message without blocking.
 pub const SYS_RECEIVE_MESSAGE: u64 = 21;
+/// Register-only connected-child standard-I/O operations.
+pub const SYS_STDIO: u64 = 22;
 
 /// Sentinel: the current process has exited, schedule another (don't save context).
 const PROCESS_EXIT_SENTINEL: u64 = u64::MAX;
@@ -263,7 +265,16 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
         SYS_LS => sys_ls(arg1, arg2, arg3),
         SYS_READ_FILE => sys_read_file(arg1, arg2, arg3),
         SYS_WRITE_FILE => sys_write_file(arg1, arg2, arg3),
-        SYS_SPAWN => sys_spawn(arg1),
+        SYS_SPAWN => {
+            if arg2 > 1 || arg3 != 0 { return SYSCALL_ERROR; }
+            if arg2 == 1 && !crate::scheduler::can_connect_stdio() { return SYSCALL_ERROR; }
+            sys_spawn(arg1, arg2 == 1)
+        }
+        SYS_STDIO => {
+            if arg1 > 2 || arg2 > u32::MAX as u64 || arg3 != 0
+                || (arg1 != 1 && arg2 != 0) { return SYSCALL_ERROR; }
+            crate::scheduler::stdio(arg1, arg2 as u32)
+        }
         SYS_KILL => sys_kill(arg1),
         SYS_WAITPID => sys_waitpid(arg1),
         SYS_MOUSE => sys_mouse(),
@@ -634,7 +645,7 @@ fn sys_write_file(path_ptr: u64, buf_ptr: u64, buf_len: u64) -> u64 {
 /// preempt to the new process.
 ///
 /// Returns `SYSCALL_ERROR` if the path is invalid or the program can't be loaded.
-fn sys_spawn(path_ptr: u64) -> u64 {
+fn sys_spawn(path_ptr: u64, connected: bool) -> u64 {
     if !validate_user_buffer(path_ptr, 256) {
         return SYSCALL_ERROR;
     }
@@ -665,6 +676,11 @@ fn sys_spawn(path_ptr: u64) -> u64 {
     // Create the process (read-only size 0 = all writable for now).
     match crate::scheduler::spawn_process(&binary, 0) {
         Ok(pid) => {
+            if connected && !crate::scheduler::connect_stdio(pid) {
+                let _ = crate::scheduler::kill(pid);
+                let _ = crate::scheduler::waitpid(pid);
+                return SYSCALL_ERROR;
+            }
             serial_println!("[kernel] sys_spawn: '{}' -> pid {}", path, pid);
             pid as u64
         }
@@ -770,6 +786,15 @@ mod tests {
             result, PROCESS_EXIT_SENTINEL,
             "sys_exit should return PROCESS_EXIT_SENTINEL.",
         );
+    }
+
+    #[test_case]
+    fn stdio_rejects_reserved_and_truncated_arguments() {
+        for (op, payload, reserved) in [(3,0,0),(1,u64::MAX,0),(0,1,0),(2,1,0),(0,0,1)] {
+            assert_eq!(syscall_dispatch(SYS_STDIO,op,payload,reserved), SYSCALL_ERROR);
+        }
+        assert_eq!(syscall_dispatch(SYS_SPAWN,0,2,0), SYSCALL_ERROR);
+        assert_eq!(syscall_dispatch(SYS_SPAWN,0,0,1), SYSCALL_ERROR);
     }
 
     #[test_case]

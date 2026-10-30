@@ -14,8 +14,7 @@ opt-level = "z"
 lto = true
 
 [dependencies]
-rustos-ping = { path = "../../crates/ping" }
-userlib = { path = "../userlib", features = ["tls"] }
+userlib = { path = "../userlib" }
 
 [dependencies.font8x8]
 version = "0.3"
