@@ -7,7 +7,7 @@
 //! shifts sector numbers by the partition's start LBA.
 
 use crate::{
-    ata::{AtaDisk, AtaError, SECTOR_SIZE},
+    drivers::block::ata::{AtaDisk, AtaError, SECTOR_SIZE},
     fat32::BlockDevice,
 };
 

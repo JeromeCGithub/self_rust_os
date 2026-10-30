@@ -166,3 +166,17 @@ mod tests {
         assert_eq!(try_pop_scancode(), None);
     }
 }
+
+/// Consume the keyboard byte signaled by IRQ1. IRQ acknowledgement and wakeup
+/// remain the responsibility of the architecture interrupt dispatcher.
+pub(crate) fn handle_interrupt() {
+    let mut port = x86_64::instructions::port::Port::new(0x60);
+
+    // Read the scancode from the keyboard port.
+    //
+    // SAFETY:
+    // We are reading from the keyboard port which is known to be safe.
+    let scancode: u8 = unsafe { port.read() };
+    add_scancode(scancode);
+
+}

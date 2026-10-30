@@ -8,9 +8,14 @@ import socket
 import subprocess
 import tempfile
 import time
+import sys
 from PIL import Image
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.dont_write_bytecode=True
+sys.path.insert(0,str(ROOT/'tools'))
+from qemu_platform import arguments as platform_arguments
+from qemu_test import disk_image, copy_disk
 
 
 def cpu_seconds(pid):
@@ -21,13 +26,14 @@ def cpu_seconds(pid):
 def main():
     with tempfile.TemporaryDirectory(prefix='rustos-perf-') as tmp:
         tmp = pathlib.Path(tmp)
+        disk = copy_disk(disk_image(ROOT), tmp)
         log = tmp / 'serial.log'
         sock = tmp / 'qmp'
         qemu = subprocess.Popen([
-            'qemu-system-x86_64', '-drive', f'format=raw,file={ROOT}/target/grub-disk.img',
-            '-machine', 'pc,i8042=on,vmport=on', '-vga', 'std', '-m', '256',
+            'qemu-system-x86_64', '-drive', f'format=raw,file={disk}',
+            '-machine', 'pc,i8042=on,vmport=on', '-vga', 'std',
             '-serial', f'file:{log}', '-display', 'none', '-no-reboot',
-            '-qmp', f'unix:{sock},server,nowait'])
+            '-qmp', f'unix:{sock},server,nowait'] + platform_arguments())
         try:
             end = time.monotonic() + 60
             while not sock.exists() or '[desktop] ready:' not in log.read_text(errors='replace'):
@@ -100,7 +106,7 @@ def main():
                     print(f'{name} CPU: {usage:.1%} of one host core', flush=True)
                     assert usage < budget, f'{name} burns {usage:.1%} CPU (budget {budget:.0%})'
 
-                click(250, 65)
+                click(350, 65)
                 end = time.monotonic() + 10
                 while 'Portal / RustOS shell' not in log.read_text(errors='replace'):
                     assert time.monotonic() < end, 'terminal launch timeout'
@@ -131,7 +137,7 @@ def main():
                     assert time.monotonic() < end, 'keyboard burst took over 150 ms to drain'
                     time.sleep(.01)
                 print(f'keyboard burst drain: {(time.monotonic()-start)*1000:.0f} ms', flush=True)
-                click(350, 65)
+                click(450, 65)
                 end = time.monotonic() + 10
                 while 'Snake game starting' not in log.read_text(errors='replace'):
                     assert time.monotonic() < end, 'Snake launch timeout'
@@ -140,7 +146,7 @@ def main():
                 # Spin intentionally saturates a core: other processes must
                 # still render and accept focused input while it makes progress.
                 click(92 + 470, 136 + 12)
-                click(450, 65)
+                click(550, 65)
                 end = time.monotonic() + 10
                 while 'spin: counter=' not in log.read_text(errors='replace'):
                     assert time.monotonic() < end, 'CPU-bound process made no progress'

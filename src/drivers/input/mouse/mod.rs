@@ -23,7 +23,7 @@ mod absolute;
 use spin::Mutex;
 use x86_64::instructions::port::Port;
 
-use crate::{gfx, serial_println};
+use crate::{drivers::video::framebuffer as gfx, serial_println};
 
 /// PS/2 data port (read: device output, write: device input).
 const DATA_PORT: u16 = 0x60;
@@ -449,4 +449,27 @@ mod tests {
         let (x1, _) = super::position();
         assert_eq!(x1, (x0 + 20).min(screen_width() - 1));
     }
+}
+
+/// Consume a pending auxiliary-device byte for IRQ12. The dispatcher owns EOI.
+pub(crate) fn handle_interrupt() {
+    let mut status_port = Port::<u8>::new(0x64);
+    let mut data_port = Port::<u8>::new(0x60);
+
+    // SAFETY: Reading the PS/2 status/data ports is side-effect free apart
+    // from consuming the pending output byte, which is exactly what the
+    // IRQ signals.
+    unsafe {
+        let status: u8 = status_port.read();
+        // Only consume the byte if the output buffer is full and the byte
+        // came from the mouse; a keyboard byte must never enter the mouse
+        // packet assembler.
+        if status & STATUS_OUTPUT_READY != 0
+            && status & STATUS_MOUSE_DATA != 0
+        {
+            let byte: u8 = data_port.read();
+            handle_byte(byte);
+        }
+    }
+
 }

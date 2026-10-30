@@ -11,21 +11,27 @@ import socket
 import subprocess
 import tempfile
 import time
+import sys
 from PIL import Image, ImageChops
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT / 'tools'))
+from qemu_platform import arguments as platform_arguments
+from qemu_test import disk_image, copy_disk
 
 
 def main():
     with tempfile.TemporaryDirectory(prefix='rustos-glass-') as directory:
         tmp = pathlib.Path(directory)
+        disk = copy_disk(disk_image(ROOT), tmp)
         log = tmp / 'serial.log'
         sock = tmp / 'qmp'
         qemu = subprocess.Popen([
-            'qemu-system-x86_64', '-drive', f'format=raw,file={ROOT}/target/grub-disk.img',
-            '-machine', 'pc,i8042=on,vmport=on', '-vga', 'std', '-m', '256',
+            'qemu-system-x86_64', '-drive', f'format=raw,file={disk}',
+            '-machine', 'pc,i8042=on,vmport=on', '-vga', 'std',
             '-serial', f'file:{log}', '-display', 'none', '-no-reboot',
-            '-qmp', f'unix:{sock},server,nowait'])
+            '-qmp', f'unix:{sock},server,nowait'] + platform_arguments())
         try:
             end = time.monotonic() + 60
             while not sock.exists() or '[desktop] ready:' not in log.read_text(errors='replace'):
@@ -85,7 +91,7 @@ def main():
 
                 time.sleep(.5)
                 backdrop = shot()
-                click(150, 65)
+                click(250, 65)
                 wait('[hello-ui] ready: 640x400 glass')
                 wait('[hello-ui] invalid requests rejected')
                 wait('[hello-ui] desktop role denied')
@@ -142,12 +148,12 @@ def main():
                 time.sleep(.4)
                 assert shot().getpixel((1250, 900)) == backdrop.getpixel((1250, 900)), 'closed window left stale pixels'
                 offset = log.stat().st_size
-                click(150, 65)
+                click(250, 65)
                 wait('[hello-ui] ready: 640x400 glass', offset)
                 click(140, 298)
                 wait('[hello-ui] accent changed: 1', offset)
                 # A second native app owns focused input while covering Hello.
-                click(250, 65)
+                click(350, 65)
                 wait('Portal / RustOS shell')
                 offset = log.stat().st_size
                 click(140, 298)

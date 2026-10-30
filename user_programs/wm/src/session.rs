@@ -350,13 +350,16 @@ pub(crate) fn run() {
             desktop_capture = window_hit.is_none();
             if let Some(i) = window_hit {
                 let w = windows[i].unwrap();
+                // Clicking the focused top window changes client input only.
+                // Recomposing the unchanged scene here delays its pressed frame;
+                // normal surface revision damage covers the client update.
+                scene_dirty |= i + 1 != used || focused != w.pid;
                 for j in i..used - 1 {
                     windows[j] = windows[j + 1];
                 }
                 windows[used - 1] = Some(w);
                 focused = w.pid;
                 focus(w.pid);
-                scene_dirty = true;
                 if hit(mx, my, w.x + w.width as i32 - 33, w.y, 33, TITLE_H) {
                     if w.native && !w.exited {
                         let _ = sys::send_message(w.pid, protocol::CLOSE);
@@ -366,6 +369,7 @@ pub(crate) fn run() {
                         let _ = sys::waitpid(w.pid);
                         used -= 1;
                         windows[used] = None;
+                        scene_dirty = true;
                         focused = if used > 0 {
                             windows[used - 1].unwrap().pid
                         } else {

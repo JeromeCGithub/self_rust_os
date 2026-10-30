@@ -22,22 +22,22 @@ use core::panic::PanicInfo;
 use x86_64::instructions;
 
 pub mod allocator;
-pub mod ata;
+pub mod drivers;
+use drivers::video::framebuffer as gfx;
 #[cfg(any(feature = "grub", test))]
 pub mod boot;
 pub mod console;
 pub mod fat32;
 pub mod fs;
 pub mod gdt;
-pub mod gfx;
 pub mod interrupts;
 pub mod mbr;
 pub mod memory;
-pub mod mouse;
+pub mod net;
 pub mod scheduler;
-pub mod serial;
 pub mod task;
 pub mod userspace;
+pub mod system;
 
 /// Initialization function for the kernel.
 ///
@@ -45,6 +45,7 @@ pub mod userspace;
 /// works), then the GDT, IDT, and PICs. Must be called once at boot with the
 /// physical memory offset from the bootloader and the framebuffer info.
 pub fn init(_phys_mem_offset: x86_64::VirtAddr, fb_info: gfx::FbInfo, fb_virt_addr: x86_64::VirtAddr) {
+    userspace::usercopy::init(_phys_mem_offset.as_u64());
     // SAFETY: fb_virt_addr must point to mapped framebuffer memory.
     unsafe {
         gfx::init(fb_info, fb_virt_addr);
@@ -106,7 +107,7 @@ fn test_kernel_main(boot_info: &'static BootInfo) -> ! {
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap init failed");
 
     // Initialize the keyboard scancode queue (needs heap).
-    task::keyboard::init_scancode_queue();
+    drivers::input::keyboard::init_scancode_queue();
 
     test_main();
     hlt_loop();

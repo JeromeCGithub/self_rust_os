@@ -57,7 +57,7 @@ fn when_timer_runs_then_ticks_increase() {
 fn when_keyboard_queue_empty_then_pop_returns_none() {
     // Without physical key presses, the queue should be empty.
     // (The IRQ path is exercised via QEMU sendkey in E2E.)
-    let result = self_rust_os::task::keyboard::try_pop_scancode();
+    let result = self_rust_os::drivers::input::keyboard::try_pop_scancode();
     // May be Some if a key was pressed during boot; just verify the API works.
     serial_println!("[keyboard] pop result: {:?}", result.is_some());
 }

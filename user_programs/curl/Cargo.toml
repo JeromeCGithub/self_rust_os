@@ -1,0 +1,20 @@
+[package]
+name = "curl"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Streaming HTTP client using the Ring 3 HTTP SDK"
+
+[profile.dev]
+panic = "abort"
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+
+[dependencies]
+userlib = { path = "../userlib", features = ["tls"] }
+
+[[bin]]
+name = "curl"
+path = "../userlib/src/application.rs"

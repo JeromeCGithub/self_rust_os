@@ -69,16 +69,16 @@ are incomplete hardening, as noted in [architecture](architecture.md).
 Mouse packing is x in bits 0–15, y in bits 16–31, buttons above bit 31. Button bits
 0/1/2 mean left/right/middle. Coordinates are clamped to current display dimensions,
 not historical 320×200 values found in some source comments. Query `fb_info`; honor
-pitch, bounds and 32-bit XRGB format. Mapping at `0x2100000` is physical display memory
+pitch, bounds and 32-bit XRGB format. Mapping at `0x3100000` is physical display memory
 only for the compositor; other processes see private surface frames.
 
-The 1080p layout moves the stack top from `0x800000` to `0x2000000` and the drawing
-surface from `0x900000` to `0x2100000`, making room for compositor buffers below the
+The 1080p layout moves the stack top from `0x800000` to `0x3000000` and the drawing
+surface from `0x900000` to `0x3100000`, making room for compositor buffers below the
 stack. Apps use `userlib::sys::FRAMEBUFFER_ADDR`; rebuild all apps with
 `tools/build-user.sh` when migrating from the old layout. Syscall numbers and
 `fb_info`/`snapshot` formats are unchanged. Surfaces cover `pitch * height`, including
 padding and the final partial page. User mappings occupy private page tables below
-`0x4000000`; unused gaps are unmapped. The kernel heap is 32 MiB to stage flat images.
+`0x4000000`; unused gaps are unmapped. The kernel heap is 64 MiB to stage flat images and service concurrent allocations.
 
 Graphical apps must call `present_surface()` after each rendering update. The WM
 queries `surface_status()` and retains cached window pixels until the revision or
@@ -121,3 +121,53 @@ in Ring 3, including rejected/unmapped/read-only buffers and privilege checks wh
 relevant. Keep existing numbers stable unless the task explicitly includes migration.
 Do not expose kernel pointers, internal scheduling sentinels, or Rust layout without
 an explicit representation and ABI contract.
+
+
+## Network client sockets (version 2)
+
+Syscalls 64–70 are open, connect, send, receive, close, poll and interface info.
+The kernel dispatcher and userlib share [record definitions/constants](../crates/net-abi/src/lib.rs).
+[The networking ABI](networking.md#socket-abi-version-2) specifies the complete
+argument table, exact sizes, byte order, quotas, readiness bits and error encoding.
+The typed SDK is [userlib::net](../user_programs/userlib/src/net.rs).
+
+These are PID-owned generation socket handles, not POSIX file descriptors. ICMP
+Echo, connected UDP and outgoing TCP are supported. All operations are nonblocking
+and drive bounded protocol progress; callers sleep between retries. Every buffer
+page and effective user/write permission is checked before copying. Network errors
+use their own documented range below the existing control sentinels. Socket
+close/exit/kill releases owned buffers. DNS/HTTP logic stays in userspace; the
+kernel exposes no ping-command or HTTP-specific syscall.
+
+## Platform randomness and UTC
+
+The [shared platform ABI](../crates/platform-abi/src/lib.rs),
+[kernel implementation](../src/system.rs), and
+[typed SDK](../user_programs/userlib/src/system.rs) define these operations:
+
+| Number | SDK operation | Arguments (`rdi`, `rsi`, `rdx`) | Result |
+| --- | --- | --- | --- |
+| 80 | `system::random_bytes` | writable output ptr, byte length (0–256), zero | Exact byte count, or platform error; SDK chunks larger slices into calls |
+| 81 | `system::unix_time` | zero, zero, zero | UTC Unix seconds from validated CMOS, or platform error |
+
+Both require a current process and reject nonzero reserved arguments. Zero-byte
+random requests return zero without inspecting the pointer or accessing hardware.
+Nonempty output must have effective present/user/writable permission at every
+paging level and across every page, with checked address arithmetic and bounds
+`0x400000..0x4000000`. The kernel fills a bounded local record first and copies
+only after complete entropy success. A failed syscall never partially writes its
+output. A multi-call SDK request can have completed earlier chunks before a later
+chunk fails; callers must not use it after an error.
+
+RDRAND absence returns Unavailable; failure after ten attempts per 64-bit word
+returns Failed. No fallback PRNG is seeded with ticks. Clock reads are bounded to
+eight attempts for two matching stable samples, validate calendar/format, and
+return Unavailable for invalid or inaccessible RTC data. UTC is host-controlled
+wall time, not a monotonic clock; use `ticks` for deadlines. TLS additionally
+rejects dates before 2020. These drivers do not provide a clock-setting API.
+
+Platform errors encode as `u64::MAX - 511 + code`: Invalid=1, Unavailable=2,
+Failed=3, distinct from network errors and scheduler control sentinels. Existing
+syscall numbers and network ABI records remain unchanged. TLS, certificates,
+trust policy and HTTPS are [userspace library responsibilities](tls.md), with no
+TLS-specific kernel syscall.

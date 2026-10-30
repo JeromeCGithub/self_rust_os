@@ -16,7 +16,7 @@ mod common;
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use self_rust_os::{
-    gfx::{self, COLOR_BLACK, COLOR_RED, COLOR_WHITE},
+    drivers::video::framebuffer::{self as gfx, COLOR_BLACK, COLOR_RED, COLOR_WHITE},
     println, serial_println,
 };
 use x86_64::VirtAddr;

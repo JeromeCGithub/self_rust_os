@@ -12,7 +12,7 @@ mod common;
 
 use bootloader::BootInfo;
 use core::panic::PanicInfo;
-use self_rust_os::{gfx, println, serial_println};
+use self_rust_os::{drivers::video::framebuffer as gfx, println, serial_println};
 use x86_64::VirtAddr;
 
 // Keep the generated public boot ABI wrapper internal to this test.

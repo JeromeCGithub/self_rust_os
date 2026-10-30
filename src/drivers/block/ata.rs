@@ -16,7 +16,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use self_rust_os::ata::{AtaDisk, AtaDrive};
+//! use self_rust_os::drivers::block::ata::{AtaDisk, AtaDrive};
 //!
 //! let mut disk = AtaDisk::primary(AtaDrive::Slave);
 //! let info = disk.identify().expect("no disk on primary slave").expect("identify failed");

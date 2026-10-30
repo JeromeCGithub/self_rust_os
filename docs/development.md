@@ -5,6 +5,10 @@
 Run commands from the repository root. The pinned [toolchain](../rust-toolchain.toml)
 is `nightly-2025-01-30`, with `rust-src` and `llvm-tools-preview`. Keep it pinned:
 new compiler releases can change naked assembly, target JSON, and `build-std` behavior.
+Active desktop/E2E launchers use the shared QEMU platform profile with 1 GiB RAM;
+bootimage tests also request 1 GiB. Private user stacks are 4 MiB, TLS-enabled
+userspace heaps 16 MiB, and the kernel heap 64 MiB. These are fixed, eagerly
+mapped capacities; rebuilding all apps and the disk is required after changes.
 The root [.cargo config](../.cargo/config.toml) selects the custom bare-metal target
 and builds `core`, `compiler_builtins`, and `alloc`; host `cargo test` semantics do not apply.
 
@@ -120,7 +124,7 @@ arguments or return value. Use regular comments in the included application root
 crate-level attributes and inner documentation belong in the shared root.
 
 This is a Cargo convention for the current custom target, not a port of Rust's
-standard library. `core` and `userlib` are available; APIs such as `std::fs`,
-threads and networking are not. Dependencies must support `no_std` and the pinned
+standard library. `core` and `userlib` are available; APIs such as `std::fs` and threads are not. Networking is provided by
+`userlib::net`, `userlib::http` and the optional `userlib::tls` feature. Dependencies must support `no_std` and the pinned
 target. The OS still loads fixed-address flat binaries rather than Linux ELF files.
 The shared root does not change syscall numbers, linker layout, or privileges.

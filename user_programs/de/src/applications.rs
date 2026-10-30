@@ -1,6 +1,6 @@
 //! Application discovery and legacy launch compatibility policy.
 use userlib::sys;
-pub(super) const MAX: usize = 6;
+pub(super) const MAX: usize = 16;
 #[derive(Clone, Copy)]
 pub(super) struct App {
     pub(super) name: [u8; 12],

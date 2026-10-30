@@ -13,7 +13,7 @@ use conquer_once::spin::OnceCell;
 use spin::Mutex;
 
 use crate::{
-    ata::{AtaDisk, AtaDrive},
+    drivers::block::ata::{AtaDisk, AtaDrive},
     fat32::Fat32,
     mbr::OffsetDisk,
 };

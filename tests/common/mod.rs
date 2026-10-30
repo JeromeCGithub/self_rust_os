@@ -3,7 +3,7 @@
 //! The legacy bootloader supplies an 8bpp VGA mode, while the graphics driver
 //! expects 32bpp. Use mapped RAM so tests can safely exercise the driver.
 
-use self_rust_os::gfx::FbInfo;
+use self_rust_os::drivers::video::framebuffer::FbInfo;
 use x86_64::VirtAddr;
 
 pub const FRAMEBUFFER_INFO: FbInfo = FbInfo {

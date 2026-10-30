@@ -1,0 +1,3 @@
+
+# P6 stores raw RGB bytes; never normalize or review it as prose.
+user_programs/de/wallpaper.ppm binary

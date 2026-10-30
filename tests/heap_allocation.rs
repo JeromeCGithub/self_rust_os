@@ -83,3 +83,15 @@ fn when_many_boxes_are_allocated_then_memory_is_allocated() {
         assert_eq!(*x, i);
     }
 }
+
+#[test_case]
+fn larger_kernel_heap_supports_concurrent_loading_buffers() {
+    let mut staging = Vec::<u8>::new();
+    staging
+        .try_reserve_exact(40 * 1024 * 1024)
+        .expect("modern kernel heap must hold a 40 MiB staging allocation");
+    staging.resize(40 * 1024 * 1024, 0x5a);
+    let overhead = alloc::vec![0xa5u8; 2 * 1024 * 1024];
+    assert_eq!(staging[staging.len() - 1], 0x5a);
+    assert_eq!(overhead[overhead.len() - 1], 0xa5);
+}

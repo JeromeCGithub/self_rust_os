@@ -38,7 +38,7 @@ fn run_kernel(
     mapper: &mut OffsetPageTable<'static>,
     mut frame_allocator: self_rust_os::memory::RegionFrameAllocator,
     phys_mem_offset: VirtAddr,
-    fb_info: self_rust_os::gfx::FbInfo,
+    fb_info: self_rust_os::drivers::video::framebuffer::FbInfo,
     fb_virt_addr: VirtAddr,
 ) -> ! {
     // Initialize graphics + console first so println! works, then GDT/IDT/PICs.
@@ -64,11 +64,14 @@ fn run_kernel(
     serial_println!("[kernel] Heap OK");
 
     // Initialize the keyboard scancode queue (needs heap).
-    self_rust_os::task::keyboard::init_scancode_queue();
+    self_rust_os::drivers::input::keyboard::init_scancode_queue();
     serial_println!("[kernel] Keyboard queue OK");
 
     // Initialize the PS/2 mouse (IRQ12). Non-fatal if absent.
-    self_rust_os::mouse::init();
+    self_rust_os::drivers::input::mouse::init();
+
+    // Optional NIC bring-up owns its fixed DMA frames before scheduler startup.
+    self_rust_os::net::init(mapper, &mut frame_allocator, phys_mem_offset);
 
     // Mount the root filesystem (needs heap for FAT32).
     // If the disk is not formatted, this will panic; the disk fixture
@@ -173,7 +176,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         // Legacy VGA path: 320x200. Note: the bootloader sets up 8bpp mode 13h,
         // but we describe it as 32bpp for API compatibility. Colors will be wrong
         // on the legacy path; use the GRUB path for correct 720p output.
-        self_rust_os::gfx::FbInfo {
+        self_rust_os::drivers::video::framebuffer::FbInfo {
             addr: 0xA0000,
             width: 320,
             height: 200,
@@ -195,7 +198,7 @@ fn panic(info: &PanicInfo) -> ! {
     // deadlock us inside the panic handler.
     x86_64::instructions::interrupts::without_interrupts(|| {
         use core::fmt::Write;
-        if let Some(mut serial) = self_rust_os::serial::SERIAL1.try_lock() {
+        if let Some(mut serial) = self_rust_os::drivers::tty::serial::SERIAL1.try_lock() {
             let _ = writeln!(serial, "Kernel panic: {}", info);
         }
     });

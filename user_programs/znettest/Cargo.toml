@@ -1,0 +1,21 @@
+[package]
+name = "znettest"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Ring 3 networking regression probe; run with e2e/network.py --probe"
+
+[profile.dev]
+panic = "abort"
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+
+[dependencies]
+userlib = { path = "../userlib", features = ["tls"] }
+rustos-net-abi = { path = "../../crates/net-abi" }
+
+[[bin]]
+name = "znettest"
+path = "../userlib/src/application.rs"

@@ -10,7 +10,6 @@ use core::{
 use alloc::boxed::Box;
 
 pub mod executor;
-pub mod keyboard;
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
 struct TaskId(u64);

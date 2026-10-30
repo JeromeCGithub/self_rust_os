@@ -9,6 +9,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "875488b8711a968268c7cf5d139578713097ca4635a76044e8fe8eedf831d07e"
 
 [[package]]
+name = "rustos-http"
+version = "0.1.0"
+dependencies = [
+ "rustos-net-abi",
+]
+
+[[package]]
+name = "rustos-net-abi"
+version = "0.1.0"
+
+[[package]]
+name = "rustos-platform-abi"
+version = "0.1.0"
+
+[[package]]
 name = "spin"
 version = "0.1.0"
 dependencies = [
@@ -20,4 +35,7 @@ name = "userlib"
 version = "0.1.0"
 dependencies = [
  "font8x8",
+ "rustos-http",
+ "rustos-net-abi",
+ "rustos-platform-abi",
 ]

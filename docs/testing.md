@@ -30,6 +30,7 @@ an explicit verification gap; do not replace it with `--no-run` and claim comple
 | Kernel Rust | Both default and GRUB builds, GRUB release build, `cargo test --no-run`, complete applicable unit and integration suites |
 | Frames/paging/heap | Kernel row + allocation/boundary/failure cases, heap tests, process isolation and repeated launch/exit tests in QEMU |
 | Interrupts/scheduler/input | Kernel row + keyboard/timer, process progress under CPU load, blocking/wakeup, focused input, kill/exit/wait, desktop E2E |
+| Networking/PCI/NIC/client transports | Kernel + memory + syscall/SDK + scheduler cleanup rows; [network suites](networking.md#running-and-testing), packet assertions, missing NIC, timeouts, ring wrap and real Ring 3 UDP/TCP/HTTP probe |
 | Syscalls/userlib/runtime | Kernel row + invalid argument/error tests, rebuild **all** apps, desktop E2E proving actual Ring 3 behavior and SDK compatibility |
 | ATA/MBR/FAT32 | Kernel row + parser/mock cases, ATA and FAT32 fixture integration tests, file operations through userspace when ABI/mount behavior changes |
 | User apps/desktop | Red interaction test, rebuild all apps/disk, complete desktop E2E; inspect screenshots and applicable shell/error cases |
@@ -78,6 +79,11 @@ host device. `file.locking=off` permits attachment; it does not make concurrent 
 ```bash
 ./tools/build-grub-disk.sh
 python3 e2e/desktop.py
+python3 -B e2e/http.py
+python3 -B e2e/tls.py --site https://google.com/
+python3 -B e2e/tls.py --no-rng
+python3 -B e2e/tls.py --bad-clock
+python3 -B e2e/net_perf.py --label current --assert-fast
 python3 e2e/desktop_perf.py
 python3 e2e/glass_ui.py
 bash e2e/build_profile.sh
@@ -91,6 +97,10 @@ python3 -B -m unittest discover -s tools/tests -p 'test_*.py'
 python3 -B tools/check_docs.py
 git diff --check
 ```
+
+Use `RUSTOS_TEST_DISK=target/merged-main.img` to select a separately built integration
+image for desktop, glass, HTTP/TLS and networking suites. Each VM boots its own
+writable copy. See [integration evidence](networking-main-integration.md).
 
 The desktop test builds no image itself: rebuilding first is mandatory. Its current
 checks cover wallpaper/launch readiness, Portal commands and file writes/reads,
@@ -106,13 +116,30 @@ large compositor mappings, padded pitch, final partial pages, independent snapsh
 preserved parent code and three pairs of spawn/kill/reap operations. Existing frame/stack leaks
 remain; a bounded repetition test does not establish resource reclamation.
 See [1080p validation](1080p-validation.md) for recorded red/green evidence and limits.
-The test writes files inside the development disk. It needs Pillow and permission to
+The desktop and CPU tests now boot private copies of the development disk,
+so file operations in the test cannot mutate an interactive VM's image. It needs Pillow and permission to
 create local QEMU monitor/QMP sockets.
 
 For a manual input check, run `cargo run` on the reported host, move the pointer
 across the display, launch an icon, drag and close a window, type into the focused
 terminal, and verify host/guest coordinate alignment. Record host backend/session
 and observations. If unavailable, explicitly leave that criterion unverified.
+
+## Networking checks
+
+See [networking](networking.md#running-and-testing) for host and QEMU commands.
+Run the pure net ABI, stack and ping crates from outside the root bare-metal Cargo
+configuration, explicitly targeting the host. Exercise allocation-failure recovery,
+PCI decoding and page-table permissions as well. Runtime tests use independent
+disk copies and local UDP/HTTP servers. Live 8.8.8.8 acceptance is separate from
+local deterministic tests and depends on the host's ICMP support. The network
+probe also exercises spawn with live socket buffers, blocked waitpid return/reap,
+foreign handles, quotas and close/exit/kill cleanup. Record each result and actual
+captured packets; do not infer transport behavior from unit harness compilation.
+
+TLS checks and host commands: [TLS](tls.md), with recorded [validation](tls-validation.md).
+The HTTPS harness uses disposable OpenSSL certificates, an independent host TLS server,
+private disk copies, and real Ring 3 callers. OpenSSL is a host test prerequisite.
 
 ## Known baseline gaps
 
@@ -133,6 +160,11 @@ Reproduced on pulled `main` commit `26edbc9` when preparing these guides:
   Other old scripts may also assume superseded boot paths; inspect before relying on them.
 - Bootloader dependency builds can emit an unsupported `rustc-abi` target-field
   warning under the pinned nightly. Distinguish dependency warnings from project warnings.
+
+After expanding the kernel heap to 64 MiB, the same debug stress loop runs
+67,108,864 allocations because it iterates HEAP_SIZE. Its assertion and 60-second
+timeout remain unchanged. [Expanded-limit validation](http-limits-validation.md)
+records current results and the boot-frame allocation performance fix.
 
 The remaining gaps are repair targets, not permission to skip required coverage or to report green.
 For unrelated documentation changes, disclose this baseline without pretending to

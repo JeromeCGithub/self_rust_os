@@ -22,9 +22,19 @@
 //! must not define their own.
 
 #![no_std]
+#![cfg_attr(feature = "tls", feature(alloc_error_handler))]
+#[cfg(feature = "tls")]
+extern crate alloc;
+#[cfg(all(feature = "tls", target_os = "none"))]
+mod heap;
+#[cfg(feature = "tls")]
+pub mod tls;
 
+pub mod http;
 pub mod io;
+pub mod net;
 pub mod sys;
+pub mod system;
 pub mod ui;
 
 mod rt;

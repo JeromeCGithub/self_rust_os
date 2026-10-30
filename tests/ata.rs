@@ -23,7 +23,7 @@ mod common;
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use self_rust_os::{
-    ata::{AtaDisk, AtaDrive, SECTOR_SIZE},
+    drivers::block::ata::{AtaDisk, AtaDrive, SECTOR_SIZE},
     println, serial_println,
 };
 use x86_64::VirtAddr;
