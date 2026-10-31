@@ -72,8 +72,8 @@ def main():
    config=tmp/'tls.cfg';config.write_bytes(struct.pack('<6H',*[s.getsockname()[1] for s in servers],1))
    mode=tmp/'tls.mode';mode.write_bytes(b'R' if args.no_rng else b'C' if args.bad_clock else b'V')
    for source,destination in [(config,'::/TMP/TLS.CFG'),(mode,'::/TMP/TLS.MOD'),(certs/'ca.der','::/ETC/TEST.CA')]:subprocess.run(['mcopy','-i',f'{disk}@@1048576',str(source),destination],check=True)
-   platform=platform_arguments(not args.no_rng)
-   if args.bad_clock:platform[-1]='base=1970-01-01T00:00:00,clock=vm'
+   clock='base=1970-01-01T00:00:00,clock=vm' if args.bad_clock else 'base=utc,clock=host'
+   platform=platform_arguments(not args.no_rng,rtc=clock)
    log=out/'serial.log';path=tmp/'qmp'
    qemu=subprocess.Popen(['qemu-system-x86_64','-machine','pc,i8042=on,vmport=on','-drive',f'format=raw,file={disk}','-vga','std','-display','none','-serial',f'file:{log}','-no-reboot','-qmp',f'unix:{path},server=on,wait=off']+platform+network_arguments())
    qmp=None
@@ -103,7 +103,7 @@ def main():
      for char in line+'\n':
       key={' ':'spc',':':'shift-semicolon','/':'slash','.':'dot','-':'minus','\n':'ret'}.get(char,char)
       call('human-monitor-command',{'command-line':'sendkey '+key});time.sleep(.075)
-    call('qmp_capabilities');wait('[desktop] ready: 7 applications');click(350);wait('self_rust_os forge v1.0')
+    call('qmp_capabilities');wait('[desktop] ready: 8 applications');click(350);wait('self_rust_os forge v1.0')
     type_line(f'curl https://10.0.2.2:{servers[0].getsockname()[1]}/')
     error='secure randomness unavailable' if args.no_rng else 'UTC clock unavailable' if args.bad_clock else 'TLS certificate rejected'
     wait('[portal] output: curl: '+error)

@@ -57,3 +57,8 @@ pub fn init_heap(
 
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
+
+/// Currently allocated kernel heap bytes, for bounded lifecycle regression checks.
+pub fn allocated_bytes() -> usize {
+    ALLOCATOR.lock().used()
+}

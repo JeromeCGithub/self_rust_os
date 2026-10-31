@@ -1,46 +1,15 @@
-//! Preemptive round-robin scheduler.
-//!
-//! This module implements multitasking for self_rust_os. Each process gets:
-//! - Its own page table (P4), sharing kernel mappings but with private user mappings.
-//! - Its own kernel stack (for interrupts/syscalls).
-//! - A Process Control Block (PCB) tracking state, saved registers, and exit code.
-//!
-//! # Design
-//!
-//! ## Address spaces
-//! User programs are flat binaries linked at `USER_CODE_START` (0x400000).
-//! Since they are position-dependent, each process needs its own page table.
-//! On process creation, we allocate a new P4 frame, copy all entries from the
-//! current P4 (sharing kernel mappings), then clear P4 index 0 (the 512GB
-//! region containing all user mappings: binary at 0x400000, stack at
-//! 0x3000000, framebuffer at 0x3100000). Fresh user pages are then mapped.
-//! The heap (at P4 index 136) is preserved, so kernel heap allocations work
-//! in any address space.
-//!
-//! On context switch, we write the new P4 frame to CR3 (flushing the TLB)
-//! and update the TSS RSP0 to the new process's kernel stack.
-//!
-//! ## Context switching
-//! Both the timer IRQ handler and the syscall handler are naked functions
-//! that save registers in the same order (rax, rbx, ..., r15), followed by
-//! the CPU-pushed interrupt frame (RIP, CS, RFLAGS, RSP, SS). This uniform
-//! [`SavedContext`] layout means a context saved by one can be restored by
-//! the other.
-//!
-//! Preemption only happens from user mode. If the timer fires while in
-//! kernel mode (e.g., during a syscall), we just increment ticks and return.
-//! This avoids preempting code that may hold locks.
-//!
-//! ## Blocking syscalls
-//! `sys_read` (keyboard) and `sys_waitpid` block via the scheduler instead
-//! of busy-looping: the process is marked `Blocked`, its context is saved,
-//! and another process is scheduled. The keyboard IRQ wakes keyboard-blocked
-//! processes; process exit wakes waitpid-blocked processes.
-
-use alloc::collections::VecDeque;
-use alloc::vec::Vec;
+//! Native thread scheduler and PID-owned process resources.
+//! A global ready queue is serialized by the scheduler lock. Architecture entry
+//! holds the kernel gate through the actual stack handoff, preventing a second
+//! CPU from resuming a context before its old stack has stopped executing.
+use crate::{
+    arch::x86_64::{entry, smp},
+    gdt,
+    memory::RegionFrameAllocator,
+    userspace,
+};
+use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
 use core::sync::atomic::{AtomicU64, Ordering};
-
 use spin::Mutex;
 use x86_64::{
     registers::control::{Cr3, Cr3Flags},
@@ -48,178 +17,164 @@ use x86_64::{
     VirtAddr,
 };
 
-use crate::{gdt, memory::RegionFrameAllocator, userspace};
-
-/// Process identifier. PIDs are allocated sequentially starting from 0.
-pub type Pid = u32;
-
-/// Size of each process's kernel stack (16 KiB).
-const KERNEL_STACK_SIZE: usize = 4096 * 4;
-
-/// Timer ticks per time slice. PIT runs at ~18.2Hz (~55ms/tick).
-/// Preempt on every tick for a ~55ms quantum.
-const TICKS_PER_QUANTUM: u64 = 1;
-
-/// Sentinel: syscall should block the current process and schedule another.
+/// Internal block sentinel consumed by architecture entry.
 pub const PROCESS_BLOCK_SENTINEL: u64 = u64::MAX - 2;
+/// Internal timer result requesting the CPU's dedicated idle stack.
+pub const IDLE_RSP: u64 = u64::MAX;
+const ERROR: u64 = u64::MAX - 1;
+const MAX_THREADS: usize = 1024;
 
-/// Process states.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ProcessState {
-    /// Ready to run, in the ready queue.
-    Ready,
-    /// Currently running on the CPU.
-    Running,
-    /// Blocked waiting for an event (keyboard input, child exit).
-    Blocked,
-    /// Exited, waiting to be reaped by waitpid.
-    Zombie,
-}
+pub use crate::process::{BlockReason, Pid, Process, ProcessState, ThreadState, Tid};
+use crate::process::{ProcessTable, Thread};
 
-/// What a blocked process is waiting for.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum BlockReason {
-    /// Waiting for keyboard input.
-    Keyboard,
-    /// Waiting for a specific PID to exit (u32::MAX = any child).
-    WaitPid(Pid),
-    /// Waiting for an absolute PIT tick deadline.
-    Timer(u64),
-    /// Not blocked.
-    None,
-}
+/// Canonical frame shared with architecture entry.
+pub use crate::arch::x86_64::context::SavedContext;
 
-/// Process Control Block.
-pub struct Process {
-    /// Process ID.
-    pub pid: Pid,
-    /// Current state.
-    pub state: ProcessState,
-    /// Why this process is blocked (if Blocked).
-    pub block_reason: BlockReason,
-    /// Saved kernel RSP pointing to a [`SavedContext`] on this process's
-    /// kernel stack. Valid when state is Ready or Blocked.
-    pub kernel_rsp: u64,
-    /// Top of this process's kernel stack (for TSS RSP0).
-    pub kernel_stack_top: u64,
-    /// Physical frame of this process's P4 page table.
-    pub p4_frame: PhysFrame,
-    /// Exit code (valid when Zombie).
-    pub exit_code: u64,
-    /// Private application drawing surface (empty for the display owner).
-    pub surface: Vec<PhysFrame>,
-    /// Text output cursor in pixels.
-    pub text_cursor: (usize, usize),
-    /// Whether console writes are rendered on this surface.
-    pub console_enabled: bool,
-    /// Revision of a completed client or console rendering update.
-    pub surface_revision: u64,
-    /// Bounded scalar inbox. Sender identity is filled by the kernel.
-    inbox: [u64; 16],
-    inbox_head: usize,
-    inbox_len: usize,
-    io_peer: Option<(Pid, bool)>,
-    io_inbox: VecDeque<u32>,
-}
-
-/// Saved CPU context layout.
-///
-/// Must match the register save order in the naked `timer_entry` and
-/// `syscall_entry` handlers: pushes go rax, rbx, rcx, rdx, rsi, rdi, rbp,
-/// r8, r9, r10, r11, r12, r13, r14, r15 (so r15 ends up at the lowest
-/// address), followed by the CPU-pushed interrupt frame.
-#[repr(C)]
-pub struct SavedContext {
-    /// R15 general-purpose register.
-    pub r15: u64,
-    /// R14 general-purpose register.
-    pub r14: u64,
-    /// R13 general-purpose register.
-    pub r13: u64,
-    /// R12 general-purpose register.
-    pub r12: u64,
-    /// R11 general-purpose register.
-    pub r11: u64,
-    /// R10 general-purpose register.
-    pub r10: u64,
-    /// R9 general-purpose register.
-    pub r9: u64,
-    /// R8 general-purpose register.
-    pub r8: u64,
-    /// Base pointer.
-    pub rbp: u64,
-    /// RDI general-purpose register.
-    pub rdi: u64,
-    /// RSI general-purpose register.
-    pub rsi: u64,
-    /// RDX general-purpose register.
-    pub rdx: u64,
-    /// RCX general-purpose register.
-    pub rcx: u64,
-    /// RBX general-purpose register.
-    pub rbx: u64,
-    /// RAX general-purpose register.
-    pub rax: u64,
-    /// Instruction pointer.
-    pub rip: u64,
-    /// Code segment selector.
-    pub cs: u64,
-    /// CPU flags.
-    pub rflags: u64,
-    /// Stack pointer.
-    pub rsp: u64,
-    /// Stack segment selector.
-    pub ss: u64,
-}
-
-/// The scheduler state.
-pub struct Scheduler {
-    /// Process table, indexed by PID. `None` = PID not in use (reaped).
-    processes: Vec<Option<Process>>,
-    /// Queue of Ready PIDs (round-robin).
-    ready_queue: VecDeque<Pid>,
-    /// Currently running PID (if any).
-    current: Option<Pid>,
-    /// Next PID to allocate.
+struct Scheduler {
+    processes: ProcessTable,
+    threads: Vec<Option<Thread>>,
+    retired: Vec<Process>,
+    ready_queue: VecDeque<Tid>,
+    current: [Option<Tid>; 32],
     next_pid: Pid,
-    /// Physical memory offset (for page table manipulation), as raw u64.
+    generation: u64,
     phys_offset: u64,
-    /// Frame allocator (for new address spaces).
-    frame_allocator: Option<crate::memory::RegionFrameAllocator>,
+    frame_allocator: Option<RegionFrameAllocator>,
 }
-
 impl Scheduler {
     const fn new() -> Self {
         Self {
-            processes: Vec::new(),
+            processes: ProcessTable::new(),
+            threads: Vec::new(),
+            retired: Vec::new(),
             ready_queue: VecDeque::new(),
-            current: None,
+            current: [None; 32],
             next_pid: 0,
+            generation: 1,
             phys_offset: 0,
             frame_allocator: None,
         }
     }
+    fn thread(&self, tid: Tid) -> Option<&Thread> {
+        self.threads
+            .get((tid & 65535) as usize)?
+            .as_ref()
+            .filter(|t| t.tid == tid)
+    }
+    fn thread_mut(&mut self, tid: Tid) -> Option<&mut Thread> {
+        self.threads
+            .get_mut((tid & 65535) as usize)?
+            .as_mut()
+            .filter(|t| t.tid == tid)
+    }
+    fn current_tid(&self) -> Option<Tid> {
+        self.current[smp::current_cpu()]
+    }
+    fn current_pid(&self) -> Option<Pid> {
+        self.current_tid()
+            .and_then(|tid| self.thread(tid).map(|t| t.pid))
+    }
+    fn reserve_tid(&self) -> Result<Tid, &'static str> {
+        let slot = self
+            .threads
+            .iter()
+            .position(Option::is_none)
+            .unwrap_or(self.threads.len());
+        if slot >= MAX_THREADS || self.generation >= 1u64 << 47 {
+            return Err("thread quota exhausted");
+        }
+        Ok((self.generation << 16) | slot as u64)
+    }
+    fn insert(&mut self, thread: Thread) {
+        let slot = (thread.tid & 65535) as usize;
+        if slot == self.threads.len() {
+            self.threads.push(None);
+        }
+        self.ready_queue.push_back(thread.tid);
+        self.threads[slot] = Some(thread);
+        self.generation += 1;
+    }
 }
-
-/// Global scheduler instance.
 static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 
-/// Ticks since last preemption check (for quantum).
-static TICKS_SINCE_SWITCH: AtomicU64 = AtomicU64::new(0);
-
-/// Initializes the scheduler.
-///
-/// Must be called once at boot before creating any processes.
-///
-/// # Arguments
-/// * `phys_offset` - Physical memory offset for page table access.
-/// * `frame_allocator` - Frame allocator for new address spaces.
-pub fn init(phys_offset: VirtAddr, frame_allocator: RegionFrameAllocator) {
-    let mut sched = SCHEDULER.lock();
-    sched.phys_offset = phys_offset.as_u64();
-    sched.frame_allocator = Some(frame_allocator);
+/// Initialize the shared ready queue and physical-frame ownership pool once.
+pub fn init(phys_offset: VirtAddr, mut frame_allocator: RegionFrameAllocator) {
+    smp::retain_boot_root();
+    frame_allocator.enable_recycling();
+    let mut s = SCHEDULER.lock();
+    s.processes.reserve();
+    s.ready_queue.reserve_exact(MAX_THREADS);
+    s.threads.reserve_exact(MAX_THREADS);
+    s.retired.reserve_exact(128);
+    s.phys_offset = phys_offset.as_u64();
+    s.frame_allocator = Some(frame_allocator);
 }
-
+fn allocate_kernel_stack() -> Result<Box<[u128]>, &'static str> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(1024)
+        .map_err(|_| "kernel stack allocation failed")?;
+    v.resize(1024, 0u128);
+    Ok(v.into_boxed_slice())
+}
+fn make_thread(
+    tid: Tid,
+    pid: Pid,
+    stack: Box<[u128]>,
+    rip: u64,
+    rsp: u64,
+    arg: u64,
+    affinity: u64,
+) -> Thread {
+    let top = stack.as_ptr() as u64 + (stack.len() * 16) as u64;
+    let saved = top - core::mem::size_of::<SavedContext>() as u64;
+    // SAFETY: u128 storage is 16-byte aligned, uniquely owned and large enough
+    // for the canonical frame. All fields are initialized before publication.
+    unsafe {
+        core::ptr::write(
+            saved as *mut SavedContext,
+            SavedContext {
+                r15: 0,
+                r14: 0,
+                r13: 0,
+                r12: 0,
+                r11: 0,
+                r10: 0,
+                r9: 0,
+                r8: 0,
+                rbp: 0,
+                rdi: arg,
+                rsi: 0,
+                rdx: 0,
+                rcx: 0,
+                rbx: 0,
+                rax: 0,
+                rip,
+                cs: u64::from(gdt::user_code_selector().0),
+                rflags: 0x202,
+                rsp,
+                ss: u64::from(gdt::user_data_selector().0),
+            },
+        );
+    }
+    Thread {
+        tid,
+        pid,
+        state: ThreadState::Ready,
+        reason: BlockReason::None,
+        saved_kernel_rsp: saved,
+        kernel_stack: stack,
+        user_stack: None,
+        affinity,
+        detached: false,
+        joiner: None,
+    }
+}
+/// Create an isolated flat-binary process and its initial native thread.
+pub fn spawn_process(binary: &[u8], readonly_size: usize) -> Result<Pid, &'static str> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        spawn_process_inner(binary, readonly_size)
+    })
+}
 /// Deep-copies the page-table subtree under `new_p3[0]` (the first GB).
 ///
 /// Must be called right after shallow-copying the P3 entries. It replaces
@@ -242,10 +197,13 @@ fn deep_copy_p3_subtree(
     }
     let cur_p2_frame = new_p3[0].frame().map_err(|_| "P3[0] frame error")?;
     // SAFETY: The frame is a valid P2, readable via the physical offset mapping.
-    let cur_p2 =
-        unsafe { &*((phys_offset + cur_p2_frame.start_address().as_u64()).as_ptr() as *const PageTable) };
+    let cur_p2 = unsafe {
+        &*((phys_offset + cur_p2_frame.start_address().as_u64()).as_ptr() as *const PageTable)
+    };
 
-    let new_p2_frame = allocator.allocate_frame().ok_or("failed to allocate P2 copy")?;
+    let new_p2_frame = allocator
+        .allocate_frame()
+        .ok_or("failed to allocate P2 copy")?;
     // SAFETY: Freshly allocated frame, writable via the physical offset mapping.
     let new_p2 = unsafe {
         &mut *((phys_offset + new_p2_frame.start_address().as_u64()).as_mut_ptr() as *mut PageTable)
@@ -266,12 +224,14 @@ fn deep_copy_p3_subtree(
 
         if is_user_p2 {
             // Allocate a fresh empty P1 table for user regions.
-            let new_p1_frame = allocator.allocate_frame().ok_or("failed to allocate P1 for user")?;
-            // SAFETY: Freshly allocated frame, writable via the physical offset mapping.
-            // The frame allocator zeroes frames? No — we must clear it manually.
-            // Actually, allocate_frame() returns a zeroed frame (frame allocator contract).
+            let new_p1_frame = allocator
+                .allocate_frame()
+                .ok_or("failed to allocate P1 for user")?;
+            // SAFETY: Fresh owned frame, writable through the RAM direct map.
+            // Recycled allocator frames are not zeroed; clear all entries before use.
             let new_p1 = unsafe {
-                &mut *((phys_offset + new_p1_frame.start_address().as_u64()).as_mut_ptr() as *mut PageTable)
+                &mut *((phys_offset + new_p1_frame.start_address().as_u64()).as_mut_ptr()
+                    as *mut PageTable)
             };
             // Ensure it's empty (clear all entries).
             for k in 0..512 {
@@ -291,12 +251,16 @@ fn deep_copy_p3_subtree(
         }
         let cur_p1_frame = new_p2[j].frame().map_err(|_| "P2 entry frame error")?;
         // SAFETY: The frame is a valid P1, readable via the physical offset mapping.
-        let cur_p1 =
-            unsafe { &*((phys_offset + cur_p1_frame.start_address().as_u64()).as_ptr() as *const PageTable) };
-        let new_p1_frame = allocator.allocate_frame().ok_or("failed to allocate P1 copy")?;
+        let cur_p1 = unsafe {
+            &*((phys_offset + cur_p1_frame.start_address().as_u64()).as_ptr() as *const PageTable)
+        };
+        let new_p1_frame = allocator
+            .allocate_frame()
+            .ok_or("failed to allocate P1 copy")?;
         // SAFETY: Freshly allocated frame, writable via the physical offset mapping.
         let new_p1 = unsafe {
-            &mut *((phys_offset + new_p1_frame.start_address().as_u64()).as_mut_ptr() as *mut PageTable)
+            &mut *((phys_offset + new_p1_frame.start_address().as_u64()).as_mut_ptr()
+                as *mut PageTable)
         };
         for k in 0..512 {
             new_p1[k] = cur_p1[k].clone();
@@ -310,32 +274,27 @@ fn deep_copy_p3_subtree(
     Ok(())
 }
 
-/// Creates a new process running the given binary.
-///
-/// Allocates a fresh address space, maps the binary/stack/framebuffer,
-/// sets up the initial context, and adds the process to the ready queue.
-///
-/// Returns the new PID.
-pub fn spawn_process(binary: &[u8], readonly_size: usize) -> Result<Pid, &'static str> {
-    // Disable interrupts while holding the scheduler lock to prevent
-    // deadlock if the timer IRQ fires during process creation.
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        spawn_process_inner(binary, readonly_size)
-    })
-}
-
 fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'static str> {
     if binary.len() as u64 > userspace::USER_STACK_BOTTOM - userspace::USER_CODE_START {
         return Err("user binary overlaps stack");
     }
     let mut sched = SCHEDULER.lock();
+    if sched.processes.iter().flatten().count() + sched.retired.len() >= 128
+        || sched.next_pid == u32::MAX
+    {
+        return Err("process quota exhausted");
+    }
+    let kernel_stack = allocate_kernel_stack()?;
+    let tid = sched.reserve_tid()?;
     let phys_offset = VirtAddr::new(sched.phys_offset);
     // Read next_pid before the mutable borrow of allocator.
     let is_first_process = sched.next_pid == 0;
-    let allocator = sched
+    let pool = sched
         .frame_allocator
         .as_mut()
         .ok_or("scheduler not initialized")?;
+    let mut transaction = crate::memory::owned::FrameTransaction::new(pool);
+    let allocator = &mut transaction;
 
     // 1. Allocate and set up a new P4 page table.
     let p4_frame = allocator
@@ -380,7 +339,8 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
         // copy gives the new process private page tables while keeping the
         // same physical frames for kernel low-memory mappings.
         deep_copy_p3_subtree(new_p3, allocator, phys_offset)?;
-        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
+        let flags =
+            PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
         p4_table[0].set_frame(new_p3_frame, flags);
     }
 
@@ -403,491 +363,413 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
         .map_err(|_| "failed to map user binary")?;
         crate::userspace::process::map_user_stack_via_phys(&mut new_mapper, allocator, phys_offset)
             .map_err(|_| "failed to map user stack")?;
-        let surface = crate::userspace::process::map_user_framebuffer(&mut new_mapper, allocator, is_first_process, phys_offset)
-            .map_err(|_| "failed to map framebuffer")?;
+        let surface = crate::userspace::process::map_user_framebuffer(
+            &mut new_mapper,
+            allocator,
+            is_first_process,
+            phys_offset,
+        )
+        .map_err(|_| "failed to map framebuffer")?;
         Ok::<Vec<PhysFrame>, &'static str>(surface)
     })();
     let surface = map_result?;
 
-    // 4. Allocate a kernel stack from the heap.
-    // The heap is mapped in the kernel half, shared by all address spaces.
-    let kstack = alloc::vec![0u8; KERNEL_STACK_SIZE];
-    let kstack_box = kstack.into_boxed_slice();
-    let kstack_top = kstack_box.as_ptr() as u64 + kstack_box.len() as u64;
-    // Leak the stack (processes are not freed in this phase).
-    core::mem::forget(kstack_box);
-
-    // 5. Set up the initial SavedContext at the top of the kernel stack.
-    let ctx_ptr = (kstack_top - core::mem::size_of::<SavedContext>() as u64) as *mut SavedContext;
-    // SAFETY: The kernel stack is valid heap memory, large enough for the context.
-    unsafe {
-        (*ctx_ptr).r15 = 0;
-        (*ctx_ptr).r14 = 0;
-        (*ctx_ptr).r13 = 0;
-        (*ctx_ptr).r12 = 0;
-        (*ctx_ptr).r11 = 0;
-        (*ctx_ptr).r10 = 0;
-        (*ctx_ptr).r9 = 0;
-        (*ctx_ptr).r8 = 0;
-        (*ctx_ptr).rbp = 0;
-        (*ctx_ptr).rdi = 0;
-        (*ctx_ptr).rsi = 0;
-        (*ctx_ptr).rdx = 0;
-        (*ctx_ptr).rcx = 0;
-        (*ctx_ptr).rbx = 0;
-        (*ctx_ptr).rax = 0;
-        (*ctx_ptr).rip = userspace::USER_CODE_START;
-        (*ctx_ptr).cs = u64::from(gdt::user_code_selector().0);
-        (*ctx_ptr).rflags = 0x202; // IF set
-        (*ctx_ptr).rsp = userspace::USER_STACK_TOP;
-        (*ctx_ptr).ss = u64::from(gdt::user_data_selector().0);
-    }
-
-    // 6. Create the PCB and enqueue.
+    let owned_frames = transaction.commit();
     let pid = sched.next_pid;
-    sched.next_pid += 1;
-    let proc = Process {
+    let process = Process {
         pid,
-        state: ProcessState::Ready,
-        block_reason: BlockReason::None,
-        kernel_rsp: ctx_ptr as u64,
-        kernel_stack_top: kstack_top,
+        state: ProcessState::Live,
         p4_frame,
         exit_code: 0,
         surface,
         text_cursor: (8, 8),
         console_enabled: true,
         surface_revision: 0,
+        owned_frames,
+        stack_slots: 0,
         inbox: [0; 16],
         inbox_head: 0,
         inbox_len: 0,
-        io_peer: None, io_inbox: VecDeque::new(),
+        io_peer: None,
+        io_inbox: VecDeque::new(),
     };
-    // Ensure the vector is large enough.
-    while sched.processes.len() <= pid as usize {
-        sched.processes.push(None);
-    }
-    sched.processes[pid as usize] = Some(proc);
-    // IRQ wakeups must never grow the queue. At most one entry per live
-    // process is queued; reserve for the entire table in this non-IRQ path.
-    let capacity = sched.processes.len();
-    let queued = sched.ready_queue.len();
-    sched.ready_queue.reserve(capacity.saturating_sub(queued));
-    sched.ready_queue.push_back(pid);
-
+    let thread = make_thread(
+        tid,
+        pid,
+        kernel_stack,
+        userspace::USER_CODE_START,
+        userspace::USER_STACK_TOP,
+        0,
+        u64::MAX,
+    );
+    sched.processes.insert(process);
+    sched.insert(thread);
+    sched.next_pid += 1;
     crate::serial_println!("[sched] spawned process {} ({} bytes)", pid, binary.len());
     Ok(pid)
 }
 
-/// Starts the scheduler by switching to the first ready process.
-///
-/// Never returns.
+/// Start all configured CPUs and restore the initial user thread.
 pub fn start() -> ! {
     crate::console::DESKTOP_ACTIVE.store(true, Ordering::Relaxed);
-    let new_rsp = {
-        let mut sched = SCHEDULER.lock();
-        let pid = sched
-            .ready_queue
-            .pop_front()
-            .expect("scheduler: no processes to run");
-        // Extract the fields we need, then release the borrow.
-        let (p4_frame, kernel_stack_top, kernel_rsp) = {
-            let pcb = sched.processes[pid as usize]
-                .as_mut()
-                .expect("scheduler: invalid PID");
-            pcb.state = ProcessState::Running;
-            (pcb.p4_frame, pcb.kernel_stack_top, pcb.kernel_rsp)
-        };
-        sched.current = Some(pid);
-        // Switch to the process's address space.
-        // SAFETY: p4_frame is a valid P4 we created.
-        unsafe {
-            Cr3::write(p4_frame, Cr3Flags::empty());
-        }
-        // Use the process's kernel stack for interrupts.
-        gdt::set_kernel_stack(VirtAddr::new(kernel_stack_top));
-        kernel_rsp
-    };
-
-    // Switch to the process's kernel stack and restore its context.
-    // Disable interrupts during the switch; the iretq frame has IF set,
-    // so interrupts will be enabled when we enter user mode.
     x86_64::instructions::interrupts::disable();
+    entry::enter();
+    smp::start();
+    let rsp = idle_next();
+    if rsp == 0 {
+        panic!("scheduler: no initial process");
+    }
+    // SAFETY: Selection installed its live address space/TSS under the gate.
     unsafe {
-        core::arch::asm!(
-            "mov rsp, {0}",
-            "pop r15",
-            "pop r14",
-            "pop r13",
-            "pop r12",
-            "pop r11",
-            "pop r10",
-            "pop r9",
-            "pop r8",
-            "pop rbp",
-            "pop rdi",
-            "pop rsi",
-            "pop rdx",
-            "pop rcx",
-            "pop rbx",
-            "pop rax",
-            "iretq",
-            in(reg) new_rsp,
-            options(noreturn, nostack)
-        );
+        entry::restore(rsp);
     }
 }
-
-/// Called from the timer interrupt handler (naked asm).
-///
-/// # Arguments
-/// * `save_rsp` - Kernel RSP pointing to the saved context, or 0 if the
-///   interrupt came from kernel mode (no preemption).
-///
-/// # Returns
-/// New kernel RSP to switch to, or 0 to resume the current context.
-pub extern "C" fn on_timer(save_rsp: u64) -> u64 {
-    if save_rsp == 0 {
-        // From kernel mode: no preemption.
-        return 0;
-    }
-
-    // Quantum check.
-    let elapsed = TICKS_SINCE_SWITCH.fetch_add(1, Ordering::Relaxed) + 1;
-    if elapsed < TICKS_PER_QUANTUM {
-        return 0;
-    }
-    TICKS_SINCE_SWITCH.store(0, Ordering::Relaxed);
-
-    let mut sched = SCHEDULER.lock();
-
-    // Only preempt if there's someone else to run.
-    if sched.ready_queue.is_empty() {
-        return 0;
-    }
-
-    let current = match sched.current {
-        Some(pid) => pid,
-        None => return 0,
-    };
-
-    // Save the current process's context and requeue it.
-    if let Some(pcb) = sched
-        .processes
-        .get_mut(current as usize)
-        .and_then(|p| p.as_mut())
-    {
-        if pcb.state == ProcessState::Running {
-            pcb.kernel_rsp = save_rsp;
-            pcb.state = ProcessState::Ready;
-            sched.ready_queue.push_back(current);
-        } else {
-            // Current isn't Running (shouldn't happen from user mode).
-            return 0;
+fn use_boot_space() {
+    let physical = smp::boot_cr3();
+    if physical != 0 {
+        // SAFETY: BSP startup retains this supervisor boot root for CPU lifetime.
+        unsafe {
+            Cr3::write(
+                PhysFrame::containing_address(x86_64::PhysAddr::new(physical)),
+                Cr3Flags::empty(),
+            );
         }
-    }
-
-    match pick_next_locked(&mut sched) {
-        Some(new_rsp) => new_rsp,
-        None => 0,
     }
 }
-
-/// Called from the syscall handler when a process exits or blocks.
-///
-/// # Arguments
-/// * `save_rsp` - Kernel RSP of the saved context. If 0, the current process
-///   is dead (Zombie) and its context is not saved. Otherwise, the process
-///   is blocking and its context is saved for later resumption.
-///
-/// # Returns
-/// Kernel RSP of the next process to run. Never returns 0; if no process
-/// is runnable, idles (hlt) until one wakes.
-pub extern "C" fn schedule(save_rsp: u64) -> u64 {
-    // Save the current process's context if it's blocking (not dead).
-    if save_rsp != 0 {
-        let mut sched = SCHEDULER.lock();
-        if let Some(pid) = sched.current {
-            if let Some(pcb) = sched
-                .processes
-                .get_mut(pid as usize)
-                .and_then(|p| p.as_mut())
-            {
-                // Only save if still marked Running (syscalls set Blocked before).
-                // Actually, blockers set state before returning sentinel, so we
-                // just save the RSP here.
-                pcb.kernel_rsp = save_rsp;
-                if matches!(pcb.block_reason, BlockReason::Timer(_) | BlockReason::Keyboard) {
-                    // A keyboard wake does not fill the user buffer: returning
-                    // zero makes read callers retry, rather than reusing stale
-                    // bytes with the saved syscall number as a fake byte count.
-                    // SAFETY: save_rsp is the aligned SavedContext on this
-                    // process's live kernel stack, supplied by syscall_entry.
-                    // IRQs are disabled and no other context accesses it.
-                    unsafe { (*(save_rsp as *mut SavedContext)).rax = 0; }
-                }
+fn pick_next_locked(s: &mut Scheduler) -> Option<u64> {
+    let cpu = smp::current_cpu();
+    for _ in 0..s.ready_queue.len() {
+        let tid = s.ready_queue.pop_front()?;
+        let Some(t) = s.thread(tid) else {
+            continue;
+        };
+        if t.state != ThreadState::Ready {
+            continue;
+        }
+        if t.affinity & (1u64 << cpu) == 0 {
+            s.ready_queue.push_back(tid);
+            continue;
+        }
+        let pid = t.pid;
+        let root = s.processes.get(pid as usize)?.as_ref()?.p4_frame;
+        let t = s.thread_mut(tid)?;
+        t.state = ThreadState::Running;
+        let (top, rsp) = (t.kernel_stack_top(), t.saved_kernel_rsp);
+        s.current[cpu] = Some(tid);
+        if Cr3::read().0 != root {
+            // SAFETY: The selected process owns root. Kernel mappings/stacks
+            // are supervisor and common to all address spaces. Gate prevents
+            // teardown; mapping changes use explicit cross-CPU invalidation.
+            unsafe {
+                Cr3::write(root, Cr3Flags::empty());
             }
         }
+        gdt::set_kernel_stack(VirtAddr::new(top));
+        return Some(rsp);
     }
-    // Else: process is a Zombie, don't save.
-
-    loop {
-        {
-            let mut sched = SCHEDULER.lock();
-            if let Some(new_rsp) = pick_next_locked(&mut sched) {
-                TICKS_SINCE_SWITCH.store(0, Ordering::Relaxed);
-                return new_rsp;
-            }
-        }
-        // No runnable process: idle with interrupts enabled until one wakes.
-        // (e.g., keyboard IRQ will wake a process blocked on input)
-        // STI's interrupt shadow makes enabling + halting indivisible with
-        // respect to IRQ delivery, avoiding a wakeup between enable and HLT.
-        x86_64::instructions::interrupts::enable_and_hlt();
-        x86_64::instructions::interrupts::disable();
-    }
-}
-
-/// Picks the next Ready process from the queue.
-///
-/// Switches CR3 and TSS RSP0. Returns the new process's saved kernel RSP.
-/// Returns None if no Ready process is available.
-fn pick_next_locked(sched: &mut Scheduler) -> Option<u64> {
-    while let Some(pid) = sched.ready_queue.pop_front() {
-        if let Some(pcb) = sched
-            .processes
-            .get_mut(pid as usize)
-            .and_then(|p| p.as_mut())
-        {
-            if pcb.state == ProcessState::Ready {
-                pcb.state = ProcessState::Running;
-                sched.current = Some(pid);
-                // Switch address space.
-                // SAFETY: p4_frame is a valid P4 created by spawn_process.
-                unsafe {
-                    Cr3::write(pcb.p4_frame, Cr3Flags::empty());
-                }
-                // Switch kernel stack for interrupts.
-                gdt::set_kernel_stack(VirtAddr::new(pcb.kernel_stack_top));
-                return Some(pcb.kernel_rsp);
-            }
-        }
-        // Skip stale entries (Zombie/Blocked).
-    }
+    s.current[cpu] = None;
+    use_boot_space();
     None
 }
-
-/// Marks the current process as exited with the given code.
-///
-/// Wakes any processes blocked in waitpid on this PID.
-/// The caller must then invoke `schedule(0)` to switch away.
-pub fn exit_current(code: u64) {
-    let mut sched = SCHEDULER.lock();
-    let current = match sched.current {
-        Some(pid) => pid,
-        None => return, // No scheduler running (e.g., unit test); just return.
-    };
-    if let Some(pcb) = sched
-        .processes
-        .get_mut(current as usize)
-        .and_then(|p| p.as_mut())
-    {
-        pcb.state = ProcessState::Zombie;
-        pcb.exit_code = code;
-        crate::serial_println!("[sched] process {} exited with code {}", current, code);
+/// Timer or reschedule entry. Gate handoff finishes on the incoming stack.
+pub extern "C" fn on_timer(saved: u64) -> u64 {
+    x86_64::instructions::interrupts::without_interrupts(|| on_timer_inner(saved))
+}
+fn on_timer_inner(saved: u64) -> u64 {
+    if saved == 0 {
+        return 0;
     }
-    crate::net::cleanup(current);
-    stop_owned_child_locked(&mut sched, current);
-    wake_waiters_locked(&mut sched, current);
-    // Remove from ready queue (shouldn't be there, but be safe).
-    sched.ready_queue.retain(|&pid| pid != current);
+    let mut s = SCHEDULER.lock();
+    let cpu = smp::current_cpu();
+    let Some(tid) = s.current[cpu] else {
+        return 0;
+    };
+    if s.ready_queue.is_empty()
+        && s.thread(tid)
+            .map(|t| t.state == ThreadState::Running)
+            .unwrap_or(false)
+    {
+        // Nothing else can use this CPU. Preserve the current frame and TLB
+        // instead of enqueueing, selecting and flushing this same context.
+        return 0;
+    }
+    if let Some(t) = s.thread_mut(tid) {
+        if t.state == ThreadState::Running {
+            t.saved_kernel_rsp = saved;
+            t.state = ThreadState::Ready;
+            s.ready_queue.push_back(tid);
+        }
+    }
+    pick_next_locked(&mut s).unwrap_or(IDLE_RSP)
+}
+/// Save a blocked context or leave an exited thread, then select another.
+pub extern "C" fn switch_next(saved: u64) -> u64 {
+    x86_64::instructions::interrupts::without_interrupts(|| schedule_inner(saved))
+}
+fn schedule_inner(saved: u64) -> u64 {
+    let mut s = SCHEDULER.lock();
+    if saved != 0 {
+        if let Some(tid) = s.current_tid() {
+            if let Some(t) = s.thread_mut(tid) {
+                t.saved_kernel_rsp = saved;
+                if !matches!(t.reason, BlockReason::WaitPid(_)) {
+                    // SAFETY: Entry supplies this thread's exclusively owned frame.
+                    unsafe {
+                        (*(saved as *mut SavedContext)).rax = 0;
+                    }
+                }
+            }
+        }
+    }
+    pick_next_locked(&mut s).unwrap_or(0)
+}
+/// Called only after reaching a CPU-owned idle stack, with the entry gate held.
+pub fn idle_next() -> u64 {
+    wake_timers();
+    reap_retired();
+    pick_next_locked(&mut SCHEDULER.lock()).unwrap_or(0)
+}
+/// PID of the calling CPU's current thread.
+pub fn current_pid() -> Option<Pid> {
+    SCHEDULER.lock().current_pid()
+}
+/// Generation-checked TID of the calling CPU's execution context.
+pub fn current_tid() -> Option<Tid> {
+    SCHEDULER.lock().current_tid()
 }
 
-/// Terminates a process by PID.
-///
-/// If the target is the current process, marks it Zombie (caller must schedule away).
-/// Returns the exit code on success, or None if the PID is invalid.
-pub fn kill(pid: Pid) -> Option<u64> {
-    let mut sched = SCHEDULER.lock();
-    let current = sched.current;
-    
-    let pcb = sched
+fn set_return(t: &mut Thread, value: u64) {
+    // SAFETY: Gate serializes wakeup after a completed save/handoff, scheduler
+    // lock owns the blocked thread record; no CPU is restoring this frame.
+    unsafe {
+        (*(t.saved_kernel_rsp as *mut SavedContext)).rax = value;
+    }
+}
+fn stop_threads_locked(s: &mut Scheduler, pid: Pid) {
+    for t in s.threads.iter_mut().flatten().filter(|t| t.pid == pid) {
+        t.state = ThreadState::Zombie;
+        t.detached = true;
+        t.reason = BlockReason::None;
+    }
+    s.ready_queue.retain(|tid| {
+        s.threads
+            .get((*tid & 65535) as usize)
+            .and_then(Option::as_ref)
+            .map(|t| t.pid != pid)
+            .unwrap_or(false)
+    });
+}
+fn retire_process(s: &mut Scheduler, pid: Pid) {
+    if let Some(process) = s.processes.get_mut(pid as usize).and_then(Option::take) {
+        s.retired.push(process);
+        crate::serial_println!("[sched] reaped zombie {}", pid);
+    }
+}
+fn wake_waiters_locked(s: &mut Scheduler, pid: Pid) {
+    let Some(code) = s
         .processes
-        .get_mut(pid as usize)
-        .and_then(|p| p.as_mut())?;
-    if pcb.state == ProcessState::Zombie {
+        .get(pid as usize)
+        .and_then(Option::as_ref)
+        .map(|p| p.exit_code)
+    else {
+        return;
+    };
+    let mut reaped = false;
+    for t in s.threads.iter_mut().flatten() {
+        if t.state == ThreadState::Blocked
+            && matches!(t.reason,BlockReason::WaitPid(p) if p==pid || p==u32::MAX)
+        {
+            set_return(t, code);
+            t.state = ThreadState::Ready;
+            t.reason = BlockReason::None;
+            s.ready_queue.push_back(t.tid);
+            reaped = true;
+        }
+    }
+    if reaped {
+        reap_connection_locked(s, pid);
+        retire_process(s, pid);
+    }
+}
+fn stop_process_locked(s: &mut Scheduler, pid: Pid, code: u64) {
+    let Some(p) = s.processes.get_mut(pid as usize).and_then(Option::as_mut) else {
+        return;
+    };
+    p.state = ProcessState::Zombie;
+    p.exit_code = code;
+    stop_threads_locked(s, pid);
+    smp::reschedule_all();
+    crate::net::cleanup(pid);
+    stop_owned_child_locked(s, pid);
+    wake_waiters_locked(s, pid);
+}
+/// Process exit stops every sibling before allowing shared resource reclamation.
+pub fn exit_current(code: u64) {
+    let mut s = SCHEDULER.lock();
+    if let Some(pid) = s.current_pid() {
+        crate::serial_println!("[sched] process {} exited with code {}", pid, code);
+        stop_process_locked(&mut s, pid, code);
+    }
+}
+/// Stop a PID, including its remote threads. Destruction is deferred until quiescent.
+pub fn kill(pid: Pid) -> Option<u64> {
+    let mut s = SCHEDULER.lock();
+    if s.processes.get(pid as usize)?.as_ref()?.state == ProcessState::Zombie {
         return None;
     }
-    
-    pcb.state = ProcessState::Zombie;
-    pcb.exit_code = 9; // SIGKILL
-    crate::net::cleanup(pid);
-    stop_owned_child_locked(&mut sched, pid);
-    wake_waiters_locked(&mut sched, pid);
-    sched.ready_queue.retain(|&p| p != pid);
-    
+    let caller = s.current_tid();
+    stop_process_locked(&mut s, pid, 9);
     crate::serial_println!("[sched] process {} killed", pid);
-    
-    if current.map(|running| {
-        sched.processes.get(running as usize).and_then(Option::as_ref)
-            .map(|p| p.state == ProcessState::Zombie).unwrap_or(true)
-    }).unwrap_or(false) {
-        // Owner teardown can stop and automatically reap the caller too.
-        Some(PROCESS_BLOCK_SENTINEL) // Special marker: don't save, just schedule
-    } else {
-        Some(0)
-    }
+    Some(
+        if caller
+            .and_then(|tid| s.thread(tid))
+            .map(|t| t.state == ThreadState::Zombie)
+            .unwrap_or(caller.is_some())
+        {
+            PROCESS_BLOCK_SENTINEL
+        } else {
+            0
+        },
+    )
 }
-
-/// Blocks the current process waiting for a PID to exit.
-///
-/// If the target is already a Zombie, reaps it immediately and returns the
-/// exit code. Otherwise marks the current process Blocked and returns
-/// `PROCESS_BLOCK_SENTINEL` (caller must invoke the scheduler).
+/// Wait for and reap a process, preserving the existing PID-level ABI.
 pub fn waitpid(pid: Pid) -> u64 {
-    let mut sched = SCHEDULER.lock();
-    let current = sched.current.expect("waitpid: no current process");
-    
-    // Validate target.
-    let target_state = match sched.processes.get(pid as usize).and_then(|p| p.as_ref()) {
-        Some(pcb) => pcb.state,
-        None => return u64::MAX - 1, // SYSCALL_ERROR: invalid PID
+    let mut s = SCHEDULER.lock();
+    let Some(tid) = s.current_tid() else {
+        return ERROR;
     };
-    
-    if target_state == ProcessState::Zombie {
-        // Reap immediately.
-        let code = sched.processes[pid as usize].as_ref().unwrap().exit_code;
-        reap_connection_locked(&mut sched, pid);
-        sched.processes[pid as usize] = None;
-        crate::serial_println!("[sched] reaped zombie {}", pid);
+    if s.current_pid() == Some(pid) {
+        return ERROR;
+    }
+    let Some(p) = s.processes.get(pid as usize).and_then(Option::as_ref) else {
+        return ERROR;
+    };
+    if p.state == ProcessState::Zombie {
+        let code = p.exit_code;
+        reap_connection_locked(&mut s, pid);
+        retire_process(&mut s, pid);
         return code;
     }
-    
-    // Block the current process.
-    if let Some(pcb) = sched
-        .processes
-        .get_mut(current as usize)
-        .and_then(|p| p.as_mut())
-    {
-        pcb.state = ProcessState::Blocked;
-        pcb.block_reason = BlockReason::WaitPid(pid);
-        crate::serial_println!("[sched] process {} waiting for {}", current, pid);
-    }
+    let t = s.thread_mut(tid).expect("current live thread");
+    t.state = ThreadState::Blocked;
+    t.reason = BlockReason::WaitPid(pid);
     PROCESS_BLOCK_SENTINEL
 }
-
-/// Blocks for a duration in PIT ticks. Zero returns immediately; overflow fails.
+/// Sleep this thread while siblings and other CPUs continue running.
 pub fn sleep_ticks(duration: u64) -> u64 {
-    if duration == 0 { return 0; }
-    if duration > i64::MAX as u64 { return u64::MAX - 1; }
+    if duration == 0 {
+        return 0;
+    }
+    if duration > i64::MAX as u64 {
+        return ERROR;
+    }
     let Some(deadline) = crate::interrupts::ticks().checked_add(duration) else {
-        return u64::MAX - 1;
+        return ERROR;
     };
-    let mut sched = SCHEDULER.lock();
-    let Some(current) = sched.current else { return u64::MAX - 1; };
-    let Some(pcb) = sched.processes[current as usize].as_mut() else { return u64::MAX - 1; };
-    pcb.state = ProcessState::Blocked;
-    pcb.block_reason = BlockReason::Timer(deadline);
+    let mut s = SCHEDULER.lock();
+    let Some(tid) = s.current_tid() else {
+        return ERROR;
+    };
+    let Some(t) = s.thread_mut(tid) else {
+        return ERROR;
+    };
+    t.state = ThreadState::Blocked;
+    t.reason = BlockReason::Timer(deadline);
     PROCESS_BLOCK_SENTINEL
 }
-
-/// Wakes expired timers, including IRQs that interrupt the scheduler's idle loop.
-/// Called with interrupts disabled on this single-CPU kernel. No allocation or
-/// I/O occurs here; spawn reserves queue storage for every possible live entry.
-pub fn wake_timers() {
-    let now = crate::interrupts::ticks();
-    let mut sched = SCHEDULER.lock();
-    let Scheduler { processes, ready_queue, .. } = &mut *sched;
-    for pcb in processes.iter_mut().flatten() {
-        if pcb.state == ProcessState::Blocked {
-            if let BlockReason::Timer(deadline) = pcb.block_reason {
-                // Signed wrapping subtraction also handles tick-counter wrap.
-                if now.wrapping_sub(deadline) as i64 >= 0 {
-                    pcb.state = ProcessState::Ready;
-                    pcb.block_reason = BlockReason::None;
-                    ready_queue.push_back(pcb.pid);
-                }
-            }
-        }
+/// Park the calling thread until its PID-owned mailbox is nonempty. Zero
+/// timeout waits indefinitely; readiness is a hint, so consumers recheck.
+pub fn wait_message(timeout: u64) -> u64 {
+    if timeout > i64::MAX as u64 {
+        return ERROR;
     }
-}
-
-/// Blocks the current process waiting for keyboard input.
-///
-/// Called from sys_read when no scancode is available.
-/// Returns `PROCESS_BLOCK_SENTINEL`.
-pub fn block_on_keyboard() -> u64 {
-    let mut sched = SCHEDULER.lock();
-    let current = sched.current.expect("block_on_keyboard: no current");
-    if let Some(pcb) = sched
-        .processes
-        .get_mut(current as usize)
-        .and_then(|p| p.as_mut())
+    let deadline = if timeout == 0 {
+        None
+    } else {
+        let Some(end) = crate::interrupts::ticks().checked_add(timeout) else {
+            return ERROR;
+        };
+        Some(end)
+    };
+    let mut s = SCHEDULER.lock();
+    let Some(pid) = s.current_pid() else {
+        return ERROR;
+    };
+    if s.processes
+        .get(pid as usize)
+        .and_then(Option::as_ref)
+        .map(|p| p.inbox_len > 0)
+        .unwrap_or(false)
     {
-        pcb.state = ProcessState::Blocked;
-        pcb.block_reason = BlockReason::Keyboard;
+        return 1;
     }
+    let Some(tid) = s.current_tid() else {
+        return ERROR;
+    };
+    let t = s.thread_mut(tid).expect("mailbox caller");
+    t.state = ThreadState::Blocked;
+    t.reason = BlockReason::Mailbox(deadline);
     PROCESS_BLOCK_SENTINEL
 }
-
-/// Wakes processes blocked on keyboard input.
-///
-/// Called from the keyboard interrupt handler.
+/// Wake expired thread waits without allocation or device I/O.
+pub fn wake_timers() {
+    if crate::interrupts::take_pending_keyboard() {
+        wake_keyboard_waiters();
+    }
+    let now = crate::interrupts::ticks();
+    let mut s = SCHEDULER.lock();
+    let Scheduler {
+        threads,
+        ready_queue,
+        ..
+    } = &mut *s;
+    for t in threads
+        .iter_mut()
+        .flatten()
+        .filter(|t| t.state == ThreadState::Blocked)
+    {
+        let (deadline, result) = match t.reason {
+            BlockReason::Timer(d) => (d, 0),
+            BlockReason::Word(_, Some(d)) => (d, 2),
+            BlockReason::Mailbox(Some(d)) => (d, 0),
+            _ => continue,
+        };
+        if now.wrapping_sub(deadline) as i64 >= 0 {
+            set_return(t, result);
+            t.state = ThreadState::Ready;
+            t.reason = BlockReason::None;
+            ready_queue.push_back(t.tid);
+        }
+    }
+}
+/// Park only the calling thread for focused keyboard input.
+pub fn block_on_keyboard() -> u64 {
+    let mut s = SCHEDULER.lock();
+    let Some(tid) = s.current_tid() else {
+        return ERROR;
+    };
+    let t = s.thread_mut(tid).expect("current thread");
+    t.state = ThreadState::Blocked;
+    t.reason = BlockReason::Keyboard;
+    PROCESS_BLOCK_SENTINEL
+}
+/// IRQ-safe wakeup: all queue capacity was reserved at scheduler initialization.
 pub fn wake_keyboard_waiters() {
-    let mut sched = SCHEDULER.lock();
-    let mut to_wake = Vec::new();
-    for (idx, pcb_opt) in sched.processes.iter_mut().enumerate() {
-        if let Some(pcb) = pcb_opt {
-            if pcb.state == ProcessState::Blocked && pcb.block_reason == BlockReason::Keyboard {
-                pcb.state = ProcessState::Ready;
-                pcb.block_reason = BlockReason::None;
-                to_wake.push(idx as Pid);
-            }
+    let mut s = SCHEDULER.lock();
+    let Scheduler {
+        threads,
+        ready_queue,
+        ..
+    } = &mut *s;
+    for t in threads.iter_mut().flatten() {
+        if t.state == ThreadState::Blocked && t.reason == BlockReason::Keyboard {
+            set_return(t, 0);
+            t.state = ThreadState::Ready;
+            t.reason = BlockReason::None;
+            ready_queue.push_back(t.tid);
         }
     }
-    for pid in to_wake {
-        sched.ready_queue.push_back(pid);
-    }
 }
-
-/// Moves Blocked processes waiting on `exited_pid` back to Ready.
-fn wake_waiters_locked(sched: &mut Scheduler, exited_pid: Pid) {
-    let Some(exit_code) = sched.processes.get(exited_pid as usize).and_then(Option::as_ref).map(|pcb| pcb.exit_code) else { return; };
-    let mut reaped = false;
-    for (idx, pcb_opt) in sched.processes.iter_mut().enumerate() {
-        if let Some(pcb) = pcb_opt {
-            if pcb.state == ProcessState::Blocked {
-                let wake = match pcb.block_reason {
-                    BlockReason::WaitPid(target) => target == exited_pid || target == u32::MAX,
-                    _ => false,
-                };
-                if wake {
-                    // SAFETY: A blocked waitpid context was saved on this live
-                    // process's aligned kernel stack before another process could
-                    // exit. IRQs are disabled, the scheduler lock is held and no
-                    // other CPU or reference accesses the saved register frame.
-                    unsafe { (*(pcb.kernel_rsp as *mut SavedContext)).rax = exit_code; }
-                    reaped = true;
-                    pcb.state = ProcessState::Ready;
-                    pcb.block_reason = BlockReason::None;
-                    sched.ready_queue.push_back(idx as Pid);
-                    crate::serial_println!(
-                        "[sched] woke process {} (waited for {})",
-                        idx,
-                        exited_pid
-                    );
-                }
-            }
-        }
-    }
-    if reaped { reap_connection_locked(sched, exited_pid); sched.processes[exited_pid as usize] = None; }
-}
-
-/// Returns the PID of the current process, if any.
-pub fn current_pid() -> Option<Pid> {
-    SCHEDULER.lock().current
-}
-
 /// Loads a program binary from the FAT32 filesystem.
 ///
 /// Returns the binary bytes, or an error string.
@@ -896,18 +778,29 @@ pub fn load_program_from_disk(path: &str) -> Result<Vec<u8>, &'static str> {
     // only the actual file, rather than demanding a contiguous maximum-size
     // user image on every spawn. Hold the FS lock across metadata and read.
     crate::fs::with_fs(|fs| {
-        let size = fs.file_size(path).map_err(|_| "failed to query program size")?;
-        if size == 0 { return Err("program file is empty"); }
+        let size = fs
+            .file_size(path)
+            .map_err(|_| "failed to query program size")?;
+        if size == 0 {
+            return Err("program file is empty");
+        }
         if size as u64 > userspace::USER_STACK_BOTTOM - userspace::USER_CODE_START {
             return Err("user binary overlaps stack");
         }
         let mut binary = Vec::new();
-        binary.try_reserve_exact(size).map_err(|_| "not enough memory to stage program")?;
+        binary
+            .try_reserve_exact(size)
+            .map_err(|_| "not enough memory to stage program")?;
         binary.resize(size, 0);
-        let read = fs.read_file(path, &mut binary).map_err(|_| "failed to read program file")?;
-        if read != size { return Err("short program read"); }
+        let read = fs
+            .read_file(path, &mut binary)
+            .map_err(|_| "failed to read program file")?;
+        if read != size {
+            return Err("short program read");
+        }
         Ok(binary)
-    }).ok_or("filesystem not initialized")?
+    })
+    .ok_or("filesystem not initialized")?
 }
 
 /// PID receiving keyboard input; only the compositor can change it.
@@ -920,30 +813,66 @@ pub fn has_input_focus() -> bool {
 
 /// Sends an opaque scalar message between a client and the display owner.
 pub fn send_message(target: u32, payload: u32) -> u64 {
-    // Single CPU: syscall entry masks interrupts; scheduler lock serializes the
-    // multi-field queue update. No allocation or borrowed user memory is involved.
+    // The entry gate and scheduler lock serialize the multi-field queue update.
+    // No allocation or borrowed user memory is involved.
     let mut sched = SCHEDULER.lock();
-    let Some(sender) = sched.current else { return u64::MAX - 1; };
-    if sender != 0 && target != 0 { return u64::MAX - 1; }
-    let Some(proc) = sched.processes.get_mut(target as usize).and_then(Option::as_mut) else {
+    let Some(sender) = sched.current_pid() else {
         return u64::MAX - 1;
     };
-    if proc.state == ProcessState::Zombie { return u64::MAX - 1; }
-    if proc.inbox_len == proc.inbox.len() { return 1; }
+    if sender != 0 && target != 0 {
+        return u64::MAX - 1;
+    }
+    let Some(proc) = sched
+        .processes
+        .get_mut(target as usize)
+        .and_then(Option::as_mut)
+    else {
+        return u64::MAX - 1;
+    };
+    if proc.state == ProcessState::Zombie {
+        return u64::MAX - 1;
+    }
+    if proc.inbox_len == proc.inbox.len() {
+        return 1;
+    }
     let tail = (proc.inbox_head + proc.inbox_len) % proc.inbox.len();
     proc.inbox[tail] = ((u64::from(sender) + 1) << 32) | u64::from(payload);
     proc.inbox_len += 1;
+    let Scheduler {
+        threads,
+        ready_queue,
+        ..
+    } = &mut *sched;
+    for thread in threads.iter_mut().flatten() {
+        if thread.pid == target
+            && thread.state == ThreadState::Blocked
+            && matches!(thread.reason, BlockReason::Mailbox(_))
+        {
+            set_return(thread, 1);
+            thread.state = ThreadState::Ready;
+            thread.reason = BlockReason::None;
+            ready_queue.push_back(thread.tid);
+        }
+    }
     0
 }
 
 /// Receives an authenticated sender/payload pair, or zero for an empty queue.
 pub fn receive_message() -> u64 {
     let mut sched = SCHEDULER.lock();
-    let Some(pid) = sched.current else { return u64::MAX - 1; };
-    let Some(proc) = sched.processes.get_mut(pid as usize).and_then(Option::as_mut) else {
+    let Some(pid) = sched.current_pid() else {
         return u64::MAX - 1;
     };
-    if proc.inbox_len == 0 { return 0; }
+    let Some(proc) = sched
+        .processes
+        .get_mut(pid as usize)
+        .and_then(Option::as_mut)
+    else {
+        return u64::MAX - 1;
+    };
+    if proc.inbox_len == 0 {
+        return 0;
+    }
     let message = proc.inbox[proc.inbox_head];
     proc.inbox[proc.inbox_head] = 0;
     proc.inbox_head = (proc.inbox_head + 1) % proc.inbox.len();
@@ -954,9 +883,15 @@ pub fn receive_message() -> u64 {
 /// Publishes a completed rendering update from the current application.
 pub fn present_surface() -> u64 {
     let mut sched = SCHEDULER.lock();
-    let Some(pid) = sched.current else { return u64::MAX - 1; };
-    let Some(proc) = sched.processes[pid as usize].as_mut() else { return u64::MAX - 1; };
-    if proc.surface.is_empty() { return u64::MAX - 1; }
+    let Some(pid) = sched.current_pid() else {
+        return u64::MAX - 1;
+    };
+    let Some(proc) = sched.processes[pid as usize].as_mut() else {
+        return u64::MAX - 1;
+    };
+    if proc.surface.is_empty() {
+        return u64::MAX - 1;
+    }
     proc.surface_revision = (proc.surface_revision + 1) & ((1u64 << 62) - 1);
     0
 }
@@ -965,8 +900,12 @@ pub fn present_surface() -> u64 {
 /// The dispatcher restricts this metadata query to the display owner.
 pub fn surface_status(pid: Pid) -> u64 {
     let sched = SCHEDULER.lock();
-    let Some(proc) = sched.processes.get(pid as usize).and_then(Option::as_ref) else { return u64::MAX - 1; };
-    if proc.surface.is_empty() { return u64::MAX - 1; }
+    let Some(proc) = sched.processes.get(pid as usize).and_then(Option::as_ref) else {
+        return u64::MAX - 1;
+    };
+    if proc.surface.is_empty() {
+        return u64::MAX - 1;
+    }
     (proc.surface_revision << 1) | u64::from(proc.state == ProcessState::Zombie)
 }
 
@@ -974,11 +913,21 @@ pub fn surface_status(pid: Pid) -> u64 {
 /// The caller validates the destination and restricts access to PID 0.
 pub fn snapshot(pid: Pid, dest: &mut [u8]) -> u64 {
     let sched = SCHEDULER.lock();
-    let Some(proc) = sched.processes.get(pid as usize).and_then(Option::as_ref) else { return u64::MAX - 1; };
-    if proc.surface.len() * 4096 < dest.len() { return u64::MAX - 1; }
+    let Some(proc) = sched.processes.get(pid as usize).and_then(Option::as_ref) else {
+        return u64::MAX - 1;
+    };
+    if proc.surface.len() * 4096 < dest.len() {
+        return u64::MAX - 1;
+    }
     for (chunk, frame) in dest.chunks_mut(4096).zip(&proc.surface) {
         // SAFETY: Surface frames belong to this live PCB; destination is validated user memory.
-        unsafe { core::ptr::copy_nonoverlapping((sched.phys_offset + frame.start_address().as_u64()) as *const u8, chunk.as_mut_ptr(), chunk.len()); }
+        unsafe {
+            userspace::usercopy::copy_raw(
+                chunk.as_mut_ptr(),
+                (sched.phys_offset + frame.start_address().as_u64()) as *const u8,
+                chunk.len(),
+            );
+        }
     }
     u64::from(proc.state == ProcessState::Zombie)
 }
@@ -988,9 +937,15 @@ pub fn surface_write(bytes: &[u8]) {
     use font8x8::{UnicodeFonts, BASIC_FONTS};
     let mut sched = SCHEDULER.lock();
     let offset = sched.phys_offset;
-    let Some(pid) = sched.current else { return; };
-    let Some(proc) = sched.processes[pid as usize].as_mut() else { return; };
-    if proc.surface.is_empty() || !proc.console_enabled { return; }
+    let Some(pid) = sched.current_pid() else {
+        return;
+    };
+    let Some(proc) = sched.processes[pid as usize].as_mut() else {
+        return;
+    };
+    if proc.surface.is_empty() || !proc.console_enabled {
+        return;
+    }
     if !bytes.is_empty() {
         proc.surface_revision = (proc.surface_revision + 1) & ((1u64 << 62) - 1);
     }
@@ -1000,16 +955,31 @@ pub fn surface_write(bytes: &[u8]) {
             proc.text_cursor.0 = 8;
             proc.text_cursor.1 += 10;
         }
-        if proc.text_cursor.1 + 8 > info.height { proc.text_cursor.1 = 8; }
-        if byte == b'\n' { continue; }
+        if proc.text_cursor.1 + 8 > info.height {
+            proc.text_cursor.1 = 8;
+        }
+        if byte == b'\n' {
+            continue;
+        }
         if let Some(glyph) = BASIC_FONTS.get(char::from(byte)) {
             for (y, bits) in glyph.iter().enumerate() {
                 for x in 0..8 {
-                    let index = (proc.text_cursor.1 + y) * info.pitch + (proc.text_cursor.0 + x) * 4;
+                    let index =
+                        (proc.text_cursor.1 + y) * info.pitch + (proc.text_cursor.0 + x) * 4;
                     let frame = proc.surface[index / 4096];
-                    let ptr = (offset + frame.start_address().as_u64() + (index % 4096) as u64) as *mut u32;
-                    // SAFETY: Coordinates are within the private surface frames.
-                    unsafe { ptr.write(if bits & (1 << x) != 0 { 0xe1eaf5 } else { 0x101827 }); }
+                    let ptr = (offset + frame.start_address().as_u64() + (index % 4096) as u64)
+                        as *mut u32;
+                    let pixel: u32 = if bits & (1 << x) != 0 {
+                        0xe1eaf5
+                    } else {
+                        0x101827
+                    };
+                    // SAFETY: The gate keeps these owned, aligned surface frames
+                    // mapped and in bounds. Assembly forms no Rust reference or
+                    // memory-model assumption about concurrent client drawing.
+                    unsafe {
+                        core::arch::asm!("mov dword ptr [{pointer}],{pixel:e}",pointer=in(reg)ptr,pixel=in(reg)pixel,options(nostack));
+                    }
                 }
             }
         }
@@ -1020,8 +990,10 @@ pub fn surface_write(bytes: &[u8]) {
 /// Transfers an application surface from console text to client-side drawing.
 pub fn graphics_mode() {
     let mut sched = SCHEDULER.lock();
-    if let Some(pid) = sched.current {
-        if let Some(proc) = sched.processes[pid as usize].as_mut() { proc.console_enabled = false; }
+    if let Some(pid) = sched.current_pid() {
+        if let Some(proc) = sched.processes[pid as usize].as_mut() {
+            proc.console_enabled = false;
+        }
     }
 }
 
@@ -1032,18 +1004,18 @@ const STDIO_QUEUE_CAPACITY: usize = 4096;
 pub fn can_connect_stdio() -> bool {
     let sched = SCHEDULER.lock();
     sched
-        .current
+        .current_pid()
         .and_then(|pid| sched.processes[pid as usize].as_ref())
         .map(|p| p.io_peer.is_none())
         .unwrap_or(false)
 }
 
 /// Connect a newly spawned child before returning from its spawning syscall.
-/// Syscall entry masks interrupts on this single CPU; no child executes between
-/// creation and this linkage. This function is not exposed as an attach syscall.
+/// The kernel entry gate spans creation and this linkage, so no child executes
+/// before its connection is published. This function is not exposed as an attach syscall.
 pub fn connect_stdio(child: Pid) -> bool {
     let mut sched = SCHEDULER.lock();
-    let Some(parent) = sched.current else {
+    let Some(parent) = sched.current_pid() else {
         return false;
     };
     if parent == child {
@@ -1062,12 +1034,21 @@ pub fn connect_stdio(child: Pid) -> bool {
     // never allocates; the explicit bound stays below reserved capacity.
     let mut parent_queue = VecDeque::new();
     let mut child_queue = VecDeque::new();
-    if parent_queue.try_reserve_exact(STDIO_QUEUE_CAPACITY).is_err()
-        || child_queue.try_reserve_exact(STDIO_QUEUE_CAPACITY).is_err() {
+    if parent_queue
+        .try_reserve_exact(STDIO_QUEUE_CAPACITY)
+        .is_err()
+        || child_queue.try_reserve_exact(STDIO_QUEUE_CAPACITY).is_err()
+    {
         return false;
     }
-    sched.processes[parent as usize].as_mut().expect("validated host").io_inbox = parent_queue;
-    sched.processes[child as usize].as_mut().expect("validated child").io_inbox = child_queue;
+    sched.processes[parent as usize]
+        .as_mut()
+        .expect("validated host")
+        .io_inbox = parent_queue;
+    sched.processes[child as usize]
+        .as_mut()
+        .expect("validated child")
+        .io_inbox = child_queue;
     sched.processes[parent as usize]
         .as_mut()
         .expect("validated live endpoint")
@@ -1085,7 +1066,7 @@ pub fn connect_stdio(child: Pid) -> bool {
 pub fn stdio(operation: u64, payload: u32) -> u64 {
     const ERROR: u64 = u64::MAX - 1;
     let mut sched = SCHEDULER.lock();
-    let Some(pid) = sched.current else {
+    let Some(pid) = sched.current_pid() else {
         return ERROR;
     };
     let Some(proc) = sched.processes.get(pid as usize).and_then(Option::as_ref) else {
@@ -1130,8 +1111,8 @@ pub fn stdio(operation: u64, payload: u32) -> u64 {
     }
 }
 
-/// An owned endpoint cannot outlive its host. General frame/stack reclamation
-/// is still incomplete; this handles PCB/queue ownership only.
+/// An owned endpoint cannot outlive its host. Stack and address-space owners
+/// remain in the deferred reaper until every CPU has stopped executing them.
 fn stop_owned_child_locked(sched: &mut Scheduler, parent: Pid) {
     let child = sched.processes[parent as usize]
         .as_ref()
@@ -1149,7 +1130,7 @@ fn stop_owned_child_locked(sched: &mut Scheduler, parent: Pid) {
             }
         }
         crate::net::cleanup(child);
-        sched.ready_queue.retain(|pid| *pid != child);
+        stop_threads_locked(sched, child);
         wake_waiters_locked(sched, child);
     }
 }
@@ -1171,8 +1152,104 @@ fn reap_connection_locked(sched: &mut Scheduler, pid: Pid) {
         } else {
             // exit/kill has already stopped this owned child.
             if let Some(slot) = sched.processes.get_mut(peer as usize) {
-                *slot = None;
+                if let Some(process) = slot.take() {
+                    sched.retired.push(process);
+                }
             }
         }
     }
 }
+
+/// Copy a surface prefix with stable owned frames and a fully validated user
+/// destination. Raw assembly never borrows either application's mutable RAM.
+pub fn snapshot_user(pid: Pid, destination: u64, len: usize) -> u64 {
+    if !userspace::usercopy::validate(destination, len as u64, true) {
+        return ERROR;
+    }
+    let s = SCHEDULER.lock();
+    let Some(p) = s.processes.get(pid as usize).and_then(Option::as_ref) else {
+        return ERROR;
+    };
+    if p.surface.len() * 4096 < len {
+        return ERROR;
+    }
+    let mut written = 0;
+    for frame in &p.surface {
+        let count = (len - written).min(4096);
+        if count == 0 {
+            break;
+        }
+        // SAFETY: The entry gate stabilizes all validated destination pages;
+        // this locked PCB owns the complete source frames. Physical surfaces
+        // are private and disjoint from the compositor's destination memory.
+        // Assembly tolerates client writes without borrowing application RAM.
+        unsafe {
+            userspace::usercopy::copy_raw(
+                (destination + written as u64) as *mut u8,
+                (s.phys_offset + frame.start_address().as_u64()) as *const u8,
+                count,
+            );
+        }
+        written += count;
+    }
+    u64::from(p.state == ProcessState::Zombie)
+}
+/// Idle CPU set requiring a wake after ready work is published under the gate.
+pub fn idle_targets() -> u32 {
+    let s = SCHEDULER.lock();
+    if s.ready_queue.is_empty() {
+        return 0;
+    }
+    let idle = s.current.iter().enumerate().fold(0u32, |mask, (i, t)| {
+        mask | if t.is_none() { 1u32 << i } else { 0 }
+    });
+    s.ready_queue
+        .iter()
+        .filter_map(|tid| s.thread(*tid))
+        .filter(|t| t.state == ThreadState::Ready)
+        .fold(0u32, |mask, t| mask | (t.affinity as u32 & idle))
+}
+
+/// Whether a user entry still belongs to a live, running execution context.
+pub fn current_is_live() -> bool {
+    let s = SCHEDULER.lock();
+    s.current_tid()
+        .and_then(|tid| s.thread(tid))
+        .map(|t| {
+            t.state == ThreadState::Running
+                && s.processes
+                    .get(t.pid as usize)
+                    .and_then(Option::as_ref)
+                    .map(|p| p.state == ProcessState::Live)
+                    .unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
+/// Supervisor compatibility adapter for kernel harnesses. Actual interrupt
+/// entry uses switch_next and moves to a CPU-owned idle stack before waiting.
+pub extern "C" fn schedule(saved: u64) -> u64 {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let next = schedule_inner(saved);
+        if next != 0 {
+            return next;
+        }
+        loop {
+            x86_64::instructions::interrupts::enable_and_hlt();
+            x86_64::instructions::interrupts::disable();
+            wake_timers();
+            if let Some(next) = pick_next_locked(&mut SCHEDULER.lock()) {
+                return next;
+            }
+        }
+    })
+}
+
+mod reclaim;
+/// Native thread lifecycle and synchronization mechanisms.
+pub mod threads;
+pub use reclaim::reap_retired;
+pub use threads::{
+    create_thread, detach_thread, exit_thread, frame_count, join_thread, thread_pages, wait_word,
+    wake_word, yield_current,
+};

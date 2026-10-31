@@ -21,7 +21,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / 'tools'))
 from qemu_network import arguments as network_arguments
 from qemu_platform import arguments as platform_arguments
-from qemu_test import disk_image
+from qemu_test import disk_image, DeferredWorkers
 
 
 def checksum(data):
@@ -88,6 +88,7 @@ def main():
         shutil.copyfile(disk_image(ROOT), disk)
         servers = []
         errors = []
+        fixtures = None
         if args.probe:
             udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -122,8 +123,7 @@ def main():
                     errors.append(error)
 
             workers = [threading.Thread(target=udp_peer, daemon=True), threading.Thread(target=http_peer, daemon=True)]
-            for worker in workers:
-                worker.start()
+            fixtures = DeferredWorkers(workers, '[nettest] transport ready')
             config = tmp / 'net.cfg'
             config.write_bytes(struct.pack('<HH', udp.getsockname()[1], tcp.getsockname()[1]))
             subprocess.run(['mcopy', '-i', f'{disk}@@1048576', str(config), '::/TMP/NET.CFG'], check=True)
@@ -172,6 +172,8 @@ def main():
             def wait_for(expected, after=0, timeout=30):
                 deadline = time.monotonic() + timeout
                 while expected not in text(after):
+                    if fixtures is not None:
+                        fixtures.observe(text())
                     assert qemu.poll() is None, 'QEMU exited unexpectedly'
                     assert time.monotonic() < deadline, f'missing {expected}\n{text()[-3000:]}'
                     if '[portal] output: unknown command\n' in text(after):

@@ -27,7 +27,8 @@ do not change the OS toolchain merely to work around a missing host utility.
 | `./tools/build-user.sh` | Build every application; generate flat binaries and section metadata |
 | `./tools/build-user.sh portal` | Build one application and regenerate its artifacts |
 | `./tools/build-grub-disk.sh` | Build applications/release kernel and overwrite `target/grub-disk.img` |
-| `cargo run` | Build the desktop disk and start graphical QEMU through the runner |
+| `cargo run` | Build the desktop disk and start graphical QEMU with 8 CPUs through the runner |
+| `RUSTOS_CPUS=32 cargo run` | Select 1–32 CPUs; invalid counts are rejected |
 | `RUSTOS_DISPLAY=none cargo run` | Same boot path without GUI; runs until terminated |
 | `python3 e2e/desktop.py` | Runtime desktop regression checks after a fresh disk build |
 | `python3 -B tools/check_docs.py` | Check required guides and local inline Markdown links/anchors |
@@ -124,7 +125,9 @@ arguments or return value. Use regular comments in the included application root
 crate-level attributes and inner documentation belong in the shared root.
 
 This is a Cargo convention for the current custom target, not a port of Rust's
-standard library. `core` and `userlib` are available; APIs such as `std::fs` and threads are not. Networking is provided by
+standard library. `core` and `userlib` are available; APIs such as `std::fs` and `std::thread` are not. Networking is provided by
 `userlib::net`, `userlib::http` and the optional `userlib::tls` feature. Dependencies must support `no_std` and the pinned
-target. The OS still loads fixed-address flat binaries rather than Linux ELF files.
+target. Native threads are available through `userlib` with `features = ["threads"]`;
+see [the threading guide](threading.md). The OS still loads fixed-address flat
+binaries rather than Linux ELF files.
 The shared root does not change syscall numbers, linker layout, or privileges.

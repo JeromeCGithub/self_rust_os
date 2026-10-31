@@ -310,7 +310,7 @@ pub fn focus(pid: u32) -> Result<(), ()> {
 /// continue to reach the serial log without drawing over graphical content.
 pub fn graphics_mode() { unsafe { syscall(16, 0, 0, 0); } }
 
-/// Deschedules this process for a duration in PIT ticks (~55 ms each).
+/// Deschedules the calling thread for a duration in PIT ticks (~55 ms each).
 /// Zero returns immediately. Durations above i64::MAX or overflowing the
 /// absolute tick deadline return Err. No CPU time is consumed while waiting.
 pub fn sleep_ticks(duration: u64) -> Result<(), ()> {
@@ -359,4 +359,17 @@ pub fn receive_message() -> Result<Option<(u32, u32)>, MessageError> {
     if value == SYSCALL_ERROR { return Err(MessageError::Unavailable); }
     if value == 0 { return Ok(None); }
     Ok(Some((((value >> 32) - 1) as u32, value as u32)))
+}
+
+/// Park only this thread until its process mailbox has data (true) or the PIT
+/// deadline expires (false). Zero waits indefinitely. This does not consume a
+/// message: other same-process readers can race, so recheck receive_message.
+pub fn wait_message(timeout_ticks: u64) -> Result<bool, MessageError> {
+    // SAFETY: Only a scalar timeout crosses the boundary; no user references
+    // are retained while the kernel blocks this native execution context.
+    match unsafe { syscall(rustos_thread_abi::SYS_MESSAGE_WAIT,timeout_ticks,0,0) } {
+        0=>Ok(false),
+        1=>Ok(true),
+        _=>Err(MessageError::Unavailable),
+    }
 }

@@ -65,7 +65,7 @@ Enabled profile:
 
 TLS-enabled apps force scalar AES, POLYVAL, ChaCha20, Poly1305 and Curve25519
 backends in their Cargo rustflags; SHA-2 uses its `force-soft` feature. The
-single-CPU scheduler does not save SIMD/FPU registers. Audit final linked binaries
+native thread scheduler does not save SIMD/FPU registers. Audit final linked binaries
 when updating crypto dependencies; compiler target flags alone do not disable
 upstream `target_feature` dispatch paths.
 
@@ -97,10 +97,11 @@ clock source, rollback protection or hardware entropy health test here.
 TLS-enabled apps reserve a private 16 MiB BSS heap using a synchronized free-list
 allocator. Completed/failed requests return TLS allocations to it. Infallible
 allocation exhaustion prints a fixed diagnostic and exits that process with code
-12; process exit releases its sockets. Existing kernel process frame/stack leaks
-remain separate and are not repaired by this allocator.
+12; process exit releases its sockets. Kernel process frames/stacks are reclaimed
+separately after [execution and TLB quiescence](threading.md).
 
-All user stacks are 4 MiB (`0x2c00000..0x3000000`) with unmapped guards. Kernel
+Initial user stacks are 4 MiB (`0x2c00000..0x3000000`) with unmapped guards; native
+workers use separately allocated guarded stacks of 16–256 KiB. Kernel
 stacks remain 16 KiB. Two encrypted buffers are bounded at 18,437 bytes each;
 queued plaintext is capped at 64 KiB. Application writes are limited to 16 KiB,
 and an additional DER CA to 16 KiB. HTTP streams bodies and retains its independent

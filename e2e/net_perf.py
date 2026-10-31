@@ -154,7 +154,7 @@ def main():
                 def click(x):
                     call('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':x*32767//1919}},{'type':'abs','data':{'axis':'y','value':65*32767//1079}}]});time.sleep(.2)
                     for down in (True,False):call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.2)
-                call('qmp_capabilities');wait('[desktop] ready: 7 applications',30);click(650);wait('[netperf] PASS')
+                call('qmp_capabilities');wait('[desktop] ready: 8 applications',30);click(650);wait('[netperf] PASS')
                 flat=text();rounds=[{'bytes':int(n),'ticks':int(t),'sum':int(c)} for n,t,c in re.findall(r'\[netperf\] round=\d+ bytes=(\d+) ticks=(\d+) sum=(\d+)',flat)]
                 assert len(rounds)==2,flat[-3000:]
                 if args.site:

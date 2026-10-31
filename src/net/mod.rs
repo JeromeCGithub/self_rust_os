@@ -88,11 +88,11 @@ fn dispatch(number: u64, first: u64, second: u64, third: u64) -> Result<u64, Err
         }
         // SAFETY: Fixed padding-free fully initialized record; every output page
         // was checked writable/user. No scheduling/unmapping or user reference is
-        // possible before this nonoverlapping byte copy on the single CPU.
+        // possible under the entry gate; assembly tolerates sibling user writes.
         unsafe {
-            core::ptr::copy_nonoverlapping(
-                core::ptr::addr_of!(info).cast::<u8>(),
+            crate::userspace::usercopy::copy_raw(
                 first as *mut u8,
+                core::ptr::addr_of!(info).cast::<u8>(),
                 core::mem::size_of::<Info>(),
             );
         }
@@ -110,9 +110,9 @@ fn dispatch(number: u64, first: u64, second: u64, third: u64) -> Result<u64, Err
             // only byte/integer fields, no padding, references or invalid bit
             // patterns. Copy ends before protocol operations; no user borrow.
             unsafe {
-                core::ptr::copy_nonoverlapping(
-                    second as *const u8,
+                crate::userspace::usercopy::copy_raw(
                     core::ptr::addr_of_mut!(packet).cast::<u8>(),
+                    second as *const u8,
                     core::mem::size_of::<Packet>(),
                 );
             }
@@ -156,9 +156,9 @@ fn dispatch(number: u64, first: u64, second: u64, third: u64) -> Result<u64, Err
             // syscall cannot be preempted and no operation unmaps process memory.
             // Received contains only initialized padding-free metadata/payload.
             unsafe {
-                core::ptr::copy_nonoverlapping(
-                    core::ptr::addr_of!(received).cast::<u8>(),
+                crate::userspace::usercopy::copy_raw(
                     second as *mut u8,
+                    core::ptr::addr_of!(received).cast::<u8>(),
                     core::mem::size_of::<Packet>(),
                 );
             }

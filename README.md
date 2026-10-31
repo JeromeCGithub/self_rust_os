@@ -15,6 +15,8 @@ It is not a production OS or a Linux/POSIX-compatible system.
 ## Current features
 
 - GDT/TSS, interrupts, paging, heap, serial diagnostics, and preemptive user processes.
+- [Native threads and SMP](docs/threading.md): 1–32 QEMU CPUs, guarded worker
+  stacks, join/detach and process-private synchronization through `userlib`.
 - ATA PIO storage, MBR partitions, FAT32 files/directories and file syscalls.
 - GRUB/Multiboot2 desktop boot with a 1920×1080×32 framebuffer.
 - Userspace compositor with an image wallpaper, discovered application icons,
@@ -31,6 +33,7 @@ and Pillow for screenshot tests. Kernel tests also require `cargo-bootimage`:
 ```bash
 cargo install bootimage
 cargo run
+RUSTOS_CPUS=32 cargo run
 ```
 
 See [development setup](docs/development.md) for details. On Debian/Ubuntu the system
@@ -86,7 +89,7 @@ or run concurrent writers against one fixture. Screenshots are in
 
 To rebuild one app, use `./tools/build-user.sh portal` (substitute the crate name).
 The builder regenerates both flat `.bin` files and `_meta.rs` layout metadata.
-Programs use [userlib](user_programs/userlib/src/lib.rs) and implement `user_main`;
+Programs use [userlib](user_programs/userlib/src/lib.rs) and implement `fn main()`;
 the SDK supplies `_start` and the panic handler. Rebuild the disk after an app change.
 
 ## Interfaces and limitations
@@ -96,9 +99,10 @@ keyboard, file-by-path, display/surface and focus operations. It does not implem
 the old ramfs open/close API, Linux syscall numbers, or a POSIX descriptor model.
 The root filesystem is now FAT32, and the kernel loads the WM from disk at runtime.
 
-The desktop defaults to 1920×1080. Process frames/stacks are not fully reclaimed
-on exit; repeated launches can exhaust memory. User-pointer validation and code
-permissions also need further hardening. See [architecture](docs/architecture.md)
+The desktop defaults to 1920×1080 and eight CPUs. Process and worker resources are
+reclaimed after execution and TLB quiescence; live/unreaped objects have bounded
+quotas. User copies validate complete mappings; disk binaries still lack complete
+W^X enforcement. See [architecture](docs/architecture.md)
 for boundaries and exceptions and [known test gaps](docs/testing.md#known-baseline-gaps)
 for reproducible baseline issues. Do not confuse compile success with isolation,
 cleanup, Ring 3 execution, or manual host GUI verification.

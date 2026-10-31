@@ -26,7 +26,13 @@ pub(crate) fn map_user_binary_via_phys(
     frame_allocator: &mut impl FrameAllocator<Size4KiB>,
     phys_offset: VirtAddr,
 ) -> Result<u64, &'static str> {
-    map_user_binary_inner(binary, readonly_size, mapper, frame_allocator, Some(phys_offset))
+    map_user_binary_inner(
+        binary,
+        readonly_size,
+        mapper,
+        frame_allocator,
+        Some(phys_offset),
+    )
 }
 
 fn map_user_binary_inner(
@@ -248,10 +254,19 @@ pub(crate) fn map_user_framebuffer(
         PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE;
 
     // The framebuffer must not be cached for correct display.
-    let flags = if display_owner { flags | PageTableFlags::NO_CACHE } else { flags };
+    let flags = if display_owner {
+        flags | PageTableFlags::NO_CACHE
+    } else {
+        flags
+    };
     let mut frames = alloc::vec::Vec::new();
 
     let num_pages = userspace::framebuffer_pages(&crate::drivers::video::framebuffer::fb_info())?;
+    if !display_owner {
+        frames
+            .try_reserve_exact(num_pages as usize)
+            .map_err(|_| "surface metadata allocation failed")?;
+    }
     let fb_virt_start = VirtAddr::new(userspace::USER_FRAMEBUFFER);
     let fb_phys_start = PhysAddr::new(crate::drivers::video::framebuffer::framebuffer_phys_addr());
 
@@ -260,9 +275,17 @@ pub(crate) fn map_user_framebuffer(
         let frame = if display_owner {
             PhysFrame::containing_address(fb_phys_start + i * 4096)
         } else {
-            let frame = frame_allocator.allocate_frame().ok_or("surface allocation failed")?;
+            let frame = frame_allocator
+                .allocate_frame()
+                .ok_or("surface allocation failed")?;
             // SAFETY: Newly allocated frame, mapped by the physical memory offset.
-            unsafe { core::ptr::write_bytes((phys_offset + frame.start_address().as_u64()).as_mut_ptr::<u8>(), 0, 4096); }
+            unsafe {
+                core::ptr::write_bytes(
+                    (phys_offset + frame.start_address().as_u64()).as_mut_ptr::<u8>(),
+                    0,
+                    4096,
+                );
+            }
             frames.push(frame);
             frame
         };

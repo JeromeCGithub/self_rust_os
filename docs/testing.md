@@ -114,8 +114,9 @@ Screenshots go to `docs/screenshots/desktop*.png`; inspect changes before commit
 The desktop test also asserts a 1920×1080 framebuffer, full-width panels, edge
 pointer coordinates and dragging to the far display edge. `display_mapping` checks
 large compositor mappings, padded pitch, final partial pages, independent snapshots,
-preserved parent code and three pairs of spawn/kill/reap operations. Existing frame/stack leaks
-remain; a bounded repetition test does not establish resource reclamation.
+preserved parent code and three pairs of spawn/kill/reap operations. The native [thread/process lifecycle tests](threading.md#validation) additionally
+assert physical-frame and kernel-heap recovery; bounded repetition is not an
+exhaustive proof of resource ownership.
 See [1080p validation](1080p-validation.md) for recorded red/green evidence and limits.
 The desktop and CPU tests now boot private copies of the development disk,
 so file operations in the test cannot mutate an interactive VM's image. It needs Pillow and permission to
@@ -195,3 +196,11 @@ cleanup in a small RAM display fixture. Native text-model checks use
 followed by `/tmp/rustos-screen-tests`. The desktop E2E verifies actual independent
 Forge spawning, shell-only commands through Portal, filesystem results, shell exit
 and reaping of hosted shells after terminal close.
+
+## Native threading and SMP
+
+See [threading validation](threading.md#validation) for CPU-profile, compile-fail,
+fault-isolation, syscall and cleanup checks. SMP changes require actual QEMU
+execution across CPU counts, including 1, 8 and 32; topology unit tests alone
+cannot establish AP startup or simultaneous Ring 3 execution. Preserve existing
+GUI timeout values when exposing concurrent execution races.

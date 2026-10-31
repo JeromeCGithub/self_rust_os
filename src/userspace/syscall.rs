@@ -14,9 +14,7 @@
 //! the interface exposes the in-memory filesystem (see [`crate::fs`]) so
 //! user programs can create, read, and write files.
 
-use core::arch::naked_asm;
-
-use x86_64::{structures::idt::InterruptStackFrame, VirtAddr};
+use x86_64::VirtAddr;
 
 use crate::{print, println, serial_println, userspace};
 
@@ -82,146 +80,12 @@ pub const SYS_STDIO: u64 = 22;
 /// Sentinel: the current process has exited, schedule another (don't save context).
 const PROCESS_EXIT_SENTINEL: u64 = u64::MAX;
 
-/// Sentinel: the current process is blocking, save context and schedule another.
-const PROCESS_BLOCK_SENTINEL: u64 = u64::MAX - 2;
-
-/// Naked entry point for the `int 0x80` syscall interrupt.
-///
-/// Saves all general-purpose registers (in the same order as the timer
-/// handler, forming a [`crate::scheduler::SavedContext`]), calls the Rust
-/// dispatcher, then either returns to user mode via `iretq` or performs a
-/// context switch if the syscall blocked or exited the process.
-///
-/// # Register layout on the stack after all pushes
-///
-/// ```text
-/// rsp + 0x00 : r15
-/// rsp + 0x08 : r14
-/// ...
-/// rsp + 0x70 : rax  (syscall number)
-/// rsp + 0x78 : RIP  (pushed by CPU)
-/// rsp + 0x80 : CS
-/// rsp + 0x88 : RFLAGS
-/// rsp + 0x90 : RSP
-/// rsp + 0x98 : SS
-/// ```
-#[naked]
-pub(crate) extern "x86-interrupt" fn syscall_entry(_frame: InterruptStackFrame) {
-    // SAFETY: Naked function with manual stack management. The CPU has pushed
-    // SS, RSP, RFLAGS, CS, RIP. We push all GPRs in the canonical order.
-    unsafe {
-        naked_asm!(
-            "push rax",
-            "push rbx",
-            "push rcx",
-            "push rdx",
-            "push rsi",
-            "push rdi",
-            "push rbp",
-            "push r8",
-            "push r9",
-            "push r10",
-            "push r11",
-            "push r12",
-            "push r13",
-            "push r14",
-            "push r15",
-
-            // Args for syscall_dispatch: rdi=num, rsi=arg1, rdx=arg2, rcx=arg3.
-            "mov rdi, [rsp + 0x70]",
-            "mov rsi, [rsp + 0x48]",
-            "mov rdx, [rsp + 0x50]",
-            "mov rcx, [rsp + 0x58]",
-
-            "call {dispatch}",
-
-            // Check for exit sentinel: current process is dead, switch away.
-            "mov rcx, {exit_sentinel}",
-            "cmp rax, rcx",
-            "je 2f",
-
-            // Check for block sentinel: save context and switch away.
-            "mov rcx, {block_sentinel}",
-            "cmp rax, rcx",
-            "je 3f",
-
-            // Normal return: store result in saved rax, restore regs, iretq.
-            "mov [rsp + 0x70], rax",
-            "pop r15",
-            "pop r14",
-            "pop r13",
-            "pop r12",
-            "pop r11",
-            "pop r10",
-            "pop r9",
-            "pop r8",
-            "pop rbp",
-            "pop rdi",
-            "pop rsi",
-            "pop rdx",
-            "pop rcx",
-            "pop rbx",
-            "pop rax",
-            "iretq",
-
-            // 2: Process exited. rdi=0 (don't save context).
-            "2:",
-            "xor edi, edi",
-            "call {schedule}",
-            // rax = new kernel RSP. Switch stacks and restore.
-            "mov rsp, rax",
-            "pop r15",
-            "pop r14",
-            "pop r13",
-            "pop r12",
-            "pop r11",
-            "pop r10",
-            "pop r9",
-            "pop r8",
-            "pop rbp",
-            "pop rdi",
-            "pop rsi",
-            "pop rdx",
-            "pop rcx",
-            "pop rbx",
-            "pop rax",
-            "iretq",
-
-            // 3: Process blocked. rdi=rsp (save context).
-            "3:",
-            "mov rdi, rsp",
-            "call {schedule}",
-            "mov rsp, rax",
-            "pop r15",
-            "pop r14",
-            "pop r13",
-            "pop r12",
-            "pop r11",
-            "pop r10",
-            "pop r9",
-            "pop r8",
-            "pop rbp",
-            "pop rdi",
-            "pop rsi",
-            "pop rdx",
-            "pop rcx",
-            "pop rbx",
-            "pop rax",
-            "iretq",
-
-            dispatch = sym syscall_dispatch,
-            schedule = sym crate::scheduler::schedule,
-            exit_sentinel = const PROCESS_EXIT_SENTINEL,
-            block_sentinel = const PROCESS_BLOCK_SENTINEL,
-        );
-    }
-}
 /// Error value returned to the user program when a syscall number is unknown.
 const SYSCALL_ERROR: u64 = u64::MAX - 1;
 
 /// Dispatches a syscall to the appropriate handler based on the syscall number.
 ///
-/// This function is called from the naked [`syscall_entry`] with the System V
+/// This function is called from [`crate::arch::x86_64::entry`] with the System V
 /// AMD64 calling convention.
 ///
 /// # Arguments
@@ -234,7 +98,11 @@ const SYSCALL_ERROR: u64 = u64::MAX - 1;
 /// # Returns
 ///
 /// The syscall return value, or [`PROCESS_EXIT_SENTINEL`] to signal process exit.
-extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
+pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
+    crate::scheduler::reap_retired();
+    if (96..=108).contains(&num) {
+        return thread_dispatch(num, arg1, arg2, arg3);
+    }
     match num {
         SYS_EXIT => {
             crate::scheduler::exit_current(arg1);
@@ -252,11 +120,15 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
             crate::scheduler::send_message(arg1 as u32, arg2 as u32)
         }
         SYS_RECEIVE_MESSAGE => {
-            if arg1 != 0 || arg2 != 0 || arg3 != 0 { return SYSCALL_ERROR; }
+            if arg1 != 0 || arg2 != 0 || arg3 != 0 {
+                return SYSCALL_ERROR;
+            }
             crate::scheduler::receive_message()
         }
         SYS_SURFACE_STATUS => {
-            if crate::scheduler::current_pid() != Some(0) { return SYSCALL_ERROR; }
+            if crate::scheduler::current_pid() != Some(0) {
+                return SYSCALL_ERROR;
+            }
             crate::scheduler::surface_status(arg1 as u32)
         }
         64..=70 => crate::net::syscall(num, arg1, arg2, arg3),
@@ -266,13 +138,18 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
         SYS_READ_FILE => sys_read_file(arg1, arg2, arg3),
         SYS_WRITE_FILE => sys_write_file(arg1, arg2, arg3),
         SYS_SPAWN => {
-            if arg2 > 1 || arg3 != 0 { return SYSCALL_ERROR; }
-            if arg2 == 1 && !crate::scheduler::can_connect_stdio() { return SYSCALL_ERROR; }
+            if arg2 > 1 || arg3 != 0 {
+                return SYSCALL_ERROR;
+            }
+            if arg2 == 1 && !crate::scheduler::can_connect_stdio() {
+                return SYSCALL_ERROR;
+            }
             sys_spawn(arg1, arg2 == 1)
         }
         SYS_STDIO => {
-            if arg1 > 2 || arg2 > u32::MAX as u64 || arg3 != 0
-                || (arg1 != 1 && arg2 != 0) { return SYSCALL_ERROR; }
+            if arg1 > 2 || arg2 > u32::MAX as u64 || arg3 != 0 || (arg1 != 1 && arg2 != 0) {
+                return SYSCALL_ERROR;
+            }
             crate::scheduler::stdio(arg1, arg2 as u32)
         }
         SYS_KILL => sys_kill(arg1),
@@ -281,15 +158,21 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
         SYS_MKDIR => sys_mkdir(arg1),
         SYS_FB_INFO => sys_fb_info(arg1),
         14 => {
-            let size = crate::drivers::video::framebuffer::fb_info().pitch * crate::drivers::video::framebuffer::fb_info().height;
-            if crate::scheduler::current_pid() != Some(0) || (arg3 == 0 || arg3 > size as u64) || !validate_user_buffer(arg2, arg3) { return SYSCALL_ERROR; }
-            // SAFETY: Caller and buffer were validated above.
-            let dest = unsafe { core::slice::from_raw_parts_mut(arg2 as *mut u8, arg3 as usize) };
-            crate::scheduler::snapshot(arg1 as u32, dest)
+            let size = crate::drivers::video::framebuffer::fb_info().pitch
+                * crate::drivers::video::framebuffer::fb_info().height;
+            if crate::scheduler::current_pid() != Some(0) || (arg3 == 0 || arg3 > size as u64) {
+                return SYSCALL_ERROR;
+            }
+            crate::scheduler::snapshot_user(arg1 as u32, arg2, arg3 as usize)
         }
-        16 => { crate::scheduler::graphics_mode(); 0 }
+        16 => {
+            crate::scheduler::graphics_mode();
+            0
+        }
         15 => {
-            if crate::scheduler::current_pid() != Some(0) { return SYSCALL_ERROR; }
+            if crate::scheduler::current_pid() != Some(0) {
+                return SYSCALL_ERROR;
+            }
             crate::scheduler::INPUT_FOCUS.store(arg1, core::sync::atomic::Ordering::Relaxed);
             0
         }
@@ -301,24 +184,77 @@ extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64
     }
 }
 
-/// Checks that the range `[ptr, ptr + len)` lies within user-accessible
-/// memory and returns it as an immutable byte slice.
-///
-/// Returns an error without touching memory when the range is invalid.
-fn user_slice(ptr: u64, len: u64) -> Result<&'static [u8], ()> {
-    let end = ptr.saturating_add(len);
-    if ptr < userspace::USER_CODE_START || end > userspace::USER_STACK_TOP || end < ptr {
+fn thread_dispatch(number: u64, first: u64, second: u64, third: u64) -> u64 {
+    use crate::{arch::x86_64::smp, scheduler as s};
+    use rustos_thread_abi as abi;
+    match number {
+        abi::SYS_CPU_COUNT
+        | abi::SYS_CURRENT_CPU
+        | abi::SYS_THREAD_CURRENT
+        | abi::SYS_THREAD_YIELD
+        | abi::SYS_THREAD_EXIT
+        | abi::SYS_THREAD_PAGES
+        | abi::SYS_FRAME_COUNT
+            if first != 0 || second != 0 || third != 0 =>
+        {
+            SYSCALL_ERROR
+        }
+        abi::SYS_CPU_COUNT => smp::online_count() as u64,
+        abi::SYS_CURRENT_CPU => smp::current_cpu() as u64,
+        abi::SYS_THREAD_CURRENT => s::current_tid().unwrap_or(SYSCALL_ERROR),
+        abi::SYS_THREAD_YIELD => s::yield_current(),
+        abi::SYS_THREAD_EXIT => {
+            s::exit_thread();
+            PROCESS_EXIT_SENTINEL
+        }
+        abi::SYS_THREAD_PAGES => s::thread_pages(),
+        abi::SYS_FRAME_COUNT => s::frame_count(),
+        abi::SYS_THREAD_JOIN | abi::SYS_THREAD_DETACH if second != 0 || third != 0 => SYSCALL_ERROR,
+        abi::SYS_THREAD_JOIN => s::join_thread(first),
+        abi::SYS_THREAD_DETACH => s::detach_thread(first),
+        abi::SYS_THREAD_WAIT => s::wait_word(first, second, third),
+        abi::SYS_THREAD_WAKE if third == 0 => s::wake_word(first, second),
+        abi::SYS_MESSAGE_WAIT if second == 0 && third == 0 => s::wait_message(first),
+        abi::SYS_THREAD_CREATE => {
+            if second != core::mem::size_of::<abi::Create>() as u64 || third != 0 {
+                return SYSCALL_ERROR;
+            }
+            let mut request = abi::Create {
+                version: 0,
+                flags: 0,
+                entry: 0,
+                argument: 0,
+                stack_size: 0,
+                affinity: 0,
+            };
+            // SAFETY: Create is padding-free integers, already initialized; the
+            // temporary byte slice aliases only this exclusively owned record.
+            let bytes = unsafe {
+                core::slice::from_raw_parts_mut(
+                    core::ptr::addr_of_mut!(request).cast::<u8>(),
+                    core::mem::size_of::<abi::Create>(),
+                )
+            };
+            if !userspace::usercopy::from_user(first, bytes) {
+                return SYSCALL_ERROR;
+            }
+            s::create_thread(request)
+        }
+        _ => SYSCALL_ERROR,
+    }
+}
+
+fn user_slice(ptr: u64, len: u64) -> Result<alloc::vec::Vec<u8>, ()> {
+    if !userspace::usercopy::validate(ptr, len, false) {
         return Err(());
     }
-    if len == 0 {
-        return Ok(&[]);
+    let mut bytes = alloc::vec::Vec::new();
+    bytes.try_reserve_exact(len as usize).map_err(|_| ())?;
+    bytes.resize(len as usize, 0);
+    if !userspace::usercopy::from_user(ptr, &mut bytes) {
+        return Err(());
     }
-    // SAFETY:
-    //
-    // The range was validated to lie within the user address space, which the
-    // kernel has mapped and can access. The caller must not hold the slice
-    // across operations that could unmap user memory.
-    Ok(unsafe { core::slice::from_raw_parts(ptr as *const u8, len as usize) })
+    Ok(bytes)
 }
 
 /// Writes a buffer from user memory to the VGA text display.
@@ -340,8 +276,8 @@ fn sys_write(buf_ptr: u64, len: u64) -> u64 {
         }
     };
 
-    crate::scheduler::surface_write(buf);
-    match core::str::from_utf8(buf) {
+    crate::scheduler::surface_write(&buf);
+    match core::str::from_utf8(&buf) {
         Ok(s) => {
             serial_println!("[kernel] sys_write: \"{}\"", s);
             print!("{}", s);
@@ -349,7 +285,7 @@ fn sys_write(buf_ptr: u64, len: u64) -> u64 {
         }
         Err(_) => {
             // Fall back to printing byte-by-byte for non-UTF-8 data.
-            for &byte in buf {
+            for &byte in &buf {
                 if byte.is_ascii_graphic() || byte == b' ' || byte == b'\n' {
                     print!("{}", byte as char);
                 } else {
@@ -382,20 +318,13 @@ fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
         return 0;
     }
 
-    let buf_end = buf_ptr.saturating_add(len as u64);
-    if buf_ptr < userspace::USER_CODE_START
-        || buf_end > userspace::USER_STACK_TOP
-        || buf_end < buf_ptr
-    {
-        println!("[kernel] sys_read: invalid buffer range");
+    if !userspace::usercopy::validate(buf_ptr, len as u64, true) {
         return SYSCALL_ERROR;
     }
-
-    if !crate::scheduler::has_input_focus() { return crate::scheduler::block_on_keyboard(); }
-
-    // SAFETY: The buffer range was validated to be within user-mapped memory.
-    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, len) };
-
+    if !crate::scheduler::has_input_focus() {
+        return crate::scheduler::block_on_keyboard();
+    }
+    let mut buf = [0u8; 4];
     // Keyboard decoder state. We create a fresh decoder per call; scancode
     // streams are self-synchronizing for simple key presses.
     let mut keyboard = INPUT_DECODER.lock();
@@ -427,7 +356,7 @@ fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
                         let mut tmp = [0u8; 4];
                         let encoded = c.encode_utf8(&mut tmp);
                         for &b in encoded.as_bytes() {
-                            if read < len {
+                            if read < len.min(4) {
                                 buf[read] = b;
                                 read += 1;
                             }
@@ -439,6 +368,9 @@ fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
         }
 
         if read > 0 {
+            if !userspace::usercopy::to_user(buf_ptr, &buf[..read]) {
+                return SYSCALL_ERROR;
+            }
             return read as u64;
         }
         // No character from this scancode (e.g., key release); try next.
@@ -450,25 +382,24 @@ fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
 /// Returns 1 and fills the buffer if a key is available, 0 if not.
 /// Used by games for polling input without blocking the game loop.
 fn sys_read_nb(fd: u64, buf_ptr: u64, len: u64) -> u64 {
-    if !crate::scheduler::has_input_focus() { return 0; }
+    if !crate::scheduler::has_input_focus() {
+        return 0;
+    }
     if fd != 0 || len == 0 {
         return 0;
     }
 
-    let buf_end = buf_ptr.saturating_add(1);
-    if buf_ptr < userspace::USER_CODE_START
-        || buf_end > userspace::USER_STACK_TOP
-        || buf_end < buf_ptr
-    {
-        return 0;
+    if !userspace::usercopy::validate(buf_ptr, 1, true) {
+        return SYSCALL_ERROR;
     }
-
     let mut keyboard = INPUT_DECODER.lock();
     // IRQs are disabled during the syscall, so at most the queue's 100
     // existing scancodes can be consumed. Releases/modifiers must not hide
     // a character already queued behind them from a nonblocking reader.
     for _ in 0..100 {
-        let Some(scancode) = crate::drivers::input::keyboard::try_pop_scancode() else { return 0; };
+        let Some(scancode) = crate::drivers::input::keyboard::try_pop_scancode() else {
+            return 0;
+        };
         if let Ok(Some(event)) = keyboard.add_byte(scancode) {
             if let Some(key) = keyboard.process_keyevent(event) {
                 use pc_keyboard::DecodedKey;
@@ -476,9 +407,8 @@ fn sys_read_nb(fd: u64, buf_ptr: u64, len: u64) -> u64 {
                     let mut tmp = [0u8; 4];
                     let encoded = c.encode_utf8(&mut tmp);
                     if let Some(&b) = encoded.as_bytes().first() {
-                        // SAFETY: Buffer was validated.
-                        unsafe {
-                            core::ptr::write(buf_ptr as *mut u8, b);
+                        if !userspace::usercopy::to_user(buf_ptr, &[b]) {
+                            return SYSCALL_ERROR;
                         }
                         return 1;
                     }
@@ -492,23 +422,20 @@ fn sys_read_nb(fd: u64, buf_ptr: u64, len: u64) -> u64 {
 
 /// Validates that a user buffer range is within the user address space.
 fn validate_user_buffer(ptr: u64, len: u64) -> bool {
-    let end = ptr.saturating_add(len);
-    ptr >= userspace::USER_CODE_START && end <= userspace::USER_STACK_TOP && end >= ptr
+    userspace::usercopy::validate(ptr, len, true)
 }
 
-/// Runs `f` with the null-terminated path string at `path_ptr`.
-///
-/// Returns `None` if the pointer/length is invalid or the bytes are not UTF-8.
-fn with_user_path<R>(path_ptr: u64, f: impl FnOnce(&str) -> R) -> Option<R> {
-    if !validate_user_buffer(path_ptr, 256) {
+/// Copy the path before invoking filesystem mechanisms.
+fn with_user_path<R>(ptr: u64, f: impl FnOnce(&str) -> R) -> Option<R> {
+    let mut bytes = [0u8; 256];
+    if !userspace::usercopy::from_user(ptr, &mut bytes) {
         return None;
     }
-    // SAFETY: Buffer was validated to lie in the user address space, and the
-    // slice is only used synchronously inside `f` during this syscall.
-    let path_buf = unsafe { core::slice::from_raw_parts(path_ptr as *const u8, 256) };
-    let path_len = path_buf.iter().position(|&b| b == 0).unwrap_or(256);
-    let path = core::str::from_utf8(&path_buf[..path_len]).ok()?;
-    Some(f(path))
+    let len = bytes.iter().position(|&b| b == 0)?;
+    if len >= 255 {
+        return None;
+    }
+    Some(f(core::str::from_utf8(&bytes[..len]).ok()?))
 }
 
 /// Lists directory entries into a user buffer.
@@ -533,12 +460,13 @@ fn sys_ls(path_ptr: u64, buf_ptr: u64, max_entries: u64) -> u64 {
     };
 
     let count = entries.len().min(max_entries);
-    // SAFETY: Buffer was validated.
-    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, buf_len as usize) };
-
     for (i, entry) in entries.iter().take(count).enumerate() {
-        buf[i * 12..i * 12 + 11].copy_from_slice(&entry.name);
-        buf[i * 12 + 11] = entry.attr;
+        let mut record = [0u8; 12];
+        record[..11].copy_from_slice(&entry.name);
+        record[11] = entry.attr;
+        if !userspace::usercopy::to_user(buf_ptr + i as u64 * 12, &record) {
+            return SYSCALL_ERROR;
+        }
     }
 
     count as u64
@@ -572,13 +500,15 @@ fn sys_fb_info(buf_ptr: u64) -> u64 {
         return SYSCALL_ERROR;
     }
     let info = crate::drivers::video::framebuffer::fb_info();
-    // SAFETY: Buffer validated above; 32 bytes for 4 u64 values.
-    unsafe {
-        let buf = buf_ptr as *mut u64;
-        buf.write(info.width as u64);
-        buf.add(1).write(info.height as u64);
-        buf.add(2).write(info.pitch as u64);
-        buf.add(3).write(info.bpp as u64);
+    let mut bytes = [0u8; 32];
+    for (i, value) in [info.width, info.height, info.pitch, usize::from(info.bpp)]
+        .iter()
+        .enumerate()
+    {
+        bytes[i * 8..i * 8 + 8].copy_from_slice(&(*value as u64).to_le_bytes());
+    }
+    if !userspace::usercopy::to_user(buf_ptr, &bytes) {
+        return SYSCALL_ERROR;
     }
     0
 }
@@ -586,53 +516,33 @@ fn sys_fb_info(buf_ptr: u64) -> u64 {
 /// Reads a file by path into a user buffer.
 ///
 /// Path is null-terminated. Returns bytes read, or SYSCALL_ERROR.
-fn sys_read_file(path_ptr: u64, buf_ptr: u64, buf_len: u64) -> u64 {
-    if !validate_user_buffer(path_ptr, 256) || !validate_user_buffer(buf_ptr, buf_len) {
+fn sys_read_file(path_ptr: u64, buf_ptr: u64, len: u64) -> u64 {
+    if !validate_user_buffer(buf_ptr, len) {
         return SYSCALL_ERROR;
     }
-
-    // SAFETY: Buffers validated.
-    let path_buf = unsafe { core::slice::from_raw_parts(path_ptr as *const u8, 256) };
-    let path_len = path_buf.iter().position(|&b| b == 0).unwrap_or(256);
-    let path = match core::str::from_utf8(&path_buf[..path_len]) {
-        Ok(s) => s,
-        Err(_) => return SYSCALL_ERROR,
-    };
-
-    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, buf_len as usize) };
-
-    let result = crate::fs::with_fs(|fs| fs.read_file(path, buf));
-    match result {
-        Some(Ok(n)) => n as u64,
+    let mut bytes = alloc::vec::Vec::new();
+    if bytes.try_reserve_exact(len as usize).is_err() {
+        return SYSCALL_ERROR;
+    }
+    bytes.resize(len as usize, 0);
+    match with_user_path(path_ptr, |path| {
+        crate::fs::with_fs(|fs| fs.read_file(path, &mut bytes))
+    }) {
+        Some(Some(Ok(n))) if userspace::usercopy::to_user(buf_ptr, &bytes[..n]) => n as u64,
         _ => SYSCALL_ERROR,
     }
 }
-
-/// Writes (creates or overwrites) a file by path from a user buffer.
-///
-/// Returns bytes written, or SYSCALL_ERROR.
-fn sys_write_file(path_ptr: u64, buf_ptr: u64, buf_len: u64) -> u64 {
-    if !validate_user_buffer(path_ptr, 256) || !validate_user_buffer(buf_ptr, buf_len) {
+fn sys_write_file(path_ptr: u64, buf_ptr: u64, len: u64) -> u64 {
+    let Ok(bytes) = user_slice(buf_ptr, len) else {
         return SYSCALL_ERROR;
-    }
-
-    // SAFETY: Buffers validated.
-    let path_buf = unsafe { core::slice::from_raw_parts(path_ptr as *const u8, 256) };
-    let path_len = path_buf.iter().position(|&b| b == 0).unwrap_or(256);
-    let path = match core::str::from_utf8(&path_buf[..path_len]) {
-        Ok(s) => s,
-        Err(_) => return SYSCALL_ERROR,
     };
-
-    let buf = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, buf_len as usize) };
-
-    let result = crate::fs::with_fs(|fs| {
-        // Create if not exists, then write.
-        let _ = fs.create_file(path);
-        fs.write_file(path, buf)
-    });
-    match result {
-        Some(Ok(n)) => n as u64,
+    match with_user_path(path_ptr, |path| {
+        crate::fs::with_fs(|fs| {
+            let _ = fs.create_file(path);
+            fs.write_file(path, &bytes)
+        })
+    }) {
+        Some(Some(Ok(n))) => n as u64,
         _ => SYSCALL_ERROR,
     }
 }
@@ -646,19 +556,18 @@ fn sys_write_file(path_ptr: u64, buf_ptr: u64, buf_len: u64) -> u64 {
 ///
 /// Returns `SYSCALL_ERROR` if the path is invalid or the program can't be loaded.
 fn sys_spawn(path_ptr: u64, connected: bool) -> u64 {
-    if !validate_user_buffer(path_ptr, 256) {
+    let mut path_bytes = [0u8; 256];
+    if !userspace::usercopy::from_user(path_ptr, &mut path_bytes) {
         return SYSCALL_ERROR;
     }
-
-    // SAFETY: Buffer validated.
-    let path_buf = unsafe { core::slice::from_raw_parts(path_ptr as *const u8, 256) };
-    let path_len = path_buf.iter().position(|&b| b == 0).unwrap_or(256);
+    let Some(path_len) = path_bytes.iter().position(|&b| b == 0) else {
+        return SYSCALL_ERROR;
+    };
     if path_len == 0 || path_len >= 255 {
         return SYSCALL_ERROR;
     }
-    let path = match core::str::from_utf8(&path_buf[..path_len]) {
-        Ok(s) => s,
-        Err(_) => return SYSCALL_ERROR,
+    let Ok(path) = core::str::from_utf8(&path_bytes[..path_len]) else {
+        return SYSCALL_ERROR;
     };
 
     // Load the binary from disk.
@@ -673,6 +582,11 @@ fn sys_spawn(path_ptr: u64, connected: bool) -> u64 {
         }
     };
 
+    // Loading may release CPU entry while holding the filesystem's service
+    // lock. A concurrent kill must not let this dead caller publish new work.
+    if !crate::scheduler::current_is_live() {
+        return PROCESS_EXIT_SENTINEL;
+    }
     // Create the process (read-only size 0 = all writable for now).
     match crate::scheduler::spawn_process(&binary, 0) {
         Ok(pid) => {
@@ -742,7 +656,8 @@ pub fn register_syscall_handler(idt: &mut x86_64::structures::idt::InterruptDesc
     // We set the handler address to our naked function which correctly manages
     // the full register save/restore and `iretq` return sequence.
     unsafe {
-        let handler_addr = VirtAddr::new(syscall_entry as *const () as u64);
+        let handler_addr =
+            VirtAddr::new(crate::arch::x86_64::entry::syscall_entry as *const () as u64);
         entry
             .set_handler_addr(handler_addr)
             .set_privilege_level(x86_64::PrivilegeLevel::Ring3);
@@ -757,13 +672,37 @@ mod tests {
     fn test_timed_wait_and_surface_metadata_reject_invalid_calls() {
         assert_eq!(syscall_dispatch(17, 0, 0, 0), 0);
         assert_eq!(syscall_dispatch(17, u64::MAX, 0, 0), SYSCALL_ERROR);
-        assert_eq!(syscall_dispatch(17, 1, 0, 0), SYSCALL_ERROR, "no current process");
+        assert_eq!(
+            syscall_dispatch(17, 1, 0, 0),
+            SYSCALL_ERROR,
+            "no current process"
+        );
         assert_eq!(syscall_dispatch(18, 0, 0, 0), SYSCALL_ERROR);
-        assert_eq!(syscall_dispatch(19, 1, 0, 0), SYSCALL_ERROR, "metadata is compositor-only");
-        assert_eq!(syscall_dispatch(20, 0, 0, 0), SYSCALL_ERROR, "messages need a calling process");
-        assert_eq!(syscall_dispatch(20, 1u64 << 32, 0, 0), SYSCALL_ERROR, "target must not truncate");
-        assert_eq!(syscall_dispatch(20, 0, 1u64 << 32, 0), SYSCALL_ERROR, "payload must not truncate");
-        assert_eq!(syscall_dispatch(20, 0, 0, 1), SYSCALL_ERROR, "reserved args must be zero");
+        assert_eq!(
+            syscall_dispatch(19, 1, 0, 0),
+            SYSCALL_ERROR,
+            "metadata is compositor-only"
+        );
+        assert_eq!(
+            syscall_dispatch(20, 0, 0, 0),
+            SYSCALL_ERROR,
+            "messages need a calling process"
+        );
+        assert_eq!(
+            syscall_dispatch(20, 1u64 << 32, 0, 0),
+            SYSCALL_ERROR,
+            "target must not truncate"
+        );
+        assert_eq!(
+            syscall_dispatch(20, 0, 1u64 << 32, 0),
+            SYSCALL_ERROR,
+            "payload must not truncate"
+        );
+        assert_eq!(
+            syscall_dispatch(20, 0, 0, 1),
+            SYSCALL_ERROR,
+            "reserved args must be zero"
+        );
         assert_eq!(syscall_dispatch(21, 0, 0, 0), SYSCALL_ERROR);
         assert_eq!(syscall_dispatch(21, 1, 0, 0), SYSCALL_ERROR);
         assert_eq!(syscall_dispatch(21, 0, 1, 0), SYSCALL_ERROR);
@@ -790,11 +729,16 @@ mod tests {
 
     #[test_case]
     fn stdio_rejects_reserved_and_truncated_arguments() {
-        for (op, payload, reserved) in [(3,0,0),(1,u64::MAX,0),(0,1,0),(2,1,0),(0,0,1)] {
-            assert_eq!(syscall_dispatch(SYS_STDIO,op,payload,reserved), SYSCALL_ERROR);
+        for (op, payload, reserved) in
+            [(3, 0, 0), (1, u64::MAX, 0), (0, 1, 0), (2, 1, 0), (0, 0, 1)]
+        {
+            assert_eq!(
+                syscall_dispatch(SYS_STDIO, op, payload, reserved),
+                SYSCALL_ERROR
+            );
         }
-        assert_eq!(syscall_dispatch(SYS_SPAWN,0,2,0), SYSCALL_ERROR);
-        assert_eq!(syscall_dispatch(SYS_SPAWN,0,0,1), SYSCALL_ERROR);
+        assert_eq!(syscall_dispatch(SYS_SPAWN, 0, 2, 0), SYSCALL_ERROR);
+        assert_eq!(syscall_dispatch(SYS_SPAWN, 0, 0, 1), SYSCALL_ERROR);
     }
 
     #[test_case]

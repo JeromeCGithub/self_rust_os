@@ -217,12 +217,18 @@ fn transports(udp_port: u16, tcp_port: u16) {
 }
 
 fn main() {
-    let mut tls_config=[0;12];
-    if sys::read_file("/TMP/TLS.CFG",&mut tls_config)==Some(12){tls_test::run(tls_config);}
-    let mut marker=[0;256];
-    if sys::read_file("/TMP/PERF.URL",&mut marker).is_some(){net_perf::run();}
-    let mut http_config=[0;4];
-    if sys::read_file("/TMP/HTTP.CFG",&mut http_config)==Some(4){http::run(http_config);}
+    let mut tls_config = [0; 12];
+    if sys::read_file("/TMP/TLS.CFG", &mut tls_config) == Some(12) {
+        tls_test::run(tls_config);
+    }
+    let mut marker = [0; 256];
+    if sys::read_file("/TMP/PERF.URL", &mut marker).is_some() {
+        net_perf::run();
+    }
+    let mut http_config = [0; 4];
+    if sys::read_file("/TMP/HTTP.CFG", &mut http_config) == Some(4) {
+        http::run(http_config);
+    }
     sys::graphics_mode();
     let mut setting = [0];
     if sys::read_file("/TMP/NET.MOD", &mut setting) == Some(1)
@@ -241,6 +247,7 @@ fn main() {
     boundary(handle);
     lifecycle(handle);
     net::close(handle).unwrap();
+    println!("[nettest] transport ready");
     transports(
         u16::from_le_bytes([config[0], config[1]]),
         u16::from_le_bytes([config[2], config[3]]),
