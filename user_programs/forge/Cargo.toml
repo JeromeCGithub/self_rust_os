@@ -14,7 +14,8 @@ opt-level = "z"
 lto = true
 
 [dependencies]
-userlib = { path = "../userlib" }
+userlib = { path = "../userlib", features = ["tls"] }
+rustos-ping = { path = "../../crates/ping" }
 
 [[bin]]
 name = "forge"

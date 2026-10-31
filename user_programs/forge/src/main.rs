@@ -5,6 +5,8 @@
 // Commands: help, echo <text>, clear, time, ls [path], mkdir <path>, cat <file>, exit
 
 
+mod ping;
+mod network;
 use userlib::{println, sys};
 
 fn ls(path: &[u8]) {
@@ -23,12 +25,13 @@ fn ls(path: &[u8]) {
             for i in 0..count {
                 let entry = &buf[i * 12..i * 12 + 11];
                 let attr = buf[i * 12 + 11];
-                // 8.3 name: trim spaces.
-                let mut name_end = 11;
-                while name_end > 0 && entry[name_end - 1] == b' ' {
-                    name_end -= 1;
+                let base = entry[..8].iter().position(|b| *b == b' ').unwrap_or(8);
+                sys::console_write(&entry[..base]);
+                let ext = entry[8..11].iter().position(|b| *b == b' ').unwrap_or(3);
+                if ext != 0 {
+                    sys::console_write(b".");
+                    sys::console_write(&entry[8..8+ext]);
                 }
-                sys::console_write(&entry[..name_end]);
                 if attr & 0x10 != 0 {
                     sys::console_write(b"/");
                 }
@@ -95,7 +98,8 @@ fn main() {
     println!("self_rust_os forge v1.0");
     println!("Type 'help' for commands.\n");
 
-    let mut line_buf = [0u8; 256];
+    let mut line_buf = [0u8; 512];
+    let mut network = network::Network::new();
     let mut char_buf = [0u8; 4];
 
     loop {
@@ -104,8 +108,13 @@ fn main() {
         // Read a line with echo.
         let mut line_len = 0;
         loop {
-            let n = sys::read(sys::STDIN_FD, &mut char_buf);
+            if network.tick() {
+                sys::console_write(b"> ");
+                sys::console_write(&line_buf[..line_len]);
+            }
+            let n = sys::read_nb(sys::STDIN_FD, &mut char_buf);
             if n == 0 {
+                sys::sleep_ticks(1).expect("shell input wait");
                 continue;
             }
             let c = char_buf[0];
@@ -130,9 +139,16 @@ fn main() {
         let line = &line_buf[..line_len];
 
         // Parse command.
-        if eq(line, b"help") {
+        if network.command(line) {
+            // Networking policy and output belong to the shell process.
+        } else if eq(line, b"pwd") {
+            println!("/");
+        } else if eq(line, b"help") {
             println!("Commands:");
             println!("  help       - show this help");
+            println!("  ping [-c 1..16] IPv4");
+            println!("  curl http[s]://host[:port]/path");
+            println!("  pwd        - print working directory");
             println!("  echo <txt> - print text");
             println!("  clear      - clear screen");
             println!("  time       - show timer ticks");

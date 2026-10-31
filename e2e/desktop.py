@@ -91,9 +91,16 @@ with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
         for x,y in [(WIDTH-1,HEIGHT-1),(WIDTH-8,HEIGHT//2),(WIDTH//2,HEIGHT-14),(0,0)]:
             move(x,y);time.sleep(.5)
             assert shot(None).getpixel((x,y))==(8,19,33),f'pointer did not reach {(x,y)}'
-        click(350,65);wait_for('Portal / RustOS shell');time.sleep(1)
-        for command,expected in [('help','help echo clear pwd ls cat write mkdir time exit'),('echo desktop-ok','desktop-ok'),('pwd','/'),('ls /bin','PORTAL.BIN'),('write /test.txt saved','file written'),('cat /test.txt','saved'),('mkdir /demo','directory created'),('time','ticks since boot')]:
-            type_command(command);wait_for("[portal] output: "+expected+"\n" if command not in ("time",) else "ticks since boot")
+        click(350,65);wait_for('[portal] shell pid=');wait_for('self_rust_os forge v1.0');time.sleep(1)
+        for command,expected in [('help','Commands:'),('echo desktop-ok','desktop-ok'),('pwd','/'),('ls /bin','PORTAL.BIN'),('write /test.txt saved','wrote 5 bytes'),('cat /test.txt','saved'),('mkdir /demo','created /demo'),('time','ticks:')]:
+            type_command(command);wait_for("[portal] output: "+expected+"\n" if command not in ("time",) else "ticks:")
+        # Forge-only commands must execute in the hosted process, not Portal.
+        type_command('kill x');wait_for('[portal] output: invalid pid')
+        type_command('cat /missing.txt');wait_for('[portal] output: cat failed')
+        type_command('./missing');wait_for('[portal] output: failed to spawn /bin/MISSING.BIN')
+        hosted = re.findall(r"\[portal\] shell pid=(\d+)", ''.join(re.findall(r'\[kernel\] sys_write: "(.*?)"\n',log.read_text(),re.S)))
+        assert hosted, 'no independently spawned Forge'
+        wait_for("sys_spawn: '/BIN/FORGE.BIN' -> pid "+hosted[0])
         shot('desktop-terminal')
         # Opening Snake must leave the terminal intact and both processes scheduled.
         click(450,65);wait_for("sys_spawn: '/BIN/SNAKE.BIN'");time.sleep(2);shot('desktop-multitasking')
@@ -116,6 +123,14 @@ with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
         cmd('mouse_button 0');time.sleep(.5)
         click(120+470,128+12);time.sleep(.5)
         shot('desktop-after-close')
+        # Every hosted shell must be reaped when its terminal closes.
+        output=''.join(re.findall(r'\[kernel\] sys_write: "(.*?)"\n',log.read_text(),re.S))
+        for pid in re.findall(r"\[portal\] shell pid=(\d+)",output):
+            wait_for('[sched] reaped zombie '+pid)
+        start=log.stat().st_size
+        click(350,65);wait_for('[portal] shell pid=',after=start)
+        type_command('exit');wait_for('[portal] shell disconnected',after=start)
+        wait_for('reaped zombie',after=start)
         for x,name,expected in [(150,'FORGE','self_rust_os forge'),(250,'HELLO','Hello from user space!'),(550,'SPIN','spin: starting')]:
             click(x,65);wait_for(expected);time.sleep(.7)
             width=640 if name=='HELLO' else 488

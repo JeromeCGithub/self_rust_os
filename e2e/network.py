@@ -193,7 +193,7 @@ def main():
             for down in (True, False):
                 request('input-send-event', {'events': [{'type': 'btn', 'data': {'button': 'left', 'down': down}}]})
                 time.sleep(.2)
-            wait_for('Portal / RustOS shell')
+            wait_for('self_rust_os forge v1.0')
             if args.probe:
                 # Build-user installs binaries alphabetically; CURL is first and
                 # ZNETTEST is the seventh launcher.

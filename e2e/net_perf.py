@@ -158,7 +158,7 @@ def main():
                 flat=text();rounds=[{'bytes':int(n),'ticks':int(t),'sum':int(c)} for n,t,c in re.findall(r'\[netperf\] round=\d+ bytes=(\d+) ticks=(\d+) sum=(\d+)',flat)]
                 assert len(rounds)==2,flat[-3000:]
                 if args.site:
-                    click(350);wait('Portal / RustOS shell',30)
+                    click(350);wait('self_rust_os forge v1.0',30)
                     command='curl '+args.site
                     for char in command:
                         key={' ':'spc','/':'slash',':':'shift-semicolon','.':'dot','-':'minus'}.get(char,char)

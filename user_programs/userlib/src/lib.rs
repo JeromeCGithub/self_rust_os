@@ -33,6 +33,7 @@ pub mod tls;
 pub mod http;
 pub mod io;
 pub mod net;
+pub mod process;
 pub mod sys;
 pub mod system;
 pub mod ui;

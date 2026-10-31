@@ -40,6 +40,8 @@ pub const SYS_SURFACE_STATUS: u64 = 19;
 pub const SYS_SEND_MESSAGE: u64 = 20;
 /// Nonblocking receive from the caller's inbox.
 pub const SYS_RECEIVE_MESSAGE: u64 = 21;
+/// Private connected-child standard-I/O operations.
+pub const SYS_STDIO: u64 = 22;
 
 /// Return value indicating a failed syscall.
 pub const SYSCALL_ERROR: u64 = u64::MAX - 1;
@@ -80,15 +82,18 @@ pub fn exit(code: u64) -> ! {
     unsafe { core::hint::unreachable_unchecked() }
 }
 
-/// Writes bytes to the console. Returns the number of bytes written.
+/// Writes bytes to the console or the connected host on a child endpoint.
+/// Returns the number of bytes written; connected output retries backpressure.
 pub fn console_write(buf: &[u8]) -> usize {
+    if crate::process::redirected() { return crate::process::write(buf); }
     unsafe { syscall(SYS_WRITE, buf.as_ptr() as u64, buf.len() as u64, 0) as usize }
 }
 
-/// Blocking read from a file descriptor (`STDIN_FD` = keyboard).
+/// Blocking stdin read: keyboard normally, connected input on a hosted child.
 /// Returns the number of bytes read.
 /// A keyboard wake without copied bytes returns zero; callers should retry.
 pub fn read(fd: u64, buf: &mut [u8]) -> usize {
+    if fd == STDIN_FD && crate::process::redirected() { return crate::process::read(buf, true); }
     unsafe {
         syscall(
             SYS_READ,
@@ -101,6 +106,7 @@ pub fn read(fd: u64, buf: &mut [u8]) -> usize {
 
 /// Non-blocking read. Returns bytes read, or 0 when no input is available.
 pub fn read_nb(fd: u64, buf: &mut [u8]) -> usize {
+    if fd == STDIN_FD && crate::process::redirected() { return crate::process::read(buf, false); }
     unsafe {
         syscall(
             SYS_READ_NB,
@@ -117,7 +123,7 @@ pub fn ticks() -> u64 {
 }
 
 /// Copies a path into a null-terminated 256-byte buffer for the file syscalls.
-fn path_buf(path: &str) -> Option<[u8; 256]> {
+pub(crate) fn path_buf(path: &str) -> Option<[u8; 256]> {
     let bytes = path.as_bytes();
     if bytes.len() >= 255 {
         return None;
@@ -330,7 +336,7 @@ pub fn surface_status(pid: u32) -> Result<(u64, bool), ()> {
 /// Failure to send/receive a scalar service message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MessageError {
-    /// The target's sixteen-message inbox is full. Retry after yielding.
+    /// The target's bounded queue is full. Retry after yielding.
     Full,
     /// Missing/dead target, forbidden client-to-client delivery, or no caller.
     Unavailable,

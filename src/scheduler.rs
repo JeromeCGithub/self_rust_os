@@ -118,6 +118,8 @@ pub struct Process {
     inbox: [u64; 16],
     inbox_head: usize,
     inbox_len: usize,
+    io_peer: Option<(Pid, bool)>,
+    io_inbox: VecDeque<u32>,
 }
 
 /// Saved CPU context layout.
@@ -459,6 +461,7 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
         inbox: [0; 16],
         inbox_head: 0,
         inbox_len: 0,
+        io_peer: None, io_inbox: VecDeque::new(),
     };
     // Ensure the vector is large enough.
     while sched.processes.len() <= pid as usize {
@@ -694,6 +697,7 @@ pub fn exit_current(code: u64) {
         crate::serial_println!("[sched] process {} exited with code {}", current, code);
     }
     crate::net::cleanup(current);
+    stop_owned_child_locked(&mut sched, current);
     wake_waiters_locked(&mut sched, current);
     // Remove from ready queue (shouldn't be there, but be safe).
     sched.ready_queue.retain(|&pid| pid != current);
@@ -718,13 +722,17 @@ pub fn kill(pid: Pid) -> Option<u64> {
     pcb.state = ProcessState::Zombie;
     pcb.exit_code = 9; // SIGKILL
     crate::net::cleanup(pid);
+    stop_owned_child_locked(&mut sched, pid);
     wake_waiters_locked(&mut sched, pid);
     sched.ready_queue.retain(|&p| p != pid);
     
     crate::serial_println!("[sched] process {} killed", pid);
     
-    if Some(pid) == current {
-        // Killing self: caller must schedule away (return sentinel).
+    if current.map(|running| {
+        sched.processes.get(running as usize).and_then(Option::as_ref)
+            .map(|p| p.state == ProcessState::Zombie).unwrap_or(true)
+    }).unwrap_or(false) {
+        // Owner teardown can stop and automatically reap the caller too.
         Some(PROCESS_BLOCK_SENTINEL) // Special marker: don't save, just schedule
     } else {
         Some(0)
@@ -749,6 +757,7 @@ pub fn waitpid(pid: Pid) -> u64 {
     if target_state == ProcessState::Zombie {
         // Reap immediately.
         let code = sched.processes[pid as usize].as_ref().unwrap().exit_code;
+        reap_connection_locked(&mut sched, pid);
         sched.processes[pid as usize] = None;
         crate::serial_println!("[sched] reaped zombie {}", pid);
         return code;
@@ -871,7 +880,7 @@ fn wake_waiters_locked(sched: &mut Scheduler, exited_pid: Pid) {
             }
         }
     }
-    if reaped { sched.processes[exited_pid as usize] = None; }
+    if reaped { reap_connection_locked(sched, exited_pid); sched.processes[exited_pid as usize] = None; }
 }
 
 /// Returns the PID of the current process, if any.
@@ -1013,5 +1022,157 @@ pub fn graphics_mode() {
     let mut sched = SCHEDULER.lock();
     if let Some(pid) = sched.current {
         if let Some(proc) = sched.processes[pid as usize].as_mut() { proc.console_enabled = false; }
+    }
+}
+
+/// At most 16 KiB per endpoint, allocated fallibly only for connected processes.
+const STDIO_QUEUE_CAPACITY: usize = 4096;
+
+/// Whether the current process can own a new I/O connection.
+pub fn can_connect_stdio() -> bool {
+    let sched = SCHEDULER.lock();
+    sched
+        .current
+        .and_then(|pid| sched.processes[pid as usize].as_ref())
+        .map(|p| p.io_peer.is_none())
+        .unwrap_or(false)
+}
+
+/// Connect a newly spawned child before returning from its spawning syscall.
+/// Syscall entry masks interrupts on this single CPU; no child executes between
+/// creation and this linkage. This function is not exposed as an attach syscall.
+pub fn connect_stdio(child: Pid) -> bool {
+    let mut sched = SCHEDULER.lock();
+    let Some(parent) = sched.current else {
+        return false;
+    };
+    if parent == child {
+        return false;
+    }
+    for pid in [parent, child] {
+        let Some(p) = sched.processes.get(pid as usize).and_then(Option::as_ref) else {
+            return false;
+        };
+        if p.state == ProcessState::Zombie || p.io_peer.is_some() {
+            return false;
+        }
+    }
+    // Reserve both queues before publishing either endpoint. Allocation failure
+    // drops local storage and leaves both process records unchanged. Enqueue
+    // never allocates; the explicit bound stays below reserved capacity.
+    let mut parent_queue = VecDeque::new();
+    let mut child_queue = VecDeque::new();
+    if parent_queue.try_reserve_exact(STDIO_QUEUE_CAPACITY).is_err()
+        || child_queue.try_reserve_exact(STDIO_QUEUE_CAPACITY).is_err() {
+        return false;
+    }
+    sched.processes[parent as usize].as_mut().expect("validated host").io_inbox = parent_queue;
+    sched.processes[child as usize].as_mut().expect("validated child").io_inbox = child_queue;
+    sched.processes[parent as usize]
+        .as_mut()
+        .expect("validated live endpoint")
+        .io_peer = Some((child, false));
+    sched.processes[child as usize]
+        .as_mut()
+        .expect("validated live endpoint")
+        .io_peer = Some((parent, true));
+    true
+}
+
+/// Register-only endpoint operations: 0 metadata, 1 send, 2 receive.
+/// Queues are bounded and independent of compositor inboxes. The scheduler lock
+/// serializes endpoint metadata and FIFO changes; no reference spans scheduling.
+pub fn stdio(operation: u64, payload: u32) -> u64 {
+    const ERROR: u64 = u64::MAX - 1;
+    let mut sched = SCHEDULER.lock();
+    let Some(pid) = sched.current else {
+        return ERROR;
+    };
+    let Some(proc) = sched.processes.get(pid as usize).and_then(Option::as_ref) else {
+        return ERROR;
+    };
+    if operation == 0 {
+        return proc
+            .io_peer
+            .map(|(peer, child)| ((u64::from(peer) + 1) << 1) | u64::from(child))
+            .unwrap_or(0);
+    }
+    let Some((peer, _)) = proc.io_peer else {
+        return ERROR;
+    };
+    if operation == 2 && !proc.io_inbox.is_empty() {
+        let proc = sched.processes[pid as usize]
+            .as_mut()
+            .expect("validated current endpoint");
+        let word = proc.io_inbox.pop_front().expect("nonempty endpoint queue");
+        return u64::from(word) + 1;
+    }
+    let Some(target) = sched
+        .processes
+        .get_mut(peer as usize)
+        .and_then(Option::as_mut)
+    else {
+        return ERROR;
+    };
+    if target.state == ProcessState::Zombie {
+        return ERROR;
+    }
+    match operation {
+        1 => {
+            if target.io_inbox.len() == STDIO_QUEUE_CAPACITY {
+                return 1;
+            }
+            target.io_inbox.push_back(payload);
+            0
+        }
+        2 => 0,
+        _ => ERROR,
+    }
+}
+
+/// An owned endpoint cannot outlive its host. General frame/stack reclamation
+/// is still incomplete; this handles PCB/queue ownership only.
+fn stop_owned_child_locked(sched: &mut Scheduler, parent: Pid) {
+    let child = sched.processes[parent as usize]
+        .as_ref()
+        .and_then(|p| p.io_peer)
+        .and_then(|(pid, is_child)| if is_child { None } else { Some(pid) });
+    if let Some(child) = child {
+        if let Some(p) = sched
+            .processes
+            .get_mut(child as usize)
+            .and_then(Option::as_mut)
+        {
+            if p.state != ProcessState::Zombie {
+                p.state = ProcessState::Zombie;
+                p.exit_code = 9;
+            }
+        }
+        crate::net::cleanup(child);
+        sched.ready_queue.retain(|pid| *pid != child);
+        wake_waiters_locked(sched, child);
+    }
+}
+
+fn reap_connection_locked(sched: &mut Scheduler, pid: Pid) {
+    let endpoint = sched.processes[pid as usize]
+        .as_ref()
+        .and_then(|p| p.io_peer);
+    if let Some((peer, is_child)) = endpoint {
+        if is_child {
+            if let Some(parent) = sched
+                .processes
+                .get_mut(peer as usize)
+                .and_then(Option::as_mut)
+            {
+                parent.io_peer = None;
+                parent.io_inbox = VecDeque::new();
+            }
+        } else {
+            // exit/kill has already stopped this owned child.
+            if let Some(slot) = sched.processes.get_mut(peer as usize) {
+                *slot = None;
+            }
+        }
     }
 }
