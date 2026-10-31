@@ -2,6 +2,7 @@
 
 use core::{
     pin::Pin,
+    sync::atomic::{AtomicUsize, Ordering},
     task::{Context, Poll},
 };
 
@@ -10,21 +11,24 @@ use crossbeam_queue::ArrayQueue;
 use futures_util::{task::AtomicWaker, Stream, StreamExt};
 use pc_keyboard::{layouts, HandleControl, Keyboard, ScancodeSet1};
 
-use crate::{print, println};
+use crate::print;
 
 static SCANCODE_QUEUE: OnceCell<ArrayQueue<u8>> = OnceCell::uninit();
 
 static WAKER: AtomicWaker = AtomicWaker::new();
+// Diagnostic only, with no associated payload to publish. IRQs must not log
+// through console locks when interrupted code or another CPU may own them.
+static DROPPED: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) fn add_scancode(scancode: u8) {
     if let Ok(queue) = SCANCODE_QUEUE.try_get() {
-        if let Err(_) = queue.push(scancode) {
-            println!("WARNING: scancode queue full; dropping keyboard input");
+        if queue.push(scancode).is_err() {
+            DROPPED.fetch_add(1, Ordering::Relaxed);
         } else {
             WAKER.wake();
         }
     } else {
-        println!("WARNING: scancode queue uninitialized");
+        DROPPED.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -165,18 +169,83 @@ mod tests {
         assert_eq!(try_pop_scancode(), Some(0x1E));
         assert_eq!(try_pop_scancode(), None);
     }
+
+    #[test_case]
+    fn pending_keyboard_burst_is_drained_without_consuming_mouse_bytes() {
+        use core::cell::Cell;
+        let next = Cell::new(0usize);
+        let mut received = alloc::vec::Vec::new();
+        let bytes = [0x1e, 0x9e, 0x30, 0xb0];
+        super::drain_controller(
+            || if next.get() < bytes.len() { 1 } else { 0x21 },
+            || {
+                let i = next.get();
+                next.set(i + 1);
+                bytes[i]
+            },
+            |byte| received.push(byte),
+        );
+        assert_eq!(received.as_slice(), &bytes);
+        assert_eq!(next.get(), bytes.len(), "mouse byte remains for IRQ12");
+    }
+
+    #[test_case]
+    fn keyboard_irq_work_is_bounded_for_a_stuck_controller() {
+        let mut received = 0;
+        super::drain_controller(|| 1, || 0x1e, |_| received += 1);
+        assert_eq!(received, 32);
+    }
+
+    #[test_case]
+    fn overflow_is_counted_and_queue_recovers_after_draining() {
+        super::init_scancode_queue();
+        while try_pop_scancode().is_some() {}
+        let before = super::dropped_scancodes();
+        for _ in 0..101 {
+            super::add_scancode(0x1e);
+        }
+        assert_eq!(super::dropped_scancodes(), before + 1);
+        let mut count = 0;
+        while try_pop_scancode().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, 100);
+        super::add_scancode(0x30);
+        assert_eq!(try_pop_scancode(), Some(0x30));
+        assert_eq!(try_pop_scancode(), None);
+    }
 }
 
-/// Consume the keyboard byte signaled by IRQ1. IRQ acknowledgement and wakeup
+fn drain_controller(
+    mut status: impl FnMut() -> u8,
+    mut read: impl FnMut() -> u8,
+    mut queue: impl FnMut(u8),
+) {
+    for _ in 0..32 {
+        if status() & 0x21 != 1 {
+            break;
+        }
+        queue(read());
+    }
+}
+
+/// Scancodes dropped because the bounded queue was full or not initialized.
+pub fn dropped_scancodes() -> usize {
+    DROPPED.load(Ordering::Relaxed)
+}
+
+/// Drain pending keyboard bytes signaled by IRQ1. IRQ acknowledgement and wakeup
 /// remain the responsibility of the architecture interrupt dispatcher.
 pub(crate) fn handle_interrupt() {
-    let mut port = x86_64::instructions::port::Port::new(0x60);
-
-    // Read the scancode from the keyboard port.
-    //
-    // SAFETY:
-    // We are reading from the keyboard port which is known to be safe.
-    let scancode: u8 = unsafe { port.read() };
-    add_scancode(scancode);
-
+    let mut status = x86_64::instructions::port::Port::<u8>::new(0x64);
+    let mut data = x86_64::instructions::port::Port::<u8>::new(0x60);
+    drain_controller(
+        // SAFETY: BSP IRQ1 owns controller access with local IRQs disabled;
+        // reading status is side-effect free, and AUX bytes belong to IRQ12.
+        || unsafe { status.read() },
+        // SAFETY: The preceding status has a pending keyboard byte. No other
+        // handler runs on this CPU until IRQ return; at most 32 reads occur.
+        || unsafe { data.read() },
+        add_scancode,
+    );
 }

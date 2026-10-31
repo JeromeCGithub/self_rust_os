@@ -547,6 +547,6 @@ pub(crate) fn run() {
         display.present(mx, my);
         old_mouse = Some((mx, my));
         previous = buttons;
-        sys::sleep_ticks(1).expect("desktop timed wait");
+        sys::wait_message(1).expect("desktop message/deadline wait");
     }
 }

@@ -1,6 +1,8 @@
 # Architecture and privilege boundaries
 
-`self_rust_os` is an experimental, single-CPU x86-64 OS written in `no_std` Rust.
+`self_rust_os` is an experimental x86-64 OS written in `no_std` Rust. The GRUB
+QEMU platform supports 1–32 logical CPUs and native Ring 3 threads; bootimage
+harnesses retain their single-CPU path. See [threading and SMP](threading.md).
 The responsibility split resembles Linux: a privileged kernel supplies mechanisms,
 and unprivileged applications implement policy. This is **not Linux**, is not
 POSIX-compatible, and does not execute Linux ELF applications or expose Linux syscalls.
@@ -12,9 +14,9 @@ microkernel.
 | Layer | Location | Responsibilities |
 | --- | --- | --- |
 | Kernel entry/boot | [entry](../src/entry_point.rs), [GRUB entry](../src/grub_boot.rs), [boot helpers](../src/boot/mod.rs) | Boot metadata, mode transition, physical mappings, bring-up |
-| Kernel CPU/interrupts | [GDT/TSS](../src/gdt.rs), [interrupts](../src/interrupts.rs) | Privilege selectors, stacks, IRQ delivery, exceptions, preemption |
+| Kernel CPU/interrupts | [CPU architecture](../src/arch/x86_64/mod.rs), [GDT/TSS](../src/arch/x86_64/gdt.rs), [interrupts](../src/arch/x86_64/interrupts.rs) | Privilege selectors, stacks, IRQ delivery, exceptions, preemption |
 | Kernel memory | [frames/paging](../src/memory.rs), [heap](../src/allocator.rs) | Memory ownership, page tables, allocation |
-| Kernel process management | [scheduler](../src/scheduler.rs), [loader](../src/userspace/process.rs) | Process state, private address spaces, contexts, blocking and wakeup |
+| Kernel process management | [process/thread ownership](../src/process/mod.rs), [scheduler](../src/scheduler.rs), [loader](../src/userspace/process.rs) | Process state, private address spaces, contexts, blocking and wakeup |
 | Kernel syscall boundary | [dispatcher](../src/userspace/syscall.rs) | Argument validation, privilege enforcement, resource operations |
 | Kernel device drivers | [driver tree](../src/drivers/mod.rs) | Device discovery, register access, DMA buffer ownership, block/Ethernet/input/framebuffer transports |
 | Kernel storage | [MBR](../src/mbr.rs), [FAT32](../src/fat32.rs), [mount](../src/fs.rs) | Partition offsets and filesystem mechanisms above the ATA driver |
@@ -77,11 +79,22 @@ The compositor then spawns `/BIN/DE.BIN` in Ring 3. That process requests a desk
 surface and panel work-area reservations over the scalar message channel; no
 shell-widget rendering or application-discovery policy executes in PID 0. See [the split](desktop-environment.md).
 
-A process has a private page-table subtree, user code/data and stack, a kernel stack,
-and a saved register context. Timer preemption switches user processes; IRQs that
-interrupt kernel code do not preempt lock-holding kernel paths. Blocking reads and
-waits mark a process blocked; keyboard input and process exit wake waiters. States
-are `Ready`, `Running`, `Blocked`, and `Zombie`; `waitpid` reaps exited PCBs.
+A process owns a private page-table subtree, code/data, drawing surface and shared
+resource identity. Its native threads each own a guarded user stack, kernel stack
+and saved register context. A shared ready queue schedules threads on available
+CPUs, with optional worker affinity. Each CPU owns its current TID, TSS/GDT,
+exception stacks, local timer and idle stack. IRQs that interrupt kernel code do
+not preempt a lock holder. The fair CPU entry gate spans context handoff; waiting
+CPUs halt with interrupts enabled and receive targeted wake IPIs. Filesystem work
+uses owned buffers and its own service lock outside this gate. Keyboard IRQs queue
+bounded work; ordinary scheduler entry consumes pending wakeups.
+
+Blocking reads, waits and sleeps affect the calling thread. Thread states are
+`Ready`, `Running`, `Blocked` and `Zombie`; process lifetime is `Live`/`Zombie`.
+Process exit/kill stops all siblings, and `waitpid` reaps the PCB. Owned frames,
+page tables and kernel stacks are deferred until no CPU is executing them and
+remote TLB invalidation has completed. User page faults and general-protection
+faults terminate the affected process; supervisor faults remain fatal.
 
 Current virtual layout, defined in [kernel constants](../src/userspace/mod.rs):
 
@@ -90,7 +103,9 @@ Current virtual layout, defined in [kernel constants](../src/userspace/mod.rs):
 | Flat user binary entry | `0x400000` |
 | User stack bottom/top | `0x2c00000` / `0x3000000` (4 MiB) |
 | Application framebuffer/surface | `0x3100000`, `pitch * height` bytes rounded up to pages |
-| Private user page-table region | `0x400000` through `0x4000000` (exclusive); gaps stay unmapped |
+| Legacy drawing-surface limit | `0x4000000` (exclusive) |
+| Guarded worker-stack arena | Starts at `0x4000000`, 63 slots of `0x41000` bytes each |
+| Private user page-table region | `0x400000` through `0x6000000` (exclusive); gaps stay unmapped |
 | GRUB physical-memory offset | `0xffff800000000000` |
 | GRUB kernel framebuffer mapping | `0xffff900000000000` |
 
@@ -152,15 +167,17 @@ See [networking](networking.md) for the layer diagram, exact syscall contracts,
 execution model and resource limits.
 
 Network syscalls validate actual user mappings and effective page permissions,
-copy complete records, and retain no user references. This does not repair the
-older syscall pointer checks. Socket state is reclaimed on close/exit/kill;
-existing process frame/stack leaks remain. Network progress is bounded and driven
+copy complete records, and retain no user references. File, console, graphics
+and threading calls also use complete mapping checks and assembly copies.
+Metadata and file buffers use owned kernel storage; surface snapshots copy from
+stable owned frames without borrowing client memory. Socket state is reclaimed on close/exit/kill;
+process frames and stacks are reclaimed after execution and TLB quiescence. Network progress is bounded and driven
 by callers; there is no background network worker. Static IPv4, connected UDP and
 outgoing TCP are supported. The [HTTP SDK and curl](http.md) implement DNS A
 resolution and streaming HTTP/HTTPS GET in Ring 3. [TLS](tls.md) uses Rustls,
 WebPKI verification and a RustCrypto provider; platform syscalls 80/81 supply
 hardware entropy and UTC. TLS-enabled apps reserve a private 16 MiB BSS heap; all
-processes receive 4 MiB user stacks with unmapped guards. Kernel stacks remain
+initial process threads receive 4 MiB user stacks with unmapped guards. Kernel stacks remain
 16 KiB. Server socket interfaces remain future work. Independent host fixtures verify framing,
 redirects, response streaming and cleanup through real socket syscalls.
 
@@ -178,11 +195,13 @@ waitpid receives the exit code in its saved return register and reaps the child.
   8192 bytes, and allows six simultaneous windows. The default boot requests 1080p.
   Legacy content remains 488×288 pixels; native SDK clients request content sizes
   from 160×96 through 640×400. One mapped window per process is currently exposed.
-- Address-space frames and leaked kernel stacks are not reclaimed on process exit;
-  repeated launch/close can exhaust memory. Reaping a PCB does not reclaim all resources.
-- User-pointer checks include numerical range checks; these do not prove every page
-  is mapped, has suitable permissions, or satisfies Rust reference lifetime rules.
-  Treat this as incomplete hardening, not as an established safe boundary.
+- Reclamation is deferred while remote CPUs execute an exiting context or finish
+  an in-flight filesystem operation. Live/unreaped objects have bounded quotas;
+  callers should join/detach threads and reap processes. See [limits](threading.md#limits).
+- User copies validate every effective mapping and use byte assembly without
+  borrowing shared user RAM. This is not a claim of general memory safety: disk
+  binaries still lack complete W^X enforcement, process-control permissions remain
+  limited, and supported hardware is the declared QEMU xAPIC platform.
 - The async executor remains in `src/task/`; it is not the current desktop process
   scheduler. Do not confuse cooperative async tasks with preemptive Ring 3 processes.
 - Legacy bootimage testing is distinct from the real GRUB desktop path. Neither

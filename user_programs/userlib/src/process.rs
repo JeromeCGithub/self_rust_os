@@ -19,7 +19,7 @@ pub(crate) fn redirected() -> bool {
         };
         // The child role is assigned before its first instruction and cannot
         // change while it runs. Host attachment never changes the host role.
-        // Relaxed stores publish no other data; this runtime has one thread.
+        // Relaxed stores publish only this immutable role value, with no other data.
         ROLE.store(role, Ordering::Relaxed);
     }
     role == 2

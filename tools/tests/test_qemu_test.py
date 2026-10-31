@@ -54,3 +54,15 @@ class ImageSelection(unittest.TestCase):
     def test_selects_explicit_integration_image_without_replacing_development_disk(self):
         with patch.dict('os.environ', {'RUSTOS_TEST_DISK': '/tmp/merged-main.img'}):
             self.assertEqual(monitor.disk_image(Path('/repo')), Path('/tmp/merged-main.img'))
+class DeferredFixtureTests(unittest.TestCase):
+    def test_workers_start_once_after_guest_transport_readiness(self):
+        class Worker:
+            count=0
+            def start(self): self.count+=1
+        workers=[Worker(),Worker()]
+        deferred=monitor.DeferredWorkers(workers,'transport ready')
+        deferred.observe('boot and lifecycle checks')
+        self.assertEqual([w.count for w in workers],[0,0])
+        deferred.observe('guest: transport ready')
+        deferred.observe('guest: transport ready\ncomplete')
+        self.assertEqual([w.count for w in workers],[1,1])

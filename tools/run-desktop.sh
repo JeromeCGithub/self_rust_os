@@ -6,12 +6,13 @@ case "$1" in
 esac
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${ROOT}"
-./tools/build-grub-disk.sh
 # QEMU vmmouse supplies absolute host coordinates; PS/2 remains a fallback.
 DESKTOP_DISPLAY="${RUSTOS_DISPLAY:-gtk,show-cursor=off}"
 NETWORK_OPTIONS="$(python3 tools/qemu_network.py "${RUSTOS_NETWORK:-user}")"
 mapfile -t NETWORK_ARGS <<< "${NETWORK_OPTIONS}"
-mapfile -t PLATFORM_ARGS < <(python3 tools/qemu_platform.py)
+PLATFORM_OPTIONS="$(python3 tools/qemu_platform.py)"
+mapfile -t PLATFORM_ARGS <<< "${PLATFORM_OPTIONS}"
+./tools/build-grub-disk.sh
 echo "[desktop] Absolute mouse integration enabled; move the pointer over the display."
 exec qemu-system-x86_64 -machine pc,i8042=on,vmport=on -drive "format=raw,file=${ROOT}/target/grub-disk.img" \
     -vga std -serial stdio -no-reboot -display "${DESKTOP_DISPLAY}" "${PLATFORM_ARGS[@]}" "${NETWORK_ARGS[@]}"

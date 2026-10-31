@@ -7,6 +7,9 @@ current behavior; architecture targets are not evidence of implemented features.
 | --- | --- |
 | [AI contribution instructions](../AGENTS.md) | Mandatory TDD, verification, safety, and delivery rules |
 | [Architecture](architecture.md) | Ring 0/Ring 3 ownership, driver hierarchy, repository map, lifecycle, and limitations |
+| [Native threads and SMP](threading.md) | Current 1–32 CPU support, Ring 3 threading/synchronization APIs, ownership, limits and validation |
+| [Threading validation](threading-validation.md) | Executed red/green checks, baseline failures and verification limits |
+| [Original threading proposal](threading-smp-plan.md) | Historical design baseline; consult the current threading guide for implemented behavior |
 | [Development](development.md) | Toolchain, build artifacts, red/green/refactor workflow, PR expectations |
 | [Testing](testing.md) | Change-to-test matrix, commands, evidence requirements, baseline gaps |
 | [Performance validation](performance.md) | 1080p optimization measurements, tests, and remaining limits |

@@ -36,3 +36,17 @@ def copy_disk(source, directory):
 def disk_image(root):
     """Return the integration fixture selected for this test run."""
     return Path(os.environ.get('RUSTOS_TEST_DISK', Path(root) / 'target/grub-disk.img'))
+
+
+class DeferredWorkers:
+    """Start request-timeout fixtures once their guest transport phase begins."""
+    def __init__(self, workers, marker):
+        self.workers = workers
+        self.marker = marker
+        self.started = False
+
+    def observe(self, output):
+        if not self.started and self.marker in output:
+            self.started = True
+            for worker in self.workers:
+                worker.start()

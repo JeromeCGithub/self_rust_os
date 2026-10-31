@@ -227,7 +227,7 @@ impl Window {
                 return Err(Error::Timeout);
             }
             if !self.accepted || (released && self.pending.is_some()) {
-                sys::sleep_ticks(1).map_err(|_| Error::Unavailable)?;
+                sys::wait_message(1).map_err(|_| Error::Unavailable)?;
             }
         }
         if self.closed {
@@ -328,7 +328,7 @@ impl Window {
                 self.input = input;
                 dirty = false;
             }
-            sys::sleep_ticks(1).map_err(|_| Error::Unavailable)?;
+            sys::wait_message(1).map_err(|_| Error::Unavailable)?;
         }
     }
 }
@@ -426,7 +426,7 @@ impl DesktopSurface {
             if sys::ticks().wrapping_sub(start) >= 36 {
                 return Err(Error::Timeout);
             }
-            sys::sleep_ticks(1).map_err(|_| Error::Unavailable)?;
+            sys::wait_message(1).map_err(|_| Error::Unavailable)?;
         }
         Ok(())
     }

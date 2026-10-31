@@ -22,10 +22,10 @@
 //! must not define their own.
 
 #![no_std]
-#![cfg_attr(feature = "tls", feature(alloc_error_handler))]
-#[cfg(feature = "tls")]
+#![cfg_attr(feature = "alloc", feature(alloc_error_handler))]
+#[cfg(feature = "alloc")]
 extern crate alloc;
-#[cfg(all(feature = "tls", target_os = "none"))]
+#[cfg(all(feature = "alloc", target_os = "none"))]
 mod heap;
 #[cfg(feature = "tls")]
 pub mod tls;
@@ -39,3 +39,10 @@ pub mod system;
 pub mod ui;
 
 mod rt;
+
+/// Blocking process-private synchronization.
+#[cfg(feature = "threads")]
+pub mod sync;
+/// Native OS threads (enable the threads feature).
+#[cfg(feature = "threads")]
+pub mod thread;

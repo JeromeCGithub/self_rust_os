@@ -174,6 +174,10 @@ def main():
                     time.sleep(.01)
                 print('PASS: empty/terminal/Snake CPU budgets, keyboard bursts, and input under CPU load')
         except Exception:
+            if 'command' in locals():
+                command('screendump', {'filename': str(ROOT / 'target/desktop-perf-failure.ppm')})
+                registers = command('human-monitor-command', {'command-line': 'info registers -a'})
+                (ROOT / 'target/desktop-perf-cpus.log').write_text(registers)
             if log.exists():
                 print(log.read_text(errors='replace')[-6000:])
             raise

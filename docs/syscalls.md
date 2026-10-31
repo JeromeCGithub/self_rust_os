@@ -64,9 +64,11 @@ For `ls`, callers must reserve **at least `12 * max_entries` bytes**; the curren
 wrapper does not establish that relationship itself. For `fb_info`, ensure alignment
 as well as length; the SDK uses `[u64; 4]`. For snapshots, the destination can be a
 nonempty prefix of the surface, including row padding. Full snapshots remain
-supported. Do not form kernel slices from hostile pointers without verifying
-mapping, permissions, overflow, alignment and lifetime; current numerical-range checks
-are incomplete hardening, as noted in [architecture](architecture.md).
+supported. Kernel paths validate full mappings and effective permissions. Requests
+and file buffers are copied through owned kernel storage; snapshots use raw assembly
+between stable owned surface frames and the validated destination. No user reference survives copying or
+blocking. Siblings can change contents during a copy, so records are validated
+after copying. Paths are copied before filesystem locks are acquired.
 
 Mouse packing is x in bits 0–15, y in bits 16–31, buttons above bit 31. Button bits
 0/1/2 mean left/right/middle. Coordinates are clamped to current display dimensions,
@@ -80,7 +82,8 @@ stack. Apps use `userlib::sys::FRAMEBUFFER_ADDR`; rebuild all apps with
 `tools/build-user.sh` when migrating from the old layout. Syscall numbers and
 `fb_info`/`snapshot` formats are unchanged. Surfaces cover `pitch * height`, including
 padding and the final partial page. User mappings occupy private page tables below
-`0x4000000`; unused gaps are unmapped. The kernel heap is 64 MiB to stage flat images and service concurrent allocations.
+`0x6000000`; unused gaps are unmapped. The surface region still ends at
+`0x4000000`, where the separate guarded worker-stack arena begins. The kernel heap is 64 MiB to stage flat images and service concurrent allocations.
 
 Graphical apps must call `present_surface()` after each rendering update. The WM
 queries `surface_status()` and retains cached window pixels until the revision or
@@ -156,7 +159,7 @@ Both require a current process and reject nonzero reserved arguments. Zero-byte
 random requests return zero without inspecting the pointer or accessing hardware.
 Nonempty output must have effective present/user/writable permission at every
 paging level and across every page, with checked address arithmetic and bounds
-`0x400000..0x4000000`. The kernel fills a bounded local record first and copies
+`0x400000..0x6000000`. The kernel fills a bounded local record first and copies
 only after complete entropy success. A failed syscall never partially writes its
 output. A multi-call SDK request can have completed earlier chunks before a later
 chunk fails; callers must not use it after an error.
@@ -197,10 +200,24 @@ SDK byte framing uses count bits 24–31 and up to three low bytes in little-end
 order. Host-to-child packets have count one. Standard console wrappers redirect
 on the child side; the host uses `process::Child` and keeps ordinary keyboard I/O.
 No new kernel pointer dereference or retained user reference is introduced by
-operation 22. Spawn retains its existing path-buffer validation limitations.
+operation 22. Spawn copies and validates the complete fixed-size path buffer
+before loading the executable through the filesystem service.
 
 The host owns the child lifetime. Host exit/kill stops its connected child;
 reaping the host also removes that child's PCB. Reaping a child releases its host
 endpoint and drops queued packets. Killing a host from its own child schedules away
-from the stopped child. General frame/stack leaks and process-control permission
-limitations still apply. See [terminal architecture](terminal-shell.md).
+from the stopped child. Frames/stacks are reclaimed after deferred execution/TLB quiescence; existing
+process-control permission limitations still apply. See [terminal architecture](terminal-shell.md).
+
+## Native threads and CPU information
+
+The [shared threading ABI](../crates/thread-abi/src/lib.rs),
+[kernel dispatch](../src/userspace/syscall.rs), and
+[typed Ring 3 SDK](../user_programs/userlib/src/thread.rs) define operations 96–108.
+See [threading](threading.md#syscalls) for the register contracts, shared resources,
+join/detach semantics, atomic-word waits, lifecycle and limits. Existing syscall
+numbers and the `int 0x80` calling convention are unchanged. The custom target
+still has no port of Rust `std`; enable the SDK's `threads` feature instead.
+Mailbox readiness (108) is also exposed as `userlib::sys::wait_message` without
+the threads feature. It parks only the caller, returns 1 for queued data or 0
+on deadline, and leaves consumption and protocol interpretation in userspace.

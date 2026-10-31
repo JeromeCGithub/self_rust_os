@@ -182,6 +182,8 @@ def main():
         finally:
             qemu.terminate()
             qemu.wait(timeout=5)
+            if log.exists():
+                (ROOT / 'target/glass-serial.log').write_bytes(log.read_bytes())
 
 
 if __name__ == '__main__':
