@@ -19,6 +19,10 @@ fn until(mut predicate: impl FnMut() -> bool) {
     }
 }
 fn fault_probe(mode: u8) {
+    if mode == 6 {
+        device_files_probe(thread::available_parallelism());
+        return;
+    }
     if mode == 5 {
         // SAFETY: This isolated regression child deliberately attempts a write
         // to its read-only text mapping using assembly, without forming a Rust
@@ -119,6 +123,12 @@ fn main() {
     }
     let cpus = thread::available_parallelism();
     assert!((1..=32).contains(&cpus));
+    device_files_probe(cpus);
+    assert_eq!(sys::write_file("/TMP/THREAD.CFG", &[6]), Some(1));
+    let child = sys::spawn("/BIN/ZTHREADS.BIN").expect("unprivileged device-file caller");
+    assert_eq!(sys::waitpid(child), Ok(0), "ordinary PID uses /dev without display-owner privileges");
+    assert_eq!(sys::write_file("/TMP/THREAD.CFG", &[0]), Some(1));
+    timer_preemption_probe(cpus - 1);
     assert_eq!(
         raw(abi::SYS_MESSAGE_WAIT, 1, 0, 0),
         0,
@@ -406,4 +416,72 @@ fn main() {
         );
     }
     println!("THREAD_TEST_PASS");
+}
+
+fn device_files_probe(cpus: usize) {
+    let mut guarded = [0xa5u8; 4099];
+    assert_eq!(sys::read_file("/dev/null", &mut guarded[1..4098]), Some(0));
+    assert!(guarded.iter().all(|byte| *byte == 0xa5));
+    assert_eq!(sys::read_file("//DeV/./ZeRo/", &mut guarded[1..4098]), Some(4097));
+    assert_eq!(guarded[0], 0xa5);
+    assert_eq!(guarded[4098], 0xa5);
+    assert!(guarded[1..4098].iter().all(|byte| *byte == 0));
+    guarded[1..4098].fill(0xa5);
+    assert_eq!(sys::read_file("/DEV./ZERO.", &mut guarded[1..4098]), Some(4097));
+    assert!(guarded[1..4098].iter().all(|byte| *byte==0));
+    for path in ["/dev/null", "/dev/zero"] {
+        assert_eq!(sys::write_file(path, b"discard"), Some(7));
+        assert_eq!(sys::read_file(path, &mut []), Some(0));
+    }
+    assert_eq!(sys::read_file("/dev/missing", &mut guarded), None);
+    assert_eq!(sys::write_file("/dev/missing", b"no"), None);
+    assert_eq!(sys::write_file("/DEV./MISSING.", b"no"), None);
+    assert_eq!(sys::write_file("/dev/devices", b"no"), None);
+    assert_eq!(sys::mkdir("/dev/new"), Err(()));
+    assert_eq!(sys::mkdir("/DEV."), Err(()));
+    assert_eq!(sys::spawn("/DEV./DEVICES."), Err(()));
+    assert_eq!(sys::read_file("/dev/../readme.txt", &mut guarded), None);
+    let mut entries = [0u8; 12*32];
+    let n = sys::ls("/dev", &mut entries, 32).expect("virtual /dev directory");
+    for name in [b"NULL       ", b"ZERO       ", b"RANDOM     ", b"DEVICES    "] {
+        assert!(entries[..n*12].chunks_exact(12).any(|e| &e[..11]==name));
+    }
+    let n = sys::ls("/", &mut entries, 32).expect("root mount listing");
+    assert_eq!(entries[..n*12].chunks_exact(12).filter(|e| &e[..11]==b"DEV        " && e[11]&0x10!=0).count(), 1);
+    let mut inventory = [0u8; 8192];
+    let n = sys::read_file("/dev/devices", &mut inventory).expect("detected device inventory");
+    let text = core::str::from_utf8(&inventory[..n]).unwrap();
+    assert_eq!(text.lines().filter(|line| line.contains("driver=x86-64")).count(), cpus);
+    assert!(text.contains("role=bsp") && text.contains("driver=ata"));
+    assert_eq!(text.lines().filter(|line| line.contains("role=ap")).count(), cpus-1);
+    assert!(!text.contains("0xffff"), "inventory must not expose kernel virtual addresses");
+    let mut prefix = [0u8; 7];
+    assert_eq!(sys::read_file("/dev/devices", &mut prefix), Some(7));
+    assert_eq!(&prefix, &inventory[..7]);
+    let mut random = [0u8; 32];
+    assert_eq!(sys::read_file("/dev/random", &mut random), Some(32));
+    assert!(random.iter().any(|byte| *byte!=0));
+    assert_eq!(sys::write_file("/dev/random", b"no"), None);
+    assert_eq!(sys::write_file("/DEVIL.TXT", b"ordinary file"), Some(13));
+    assert_eq!(sys::read_file("/DEVIL.TXT", &mut guarded), Some(13));
+    assert_eq!(&guarded[..13], b"ordinary file");
+    println!("[devices] usable files, inventory and namespace isolation PASS");
+}
+
+fn timer_preemption_probe(cpu: usize) {
+    let entered = Arc::new(AtomicU32::new(0));
+    let mut workers = [None, None];
+    for (index, slot) in workers.iter_mut().enumerate() {
+        let entered = Arc::clone(&entered);
+        *slot = Some(thread::Builder::new().on_cpu(cpu).spawn(move || {
+            entered.fetch_or(1 << index, Ordering::AcqRel);
+            // Two runnable contexts share this CPU. The first cannot voluntarily
+            // yield or enter the kernel: only timer preemption lets the second run.
+            while entered.load(Ordering::Acquire) != 3 { core::hint::spin_loop(); }
+            assert_eq!(thread::current_cpu(), cpu, "kernel syscall on the assigned CPU");
+        }).expect("preemption probe worker"));
+    }
+    until(|| entered.load(Ordering::Acquire) == 3);
+    for worker in &mut workers { worker.take().unwrap().join().unwrap(); }
+    println!("[threads] noncooperative timer preemption cpu={} PASS", cpu);
 }

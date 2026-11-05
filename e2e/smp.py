@@ -24,6 +24,11 @@ def run(count, stress=False):
         # Production boot policy and the real desktop image remain unchanged.
         subprocess.run(['mcopy', '-o', '-i', f'{disk}@@1048576',
                         str(ROOT / 'user_programs/zthreads/zthreads.bin'), '::/BIN/WM.BIN'], check=True)
+        # A hostile/stale FAT directory must be shadowed by the virtual mount.
+        trap = Path(directory) / 'device-trap.txt'
+        trap.write_bytes(b'backing FAT data must stay unchanged')
+        subprocess.run(['mmd', '-i', f'{disk}@@1048576', '::/DEV'], check=True)
+        subprocess.run(['mcopy', '-i', f'{disk}@@1048576', str(trap), '::/DEV/NULL'], check=True)
         if stress:
             config=Path(directory)/'stress.cfg'
             config.write_bytes(b'\1')
@@ -41,6 +46,13 @@ def run(count, stress=False):
                 if 'panic:' in raw or 'Kernel panic' in raw:
                     raise AssertionError(raw[-6000:])
                 if f'[smp] online={count}' in raw and 'THREAD_TEST_PASS' in output:
+                    assert output.count('[devices] usable files, inventory and namespace isolation PASS') == 2, 'missing normal-PID device-file checks'
+                    assert f'[threads] noncooperative timer preemption cpu={count-1} PASS' in output
+                    assert '[smp] firmware=multiboot2' in raw, 'CPU discovery ignored bootloader ACPI handoff'
+                    ready = re.findall(r'\[smp\] cpu=(\d+) apic=(\d+) role=(bsp|ap) ready', raw)
+                    assert [int(item[0]) for item in ready] == list(range(count)), 'missing CPU startup acknowledgements'
+                    assert len({item[1] for item in ready}) == count, 'duplicate hardware CPU identity'
+                    assert [item[2] for item in ready] == ['bsp'] + ['ap'] * (count - 1)
                     assert re.search(r'\[fault\] pid=Some\(\d+\) vector=14 error=0x7 address=0x400000', raw), \
                         'missing actual Ring 3 write-protection fault on executable text'
                     diagnostic, _ = vm.communicate('info registers -a\nquit\n', timeout=5)
@@ -48,6 +60,13 @@ def run(count, stress=False):
                     control = [int(value,16) for value in re.findall(r'CR0=([0-9a-fA-F]+)', diagnostic)]
                     assert len(control)==count, 'missing per-CPU control-register evidence'
                     assert all(value & 0x60000000 == 0 for value in control), 'CPU caches remain disabled after AP startup'
+                    for name, pattern in [('GDT', r'GDT=\s+([0-9a-fA-F]+)'), ('TSS', r'TR =0010 ([0-9a-fA-F]+)')]:
+                        addresses = re.findall(pattern, diagnostic)
+                        assert len(addresses) == count and len(set(addresses)) == count, f'{name} must be CPU-private'
+                    backing = subprocess.check_output(['mtype', '-i', f'{disk}@@1048576', '::/DEV/NULL'])
+                    assert backing == trap.read_bytes(), 'device writes reached the backing FAT file'
+                    listing = subprocess.check_output(['mdir', '-b', '-i', f'{disk}@@1048576', '::/DEV']).decode()
+                    assert 'MISSING' not in listing and 'NEW' not in listing, 'unknown /dev writes created FAT entries'
                     print(f'PASS: {count} CPUs; native threads and lifecycle assertions; {log}')
                     return
                 if vm.poll() is not None or time.monotonic() >= deadline:

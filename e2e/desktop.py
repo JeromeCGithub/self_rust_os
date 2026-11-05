@@ -102,6 +102,19 @@ with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
         assert hosted, 'no independently spawned Forge'
         wait_for("sys_spawn: '/BIN/FORGE.BIN' -> pid "+hosted[0])
         shot('desktop-terminal')
+        start=log.stat().st_size
+        type_command('ls /dev')
+        wait_for('[portal] output: NULL\n',after=start)
+        wait_for('[portal] output: ZERO\n',after=start)
+        wait_for('[portal] output: DEVICES\n',after=start)
+        start=log.stat().st_size
+        type_command('cat /dev/devices')
+        wait_for('cpu0 driver=x86-64 apic=0 role=bsp',after=start)
+        wait_for('fb0 driver=framebuffer pixels=1920x1080',after=start)
+        # The serial result verifies actual device content; capture that same
+        # tested session for review without replacing the behavioral assertions.
+        time.sleep(.5)
+        shot('desktop-device-tree')
         # Opening Snake must leave the terminal intact and both processes scheduled.
         click(450,65);wait_for("sys_spawn: '/BIN/SNAKE.BIN'");time.sleep(2);shot('desktop-multitasking')
         click(92+470,136+12);time.sleep(.5) # Close top (Snake) window.

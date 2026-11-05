@@ -89,7 +89,16 @@ pub fn init_scancode_queue() {
             return;
         }
         data.write(cmd_byte);
+        publish_device();
     }
+}
+
+fn publish_device() {
+    static PUBLISHED: conquer_once::spin::OnceCell<()> = conquer_once::spin::OnceCell::uninit();
+    let _ = PUBLISHED.try_init_once(|| {
+        crate::devices::register(crate::devices::Device { name:"keyboard",instance:0,
+            bus:crate::devices::Bus::Legacy,driver:"i8042",details:crate::devices::Details::None });
+    });
 }
 
 /// Tries to pop a scancode from the queue for synchronous syscall reads.
@@ -159,6 +168,11 @@ pub async fn print_keypresses() {
 
 #[cfg(test)]
 mod tests {
+    #[test_case]
+    fn repeated_keyboard_publication_preserves_one_device_identity() {
+        super::publish_device();
+        super::publish_device();
+    }
     use super::{try_pop_scancode, ScancodeStream};
 
     #[test_case]

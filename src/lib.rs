@@ -24,6 +24,7 @@ use x86_64::instructions;
 pub mod allocator;
 pub mod arch;
 pub mod drivers;
+mod devices;
 use drivers::video::framebuffer as gfx;
 #[cfg(any(feature = "grub", test))]
 pub mod boot;
@@ -58,6 +59,10 @@ pub fn init(
         gfx::init(fb_info, fb_virt_addr);
     }
     console::init();
+    devices::register(devices::Device { name:"fb",instance:0,bus:devices::Bus::Boot,
+        driver:"framebuffer",details:devices::Details::Framebuffer {width:fb_info.width,height:fb_info.height} });
+    devices::register(devices::Device { name:"ttyS",instance:0,bus:devices::Bus::Legacy,
+        driver:"16550",details:devices::Details::None });
 
     gdt::init();
     interrupts::init_idt();

@@ -7,6 +7,8 @@ current behavior; architecture targets are not evidence of implemented features.
 | --- | --- |
 | [AI contribution instructions](../AGENTS.md) | Mandatory TDD, verification, safety, and delivery rules |
 | [Architecture](architecture.md) | Ring 0/Ring 3 ownership, driver hierarchy, repository map, lifecycle, and limitations |
+| [Device inventory and /dev](devices.md) | Kernel driver registry, virtual device namespace, operations and boundaries |
+| [SMP boot/device audit](smp-boot-audit-validation.md) | Bootloader ACPI handoff, CPU startup/context checks and device validation |
 | [Native threads and SMP](threading.md) | Current 1–32 CPU support, Ring 3 threading/synchronization APIs, ownership, limits and validation |
 | [Interactive SMP latency](parallel-latency-validation.md) | Two terminal/shell pairs, event waits, compact loading and measured 16-CPU response |
 | [Threading validation](threading-validation.md) | Executed red/green checks, baseline failures and verification limits |

@@ -29,6 +29,8 @@ pub fn init(
                 mac[5]
             );
             *NETWORK.lock() = Some(Network::new(device, mac));
+            crate::devices::register(crate::devices::Device { name:"eth",instance:0,
+                bus:crate::devices::Bus::Pci,driver:"e1000",details:crate::devices::Details::Ethernet {mac} });
         }
         Err(error) => {
             crate::serial_println!("[net] Ethernet unavailable: {:?}", error);

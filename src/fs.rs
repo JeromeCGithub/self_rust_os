@@ -9,6 +9,8 @@
 //!   partition on the boot disk (primary master), so the root filesystem is
 //!   that partition, located via the MBR partition table.
 
+pub(crate) mod devfs;
+
 use conquer_once::spin::OnceCell;
 use spin::Mutex;
 
@@ -49,11 +51,36 @@ fn open_root_disk() -> OffsetDisk<AtaDisk> {
             part.lba_start,
             part.sector_count
         );
+        crate::devices::register(crate::devices::Device {
+            name: "disk",
+            instance: 0,
+            bus: crate::devices::Bus::Legacy,
+            driver: "ata",
+            details: crate::devices::Details::Block {
+                partition_lba: part.lba_start,
+                sectors: part.sector_count,
+            },
+        });
         OffsetDisk::new(raw, part.lba_start)
     }
     #[cfg(not(feature = "grub"))]
     {
-        OffsetDisk::new(AtaDisk::secondary(AtaDrive::Master), 0)
+        let mut disk = AtaDisk::secondary(AtaDrive::Master);
+        let info = disk
+            .identify()
+            .expect("root disk identify failed")
+            .expect("root disk absent");
+        crate::devices::register(crate::devices::Device {
+            name: "disk",
+            instance: 0,
+            bus: crate::devices::Bus::Legacy,
+            driver: "ata",
+            details: crate::devices::Details::Block {
+                partition_lba: 0,
+                sectors: info.sector_count,
+            },
+        });
+        OffsetDisk::new(disk, 0)
     }
 }
 
@@ -70,4 +97,109 @@ where
         let mut filesystem = fs.lock();
         f(&mut filesystem)
     }))
+}
+
+/// Namespace errors retain the underlying filesystem/device failure for diagnostics.
+#[derive(Debug)]
+pub(crate) enum Error {
+    Disk(crate::fat32::FatError),
+    Device(devfs::Error),
+    Unmounted,
+}
+impl core::fmt::Display for Error {
+    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Disk(error) => write!(out, "FAT32: {:?}", error),
+            Self::Device(error) => write!(out, "devfs: {:?}", error),
+            Self::Unmounted => out.write_str("root filesystem not mounted"),
+        }
+    }
+}
+impl From<devfs::Error> for Error {
+    fn from(error: devfs::Error) -> Self {
+        Self::Device(error)
+    }
+}
+
+/// Reserve /dev for kernel devices, including aliases accepted by path normalization.
+pub(crate) fn is_device_path(path: &str) -> Result<bool, Error> {
+    Ok(devfs::Path::new(path)?.device().is_some())
+}
+
+/// List the virtual mount or merge its single mount point into the FAT root.
+pub(crate) fn list_dir(path: &str) -> Result<alloc::vec::Vec<crate::fat32::DirEntry>, Error> {
+    use crate::fat32::DirEntry;
+    let path = devfs::Path::new(path)?;
+    if let Some(device) = path.device() {
+        if devfs::lookup(device)? != devfs::Node::Directory {
+            return Err(devfs::Error::NotDirectory.into());
+        }
+        return Ok([
+            *b"NULL       ",
+            *b"ZERO       ",
+            *b"RANDOM     ",
+            *b"DEVICES    ",
+        ]
+        .into_iter()
+        .map(|name| DirEntry {
+            name,
+            attr: 0x20,
+            size: 0,
+        })
+        .collect());
+    }
+    let mut entries = with_fs(|fs| fs.list_dir(Some(path.as_str())))
+        .ok_or(Error::Unmounted)?
+        .map_err(Error::Disk)?;
+    if path.as_str() == "/" {
+        entries.retain(|entry| entry.name != *b"DEV        ");
+        entries.push(DirEntry {
+            name: *b"DEV        ",
+            attr: 0x10,
+            size: 0,
+        });
+    }
+    Ok(entries)
+}
+
+/// Device files do not allocate disk entries; the virtual mount is immutable.
+pub(crate) fn create_dir(path: &str) -> Result<(), Error> {
+    let path = devfs::Path::new(path)?;
+    if path.device().is_some() {
+        return Err(devfs::Error::ReadOnly.into());
+    }
+    with_fs(|fs| fs.create_dir(path.as_str()))
+        .ok_or(Error::Unmounted)?
+        .map_err(Error::Disk)
+}
+
+/// Read an owned kernel buffer from a device endpoint or ordinary FAT file.
+pub(crate) fn read_file(path: &str, out: &mut [u8]) -> Result<usize, Error> {
+    let path = devfs::Path::new(path)?;
+    if let Some(device) = path.device() {
+        return devfs::read(
+            devfs::lookup(device)?,
+            out,
+            |out| crate::devices::render(out),
+            |bytes| crate::drivers::char::random::fill(bytes).is_ok(),
+        )
+        .map_err(Error::Device);
+    }
+    with_fs(|fs| fs.read_file(path.as_str(), out))
+        .ok_or(Error::Unmounted)?
+        .map_err(Error::Disk)
+}
+
+/// Writes to unknown device paths fail without falling through to FAT creation.
+pub(crate) fn write_file(path: &str, bytes: &[u8]) -> Result<usize, Error> {
+    let path = devfs::Path::new(path)?;
+    if let Some(device) = path.device() {
+        return devfs::write(devfs::lookup(device)?, bytes).map_err(Error::Device);
+    }
+    with_fs(|fs| {
+        let _ = fs.create_file(path.as_str());
+        fs.write_file(path.as_str(), bytes)
+    })
+    .ok_or(Error::Unmounted)?
+    .map_err(Error::Disk)
 }

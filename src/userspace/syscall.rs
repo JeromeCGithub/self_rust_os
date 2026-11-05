@@ -453,10 +453,10 @@ fn sys_ls(path_ptr: u64, buf_ptr: u64, max_entries: u64) -> u64 {
     }
 
     let result = with_user_path(path_ptr, |path| {
-        crate::fs::with_fs(|fs| fs.list_dir(Some(path)))
+        crate::fs::list_dir(path)
     });
     let entries = match result {
-        Some(Some(Ok(entries))) => entries,
+        Some(Ok(entries)) => entries,
         _ => return SYSCALL_ERROR,
     };
 
@@ -479,13 +479,13 @@ fn sys_ls(path_ptr: u64, buf_ptr: u64, max_entries: u64) -> u64 {
 /// or SYSCALL_ERROR.
 fn sys_mkdir(path_ptr: u64) -> u64 {
     let result = with_user_path(path_ptr, |path| {
-        crate::fs::with_fs(|fs| fs.create_dir(path))
+        crate::fs::create_dir(path)
     });
     match result {
-        Some(Some(Ok(()))) => 0,
+        Some(Ok(())) => 0,
         _ => {
-            if let Some(Some(Err(e))) = result {
-                serial_println!("[kernel] sys_mkdir failed: {:?}", e);
+            if let Some(Err(e)) = result {
+                serial_println!("[kernel] sys_mkdir failed: {}", e);
             }
             SYSCALL_ERROR
         }
@@ -527,9 +527,9 @@ fn sys_read_file(path_ptr: u64, buf_ptr: u64, len: u64) -> u64 {
     }
     bytes.resize(len as usize, 0);
     match with_user_path(path_ptr, |path| {
-        crate::fs::with_fs(|fs| fs.read_file(path, &mut bytes))
+        crate::fs::read_file(path, &mut bytes)
     }) {
-        Some(Some(Ok(n))) if userspace::usercopy::to_user(buf_ptr, &bytes[..n]) => n as u64,
+        Some(Ok(n)) if userspace::usercopy::to_user(buf_ptr, &bytes[..n]) => n as u64,
         _ => SYSCALL_ERROR,
     }
 }
@@ -538,12 +538,9 @@ fn sys_write_file(path_ptr: u64, buf_ptr: u64, len: u64) -> u64 {
         return SYSCALL_ERROR;
     };
     match with_user_path(path_ptr, |path| {
-        crate::fs::with_fs(|fs| {
-            let _ = fs.create_file(path);
-            fs.write_file(path, &bytes)
-        })
+        crate::fs::write_file(path, &bytes)
     }) {
-        Some(Some(Ok(n))) => n as u64,
+        Some(Ok(n)) => n as u64,
         _ => SYSCALL_ERROR,
     }
 }

@@ -2,6 +2,55 @@
 
 /// Maximum number of schedulable logical CPUs.
 pub const MAX_CPUS: usize = 32;
+/// Validated RSDP selection of an immutable physical ACPI root table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RootTable {
+    /// Physical address; the boot mapper must validate the complete table.
+    pub physical_address: u64,
+    /// Root entry width: four bytes for RSDT, eight for XSDT.
+    pub entry_bytes: usize,
+}
+
+/// Validate a copied RSDP. `extended` selects the ACPI 2+ format, rather than
+/// inferring it from bytes beyond an ACPI 1 copy supplied by the bootloader.
+pub fn parse_rsdp(bytes: &[u8], extended: bool) -> Result<RootTable, Error> {
+    if bytes.len() < 20
+        || &bytes[..8] != b"RSD PTR "
+        || bytes[..20].iter().fold(0u8, |s, v| s.wrapping_add(*v)) != 0
+    {
+        return Err(Error::Invalid);
+    }
+    let mut root = RootTable {
+        physical_address: u64::from(u32::from_le_bytes(
+            bytes[16..20].try_into().map_err(|_| Error::Invalid)?,
+        )),
+        entry_bytes: 4,
+    };
+    if extended {
+        if bytes.len() < 36 || bytes[15] < 2 {
+            return Err(Error::Invalid);
+        }
+        let len =
+            u32::from_le_bytes(bytes[20..24].try_into().map_err(|_| Error::Invalid)?) as usize;
+        if !(36..=4096).contains(&len)
+            || len > bytes.len()
+            || bytes[..len].iter().fold(0u8, |s, v| s.wrapping_add(*v)) != 0
+        {
+            return Err(Error::Invalid);
+        }
+        let xsdt = u64::from_le_bytes(bytes[24..32].try_into().map_err(|_| Error::Invalid)?);
+        if xsdt != 0 {
+            root = RootTable {
+                physical_address: xsdt,
+                entry_bytes: 8,
+            };
+        }
+    }
+    if root.physical_address == 0 {
+        return Err(Error::Invalid);
+    }
+    Ok(root)
+}
 /// Enabled xAPIC processors and the local interrupt-controller address.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Topology {
@@ -108,6 +157,76 @@ mod tests {
         b[4..8].copy_from_slice(&len.to_le_bytes());
         b[9] = 0;
         b[9] = 0u8.wrapping_sub(b.iter().fold(0u8, |s, v| s.wrapping_add(*v)));
+    }
+    fn rsdp(extended: bool) -> Vec<u8> {
+        let mut b = vec![0; if extended { 36 } else { 20 }];
+        b[..8].copy_from_slice(b"RSD PTR ");
+        b[15] = if extended { 2 } else { 0 };
+        b[16..20].copy_from_slice(&0x123400u32.to_le_bytes());
+        if extended {
+            b[20..24].copy_from_slice(&36u32.to_le_bytes());
+            b[24..32].copy_from_slice(&0x567800u64.to_le_bytes());
+        }
+        b[8] = 0u8.wrapping_sub(b[..20].iter().fold(0u8, |s, v| s.wrapping_add(*v)));
+        if extended {
+            b[32] = 0u8.wrapping_sub(b.iter().fold(0u8, |s, v| s.wrapping_add(*v)));
+        }
+        b
+    }
+    #[cfg_attr(target_os = "none", test_case)]
+    #[cfg_attr(not(target_os = "none"), test)]
+    fn copied_rsdp_selects_rsdt_and_prefers_valid_xsdt() {
+        assert_eq!(
+            parse_rsdp(&rsdp(false), false),
+            Ok(RootTable {
+                physical_address: 0x123400,
+                entry_bytes: 4
+            })
+        );
+        let bytes = rsdp(true);
+        assert_eq!(
+            parse_rsdp(&bytes, true),
+            Ok(RootTable {
+                physical_address: 0x567800,
+                entry_bytes: 8
+            })
+        );
+        // Old Multiboot tag contains only the ACPI 1 prefix, even on newer firmware.
+        assert_eq!(parse_rsdp(&bytes[..20], false).unwrap().entry_bytes, 4);
+        let mut bytes = bytes;
+        bytes[24..32].fill(0);
+        bytes[32] = 0;
+        bytes[32] = 0u8.wrapping_sub(bytes.iter().fold(0u8, |s, v| s.wrapping_add(*v)));
+        assert_eq!(parse_rsdp(&bytes, true).unwrap().physical_address, 0x123400);
+    }
+    #[cfg_attr(target_os = "none", test_case)]
+    #[cfg_attr(not(target_os = "none"), test)]
+    fn rsdp_rejects_corruption_truncation_lengths_and_missing_roots() {
+        for extended in [false, true] {
+            let good = rsdp(extended);
+            for len in 0..good.len() {
+                assert_eq!(parse_rsdp(&good[..len], extended), Err(Error::Invalid));
+            }
+            let mut bad = good.clone();
+            bad[0] ^= 1;
+            assert_eq!(parse_rsdp(&bad, extended), Err(Error::Invalid));
+            let mut bad = good;
+            bad[8] ^= 1;
+            assert_eq!(parse_rsdp(&bad, extended), Err(Error::Invalid));
+        }
+        for length in [0u32, 35, 37, u32::MAX] {
+            let mut bad = rsdp(true);
+            bad[20..24].copy_from_slice(&length.to_le_bytes());
+            assert_eq!(parse_rsdp(&bad, true), Err(Error::Invalid));
+        }
+        let mut bad = rsdp(true);
+        bad[32] ^= 1;
+        assert_eq!(parse_rsdp(&bad, true), Err(Error::Invalid));
+        let mut bad = rsdp(false);
+        bad[16..20].fill(0);
+        bad[8] = 0;
+        bad[8] = 0u8.wrapping_sub(bad.iter().fold(0u8, |s, v| s.wrapping_add(*v)));
+        assert_eq!(parse_rsdp(&bad, false), Err(Error::Invalid));
     }
     #[cfg_attr(target_os = "none", test_case)]
     #[cfg_attr(not(target_os = "none"), test)]

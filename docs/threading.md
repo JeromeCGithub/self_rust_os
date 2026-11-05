@@ -113,11 +113,13 @@ The local Linux reference was inspected at commit `6628e7d4c`: `kernel/sched/idl
 no Linux implementation was imported. Linux's per-CPU run queues and kernel worker
 pools are later steps, not facilities claimed by this implementation.
 
-Hardware discovery is separate from scheduling. This x86 QEMU target uses ACPI
-MADT for enabled CPUs and PCI for supported discoverable devices. A future device
-inventory/tree should describe buses, resources and driver ownership through those
-discovery interfaces; it should not embed runnable work or application policy.
-Flattened Device Tree parsing and a general device registry are not implemented.
+Hardware discovery is separate from scheduling. GRUB supplies copied ACPI RSDP
+tags; the kernel validates them, prefers the extended root and walks RSDT/XSDT to
+MADT. BIOS scanning is fallback only when no ACPI tag is supplied. This x86 QEMU
+target uses MADT for enabled CPUs and PCI for supported discoverable devices.
+The [device inventory and /dev](devices.md) records initialized drivers and public
+resources independently of runnable work. Flattened Device Tree parsing and ACPI
+AML device enumeration are not implemented.
 The next scheduling step is explicit per-CPU queue/ownership handoff with tests
 for remote wakeups and migration, followed by narrowing the entry gate. A general
 kernel-thread/work-queue API follows that ownership work rather than running
