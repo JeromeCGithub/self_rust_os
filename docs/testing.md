@@ -86,10 +86,13 @@ python3 -B e2e/tls.py --bad-clock
 python3 -B e2e/net_perf.py --label current --assert-fast
 cargo test --test stdio
 python3 e2e/desktop_perf.py
+RUSTOS_CPUS=16 python3 -B e2e/desktop_parallel.py
 python3 e2e/glass_ui.py
 bash e2e/build_profile.sh
 rustc --edition=2021 --test user_programs/wm/src/damage.rs -o /tmp/rustos-damage-tests
 /tmp/rustos-damage-tests
+rustc --edition=2021 --test user_programs/wm/src/input.rs -o /tmp/rustos-pointer-tests
+/tmp/rustos-pointer-tests
 rustc --edition=2021 --test user_programs/userlib/src/ui/host_tests.rs -o /tmp/rustos-ui-tests
 /tmp/rustos-ui-tests
 rustc --edition=2021 --test user_programs/wm/src/glass.rs -o /tmp/rustos-glass-tests
@@ -204,3 +207,19 @@ fault-isolation, syscall and cleanup checks. SMP changes require actual QEMU
 execution across CPU counts, including 1, 8 and 32; topology unit tests alone
 cannot establish AP startup or simultaneous Ring 3 execution. Preserve existing
 GUI timeout values when exposing concurrent execution races.
+
+
+The [parallel desktop regression](../e2e/desktop_parallel.py) launches two distinct
+Portal/Forge pairs, asserts focused command delivery, and measures launch, pointer
+and Enter-to-response latency. Its budgets are 1 second per launch (including QMP
+click injection), 50 ms for pointer response while idle/during launch, and 75 ms for command
+response. Run performance measurements without competing test VMs. Output, metrics
+and the two-window screenshot are retained under `target/desktop-parallel/`.
+Compact ELF parser host cases run from outside the root bare-metal Cargo configuration:
+
+```bash
+cd /tmp
+cargo +nightly-2025-01-30 test --manifest-path /path/to/self_rust_os/crates/exec-image/Cargo.toml --target x86_64-unknown-linux-gnu
+```
+The kernel `threads` integration verifies actual segment bytes, BSS/padding zeros,
+entry address, shared GOT pages, permissions, isolation and repeated frame recovery.

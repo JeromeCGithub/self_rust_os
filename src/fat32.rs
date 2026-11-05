@@ -55,6 +55,19 @@ pub trait BlockDevice {
     /// Returns the device's error type on I/O failure.
     fn read_sector(&mut self, lba: u32, buf: &mut [u8; SECTOR_SIZE]) -> Result<(), Self::Error>;
 
+    /// Read consecutive complete sectors. Return the number transferred; a
+    /// short count reports an unrepresentable address without wrapping it.
+    /// Devices may override this to submit one bounded multi-sector command.
+    fn read_sectors(&mut self, lba: u32, buf: &mut [[u8; SECTOR_SIZE]]) -> Result<usize, Self::Error> {
+        for (index, sector) in buf.iter_mut().enumerate() {
+            let Some(current) = u32::try_from(index).ok().and_then(|i| lba.checked_add(i)) else {
+                return Ok(index);
+            };
+            self.read_sector(current, sector)?;
+        }
+        Ok(buf.len())
+    }
+
     /// Writes `buf` to the sector at `lba`.
     ///
     /// # Errors
@@ -68,6 +81,10 @@ impl BlockDevice for AtaDisk {
 
     fn read_sector(&mut self, lba: u32, buf: &mut [u8; SECTOR_SIZE]) -> Result<(), Self::Error> {
         Self::read_sector(self, lba, buf)
+    }
+
+    fn read_sectors(&mut self, lba: u32, buf: &mut [[u8; SECTOR_SIZE]]) -> Result<usize, Self::Error> {
+        Self::read_sectors(self, lba, buf)
     }
 
     fn write_sector(&mut self, lba: u32, buf: &[u8; 512]) -> Result<(), Self::Error> {
@@ -157,6 +174,9 @@ pub struct Fat32<B> {
     root_cluster: u32,
     first_data_sector: u32,
     total_sectors: u32,
+    // The FAT sector holds 128 adjacent chain links. Keep it across data reads,
+    // under the filesystem service lock; writes invalidate before device I/O.
+    fat_cache: Option<(u32, [u8; SECTOR_SIZE])>,
 }
 
 impl<B: BlockDevice> Fat32<B> {
@@ -193,6 +213,7 @@ impl<B: BlockDevice> Fat32<B> {
             root_cluster: ROOT_CLUSTER,
             first_data_sector,
             total_sectors,
+            fat_cache: None,
         };
 
         // --- Boot sector (sector 0) ---
@@ -315,6 +336,7 @@ impl<B: BlockDevice> Fat32<B> {
             root_cluster,
             first_data_sector,
             total_sectors,
+            fat_cache: None,
         })
     }
 
@@ -675,6 +697,11 @@ impl<B: BlockDevice> Fat32<B> {
     }
 
     fn write_sector_raw(&mut self, lba: u32, buf: &[u8; 512]) -> Result<(), FatError> {
+        if self.fat_cache.as_ref().map(|(cached, _)| *cached) == Some(lba) {
+            // Even an error may have partially reached the device. Never retain
+            // an earlier version of metadata after attempting an overwrite.
+            self.fat_cache = None;
+        }
         self.device
             .write_sector(lba, buf)
             .map_err(|_| FatError::DeviceError)
@@ -687,11 +714,30 @@ impl<B: BlockDevice> Fat32<B> {
     }
 
     fn read_cluster(&mut self, cluster: u32, buf: &mut [u8]) -> Result<(), FatError> {
-        let lba = self.cluster_to_lba(cluster);
-        for (i, chunk) in buf.chunks_mut(SECTOR_SIZE).enumerate() {
+        let lba = cluster.checked_sub(2)
+            .and_then(|c| c.checked_mul(u32::from(self.sectors_per_cluster)))
+            .and_then(|offset| self.first_data_sector.checked_add(offset))
+            .ok_or(FatError::DeviceError)?;
+        if buf.len() > usize::from(self.sectors_per_cluster) * SECTOR_SIZE {
+            return Err(FatError::DeviceError);
+        }
+        let count = buf.len() / SECTOR_SIZE;
+        let (full, tail) = buf.split_at_mut(count * SECTOR_SIZE);
+        let sector_count = u32::try_from((full.len() + tail.len()).div_ceil(SECTOR_SIZE)).map_err(|_| FatError::DeviceError)?;
+        if lba.checked_add(sector_count).filter(|end| *end <= self.total_sectors).is_none() {
+            return Err(FatError::DeviceError);
+        }
+        // SAFETY: Arrays of u8 have alignment 1 and exactly 512 bytes. `full`
+        // is an exclusive, initialized, exactly divisible slice; count bounds
+        // every array. This reborrow ends before the disjoint tail is accessed.
+        let sectors = unsafe { core::slice::from_raw_parts_mut(full.as_mut_ptr().cast::<[u8; SECTOR_SIZE]>(), count) };
+        if self.device.read_sectors(lba, sectors).map_err(|_| FatError::DeviceError)? != count {
+            return Err(FatError::DeviceError);
+        }
+        if !tail.is_empty() {
             let mut sector = [0_u8; SECTOR_SIZE];
-            self.read_sector_raw(lba + i as u32, &mut sector)?;
-            chunk.copy_from_slice(&sector[..chunk.len()]);
+            self.read_sector_raw(lba + count as u32, &mut sector)?;
+            tail.copy_from_slice(&sector[..tail.len()]);
         }
         Ok(())
     }
@@ -716,8 +762,12 @@ impl<B: BlockDevice> Fat32<B> {
         let fat_offset = cluster * 4;
         let sector = u32::from(self.reserved_sectors) + fat_offset / SECTOR_SIZE as u32;
         let entry_offset = (fat_offset % SECTOR_SIZE as u32) as usize;
-        let mut buf = [0_u8; SECTOR_SIZE];
-        self.read_sector_raw(sector, &mut buf)?;
+        if self.fat_cache.as_ref().map(|(cached, _)| *cached) != Some(sector) {
+            let mut buf = [0_u8; SECTOR_SIZE];
+            self.read_sector_raw(sector, &mut buf)?;
+            self.fat_cache = Some((sector, buf));
+        }
+        let buf = &self.fat_cache.as_ref().expect("loaded FAT sector").1;
         Ok(u32::from_le_bytes([
             buf[entry_offset],
             buf[entry_offset + 1],
@@ -936,7 +986,6 @@ const fn check_83_char(c: u8) -> Result<u8, FatError> {
 
 #[cfg(test)]
 mod tests {
-    use core::convert::Infallible;
 
     use super::{to_83, BlockDevice, Fat32, FatError, SECTOR_SIZE};
     use alloc::vec::Vec;
@@ -945,26 +994,32 @@ mod tests {
     #[derive(Debug)]
     struct MemDisk {
         data: Vec<u8>,
+        reads: Vec<usize>,
+        fail_write_lba: Option<u32>,
     }
 
     impl MemDisk {
         fn new(sectors: u32) -> Self {
             Self {
                 data: alloc::vec![0_u8; sectors as usize * SECTOR_SIZE],
+                reads: alloc::vec![0; sectors as usize],
+                fail_write_lba: None,
             }
         }
     }
 
     impl BlockDevice for MemDisk {
-        type Error = Infallible;
+        type Error = ();
 
         fn read_sector(&mut self, lba: u32, buf: &mut [u8; SECTOR_SIZE]) -> Result<(), Self::Error> {
+            self.reads[lba as usize] += 1;
             let start = lba as usize * SECTOR_SIZE;
             buf.copy_from_slice(&self.data[start..start + SECTOR_SIZE]);
             Ok(())
         }
 
         fn write_sector(&mut self, lba: u32, buf: &[u8; 512]) -> Result<(), Self::Error> {
+            if self.fail_write_lba == Some(lba) { return Err(()); }
             let start = lba as usize * SECTOR_SIZE;
             self.data[start..start + SECTOR_SIZE].copy_from_slice(buf);
             Ok(())
@@ -973,6 +1028,97 @@ mod tests {
 
     // Small enough to fit in the 1 MiB kernel heap with room to spare.
     const TEST_SECTORS: u32 = 512;
+
+    #[test_case]
+    fn sequential_file_read_reuses_fat_metadata_sectors() {
+        let mut fs = Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        fs.create_file("LARGE.BIN").unwrap();
+        let data: Vec<u8> = (0..100 * 1024).map(|i| (i % 251) as u8).collect();
+        fs.write_file("LARGE.BIN", &data).unwrap();
+        fs.device.reads.fill(0);
+        let mut out = alloc::vec![0; data.len()];
+        assert_eq!(fs.read_file("LARGE.BIN", &mut out), Ok(data.len()));
+        assert_eq!(out, data);
+        let first = fs.reserved_sectors as usize;
+        let metadata_reads: usize = fs.device.reads[first..first + fs.fat_size_sectors as usize].iter().sum();
+        assert!(metadata_reads <= 2, "sequential chain reread FAT metadata {} times", metadata_reads);
+    }
+
+    #[test_case]
+    fn fat_cache_invalidates_on_success_and_failed_metadata_writes() {
+        let mut fs = Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        assert_eq!(fs.read_fat_entry(4), Ok(0));
+        fs.write_fat_entry(4, 7).unwrap();
+        assert_eq!(fs.read_fat_entry(4), Ok(7));
+        let sector = fs.reserved_sectors as u32;
+        fs.device.fail_write_lba = Some(sector);
+        assert_eq!(fs.write_fat_entry(4, 9), Err(FatError::DeviceError));
+        fs.device.reads.fill(0);
+        assert_eq!(fs.read_fat_entry(4), Ok(7));
+        assert_eq!(fs.device.reads[sector as usize], 1,
+            "a failed write must discard the cached version too");
+        fs.device.fail_write_lba = None;
+        fs.write_fat_entry(4, 11).unwrap();
+        assert_eq!(fs.read_fat_entry(4), Ok(11));
+    }
+
+    #[test_case]
+    fn default_bulk_reads_stop_on_overflow_and_preserve_unread_buffers() {
+        struct Probe { calls: usize, fail_at: Option<u32> }
+        impl BlockDevice for Probe {
+            type Error = u32;
+            fn read_sector(&mut self, lba: u32, buf: &mut [u8; SECTOR_SIZE]) -> Result<(), u32> {
+                self.calls += 1;
+                if self.fail_at == Some(lba) { return Err(lba); }
+                buf.fill(lba as u8);
+                Ok(())
+            }
+            fn write_sector(&mut self, lba: u32, _: &[u8; SECTOR_SIZE]) -> Result<(), u32> { Err(lba) }
+        }
+        let mut disk = Probe { calls: 0, fail_at: None };
+        assert_eq!(disk.read_sectors(u32::MAX, &mut []), Ok(0));
+        assert_eq!(disk.calls, 0);
+        let mut out = [[0xa5; SECTOR_SIZE]; 3];
+        assert_eq!(disk.read_sectors(u32::MAX - 1, &mut out), Ok(2));
+        assert_eq!(disk.calls, 2);
+        assert_eq!(out[0], [0xfe; SECTOR_SIZE]);
+        assert_eq!(out[1], [0xff; SECTOR_SIZE]);
+        assert_eq!(out[2], [0xa5; SECTOR_SIZE]);
+        disk.fail_at = Some(4);
+        out.fill([0xa5; SECTOR_SIZE]);
+        assert_eq!(disk.read_sectors(3, &mut out), Err(4));
+        assert_eq!(out[0], [3; SECTOR_SIZE]);
+        assert_eq!(out[1], [0xa5; SECTOR_SIZE]);
+        assert_eq!(out[2], [0xa5; SECTOR_SIZE]);
+    }
+
+    #[test_case]
+    fn cluster_bulk_read_checks_geometry_short_io_and_partial_sector_bounds() {
+        use super::ROOT_CLUSTER;
+        let mut fs = Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        let mut guarded = [0xa5; SECTOR_SIZE + 3];
+        fs.read_cluster(ROOT_CLUSTER, &mut guarded[1..SECTOR_SIZE+2]).unwrap();
+        assert_eq!(guarded[0], 0xa5);
+        assert_eq!(guarded[SECTOR_SIZE+2], 0xa5);
+        assert_eq!(&guarded[1..SECTOR_SIZE+2], &[0; SECTOR_SIZE+1]);
+        assert_eq!(fs.read_cluster(0, &mut guarded[..1]), Err(FatError::DeviceError));
+        assert_eq!(fs.read_cluster(u32::MAX, &mut guarded[..1]), Err(FatError::DeviceError));
+        let mut oversized = alloc::vec![0; usize::from(fs.sectors_per_cluster)*SECTOR_SIZE+1];
+        assert_eq!(fs.read_cluster(ROOT_CLUSTER, &mut oversized), Err(FatError::DeviceError));
+        struct ShortDisk(MemDisk);
+        impl BlockDevice for ShortDisk {
+            type Error = ();
+            fn read_sector(&mut self, lba: u32, buf: &mut [u8;SECTOR_SIZE]) -> Result<(),()> {
+                self.0.read_sector(lba,buf)
+            }
+            fn read_sectors(&mut self, _: u32, _: &mut [[u8;SECTOR_SIZE]]) -> Result<usize,()> { Ok(0) }
+            fn write_sector(&mut self, lba:u32, buf:&[u8;SECTOR_SIZE]) -> Result<(),()> {
+                self.0.write_sector(lba,buf)
+            }
+        }
+        let mut short = Fat32::open(ShortDisk(fs.into_device())).unwrap();
+        assert_eq!(short.read_cluster(ROOT_CLUSTER, &mut guarded[1..SECTOR_SIZE+1]), Err(FatError::DeviceError));
+    }
 
     #[test_case]
     fn file_size_handles_nested_empty_and_error_cases() {

@@ -1,5 +1,6 @@
 //! Small separable CPU blur. This operates only on a downsampled backdrop.
 /// Bilinear reconstruction from quarter-resolution material pixels.
+#[inline(always)]
 pub fn sample(pixels: &[u32], width: usize, height: usize, x: usize, y: usize) -> u32 {
     let Some(len) = width.checked_mul(height) else {
         return 0;
@@ -15,6 +16,9 @@ pub fn sample(pixels: &[u32], width: usize, height: usize, x: usize, y: usize) -
     let b = mix(pixels[ny * width + sx], pixels[ny * width + nx], x % 4);
     mix(a, b, y % 4) | 0xff000000
 }
+// This runs three times per glass pixel. Keep arithmetic in the raster loop;
+// size-optimized builds otherwise spend much of a frame in tiny function calls.
+#[inline(always)]
 fn mix(a: u32, b: u32, t: usize) -> u32 {
     let t = t as u32;
     let inv = 4 - t;

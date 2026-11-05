@@ -41,6 +41,8 @@ def run(count, stress=False):
                 if 'panic:' in raw or 'Kernel panic' in raw:
                     raise AssertionError(raw[-6000:])
                 if f'[smp] online={count}' in raw and 'THREAD_TEST_PASS' in output:
+                    assert re.search(r'\[fault\] pid=Some\(\d+\) vector=14 error=0x7 address=0x400000', raw), \
+                        'missing actual Ring 3 write-protection fault on executable text'
                     diagnostic, _ = vm.communicate('info registers -a\nquit\n', timeout=5)
                     (out/f'{count}-cpus.log').write_text(diagnostic)
                     control = [int(value,16) for value in re.findall(r'CR0=([0-9a-fA-F]+)', diagnostic)]

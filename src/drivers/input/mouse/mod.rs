@@ -21,6 +21,7 @@
 mod absolute;
 
 use spin::Mutex;
+use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::instructions::port::Port;
 
 use crate::{drivers::video::framebuffer as gfx, serial_println};
@@ -127,6 +128,24 @@ impl MouseDevice {
 }
 
 static MOUSE: Mutex<MouseDevice> = Mutex::new(MouseDevice::new());
+// A complete state is published while holding MOUSE. Release/Acquire makes
+// readiness visible across CPUs; readers then take MOUSE for a coherent sample.
+static REVISION: AtomicU64 = AtomicU64::new(0);
+fn publish() { REVISION.fetch_add(1, Ordering::Release); }
+
+/// Last published pointer sample revision.
+pub fn revision() -> u64 { REVISION.load(Ordering::Acquire) }
+
+/// Coherent pointer state and the revision consumed by this sample.
+pub fn snapshot() -> (i32, i32, u8, u64) {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        absolute::poll();
+        let dev = MOUSE.lock();
+        // MOUSE serializes both the sample and revision publication. The lock
+        // supplies ordering here; no revision can advance under this guard.
+        (dev.state.x, dev.state.y, dev.state.buttons, REVISION.load(Ordering::Relaxed))
+    })
+}
 
 /// Returns the current cursor position `(x, y)`.
 ///
@@ -183,7 +202,7 @@ fn sign_extend_9bit(magnitude: u8, sign: bool) -> i16 {
 /// re-established (a first byte with bit 3 set).
 pub(crate) fn handle_byte(byte: u8) {
     // Read the wake-up packet from the controller, but absolute coordinates
-    // come from the hypervisor queue when the compositor polls the mouse.
+    // come from the hypervisor queue, drained by IRQ or a subsequent sample.
     if absolute::enabled() {
         return;
     }
@@ -205,6 +224,7 @@ pub(crate) fn handle_byte(byte: u8) {
             dev.state.x = (dev.state.x + dx).clamp(0, screen_width() - 1);
             dev.state.y = (dev.state.y - dy).clamp(0, screen_height() - 1);
             dev.state.buttons = ev.buttons;
+            publish();
         }
     }
 }
@@ -346,6 +366,22 @@ mod tests {
     use super::{handle_byte, parse_packet, screen_width, MouseEvent};
 
     #[test_case]
+    fn complete_packet_publishes_pointer_readiness_without_partial_samples() {
+        // Complete any preceding test packet, then start from a known boundary.
+        super::MOUSE.lock().packet_index = 0;
+        let before = super::revision();
+        handle_byte(0x08);
+        handle_byte(0);
+        assert_eq!(super::revision(), before, "partial packet is not a sample");
+        handle_byte(1);
+        assert!(super::revision() > before, "complete input must publish readiness");
+        let (x,y,buttons,revision) = super::snapshot();
+        assert_eq!((x,y),super::position());
+        assert_eq!(buttons,super::buttons());
+        assert_eq!(revision,super::revision());
+    }
+
+    #[test_case]
     fn test_parse_packet_basic_movement() {
         // No buttons, dx=+5, dy=+3 (up), bit 3 set.
         let ev = parse_packet([0x08, 5, 3]).expect("valid packet");
@@ -471,5 +507,7 @@ pub(crate) fn handle_interrupt() {
             handle_byte(byte);
         }
     }
-
+    // Bounded, nonblocking transport work. A concurrent poll owns its own
+    // publication and ordinary entry will also check readiness before parking.
+    absolute::poll();
 }

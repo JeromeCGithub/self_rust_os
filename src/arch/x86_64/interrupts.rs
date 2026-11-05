@@ -143,6 +143,7 @@ extern "x86-interrupt" fn spurious_handler(_frame: InterruptStackFrame) {}
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
     keyboard::handle_interrupt();
     KEYBOARD_PENDING.store(true, Ordering::Release);
+    crate::arch::x86_64::entry::notify_input();
 
     // Notify the PICs that the interrupt has been handled.
     //
@@ -156,6 +157,7 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
 
 extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
     crate::drivers::input::mouse::handle_interrupt();
+    crate::arch::x86_64::entry::notify_input();
 
     // Notify the PICs that the interrupt has been handled.
     //

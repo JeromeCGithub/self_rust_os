@@ -100,12 +100,36 @@ small architecture re-exports.
 
 ## Scheduling, concurrency and memory
 
+This is an incremental foundation for a Linux-like execution model. A CPU is an
+execution resource; the scheduler selects a runnable thread for it. A syscall
+executes kernel code on the calling CPU, and idle CPUs halt until an interrupt or
+targeted reschedule IPI gives them a reason to inspect ready work. Kernel execution
+is not permanently assigned to CPU 0. The entry gate still serializes most kernel
+services, so this checkpoint does not provide fully parallel kernel entry.
+
+The local Linux reference was inspected at commit `6628e7d4c`: `kernel/sched/idle.c`
+(`do_idle`), `kernel/sched/core.c` (`ttwu_queue`, remote wake lists), and
+`kernel/sched/fair.c` (`select_idle_sibling`). These inform the execution model;
+no Linux implementation was imported. Linux's per-CPU run queues and kernel worker
+pools are later steps, not facilities claimed by this implementation.
+
+Hardware discovery is separate from scheduling. This x86 QEMU target uses ACPI
+MADT for enabled CPUs and PCI for supported discoverable devices. A future device
+inventory/tree should describe buses, resources and driver ownership through those
+discovery interfaces; it should not embed runnable work or application policy.
+Flattened Device Tree parsing and a general device registry are not implemented.
+The next scheduling step is explicit per-CPU queue/ownership handoff with tests
+for remote wakeups and migration, followed by narrowing the entry gate. A general
+kernel-thread/work-queue API follows that ownership work rather than running
+arbitrary closures in interrupt handlers.
+
 A shared round-robin queue initially schedules all native threads. Optional
 affinity is checked before selection. The fair architecture entry gate protects
 scheduler and mapping transitions across the actual assembly stack handoff;
 another CPU cannot restore an outgoing context before its old stack is inactive.
 Waiting CPUs halt with IRQs enabled and targeted IPIs wake the next gate owner.
-Device IRQs perform bounded transport work without taking the entry gate;
+Each ready context selects at most one eligible idle CPU for a wake, instead of
+broadcasting to every idle core. Device IRQs perform bounded transport work without taking the entry gate;
 ordinary scheduler entry consumes pending keyboard wakeups. Kernel-mode IRQs do
 not preempt arbitrary kernel lock holders. They record a CPU-local reschedule
 request, which syscall return services after dropping service locks. User instructions run simultaneously
@@ -187,6 +211,7 @@ Unspecified/reserved arguments must be zero. General rejection is the existing
 | 106 | Stack diagnostics | No arguments; current process's allocated worker-stack pages |
 | 107 | Frame diagnostics | No arguments; scheduler allocator's currently owned physical-frame count |
 | 108 | Mailbox readiness | Timeout ticks (zero indefinitely), zero, zero; 1 when the process mailbox is nonempty, 0 on timeout; does not consume a message |
+| 109 | Event readiness | Mask (mailbox=1, stdio read=2, stdio write=4, focused keyboard=8, display-owner pointer=16), timeout ticks (zero indefinitely), zero; returns ready bits, zero on timeout; does not consume data |
 
 The [padding-free create record](../crates/thread-abi/src/lib.rs) contains version
 `u32=1`, reserved flags `u32=0`, user entry `u64`, opaque user argument `u64`, usable
@@ -265,3 +290,10 @@ network, storage, HTTP/TLS and GUI checks when their integration paths change.
 QEMU execution is evidence for the tested virtual platform. QMP screenshots and
 injected input do not establish manual host GUI behavior or physical-hardware
 multicore operation; those checks must be reported separately.
+
+
+[Interactive latency validation](parallel-latency-validation.md) covers two hosted
+shells on 16 CPUs. Portal runs separate native renderer and I/O threads, using the
+same public SDK as other applications. Forge waits for connected input, with a
+bounded timer only while asynchronous ping is active. The kernel handles readiness
+and ownership, while text rendering, command parsing and launch policy remain in Ring 3.

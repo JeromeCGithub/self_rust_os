@@ -3,7 +3,7 @@
 //! This module provides the infrastructure to load and execute user-mode binaries
 //! in Ring 3. It includes:
 //! - A syscall interface via `int 0x80` for user programs to request kernel services.
-//! - A process loader that maps a flat binary into user-accessible pages.
+//! - A process loader for static ELF segments and legacy flat user images.
 //! - A mechanism to switch from kernel mode (Ring 0) to user mode (Ring 3).
 
 pub mod process;

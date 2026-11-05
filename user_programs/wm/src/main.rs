@@ -2,6 +2,7 @@
 mod damage;
 mod display;
 mod glass;
+mod input;
 mod session;
 mod window;
 

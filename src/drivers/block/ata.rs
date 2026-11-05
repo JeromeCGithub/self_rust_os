@@ -86,6 +86,8 @@ pub enum AtaDrive {
 /// Errors that can occur during ATA operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AtaError {
+    /// The request exceeds the LBA28 address space.
+    InvalidRequest,
     /// The device did not respond in time (or no device is attached).
     Timeout,
     /// The device reported an error via the ERR status bit.
@@ -291,24 +293,54 @@ impl AtaDisk {
     ///
     /// Returns [`AtaError`] if the device times out or reports an error.
     pub fn read_sector(&mut self, lba: u32, buf: &mut [u8; SECTOR_SIZE]) -> Result<(), AtaError> {
+        self.read_sectors(lba, core::slice::from_mut(buf)).map(|_| ())
+    }
+
+    /// Read consecutive sectors in commands of at most 255 sectors. Each DRQ
+    /// transfers exactly one sector; polling and all arithmetic remain bounded.
+    pub fn read_sectors(&mut self, lba: u32, buf: &mut [[u8; SECTOR_SIZE]]) -> Result<usize, AtaError> {
+        if buf.is_empty() { return Ok(0); }
+        let count = u32::try_from(buf.len()).map_err(|_| AtaError::InvalidRequest)?;
+        if lba.checked_add(count).filter(|end| *end <= 1 << 28).is_none() {
+            return Err(AtaError::InvalidRequest);
+        }
         self.disable_device_interrupts();
-        self.wait_not_busy()?;
-        self.select_drive_and_lba(lba);
-        // SAFETY: Writing the sector count port is part of the READ command setup.
+        for (batch_index, batch) in buf.chunks_mut(255).enumerate() {
+            self.wait_not_busy()?;
+            self.select_drive_and_lba(lba + (batch_index * 255) as u32);
+            // SAFETY: The selected, exclusively owned ATA channel accepts a
+            // count from 1 through 255. Address bounds were checked above.
+            unsafe { PortWriteOnly::new(self.io_base + REG_SECTOR_COUNT).write(batch.len() as u8); }
+            self.send_command(CMD_READ_SECTORS)?;
+            for sector in batch {
+                self.wait_data_ready()?;
+                self.read_sector_data(sector);
+                self.delay_400ns();
+            }
+        }
+        Ok(buf.len())
+    }
+
+    fn read_sector_data(&mut self, buf: &mut [u8; SECTOR_SIZE]) {
+
+        // Transfer one complete sector with the x86 string-I/O instruction.
+        // Issuing a Rust/port operation per word magnifies TCG overhead when
+        // loading multi-megabyte executables and competes with interactive CPUs.
+        // SAFETY: DRQ grants exactly 256 words from the exclusively selected
+        // channel. buf is uniquely borrowed writable storage of exactly 512
+        // bytes; INSW supports unaligned destinations. RCX bounds every write,
+        // RDI/RCX are declared clobbered, DF is cleared, and kernel IRQs cannot
+        // schedule away this service's live stack or release its channel lock.
         unsafe {
-            PortWriteOnly::new(self.io_base + REG_SECTOR_COUNT).write(1_u8);
-        }
-        self.send_command(CMD_READ_SECTORS)?;
-        self.wait_data_ready()?;
-
-        for chunk in buf.chunks_exact_mut(2) {
-            // SAFETY: The device asserted DRQ, so data words are available.
-            let word: u16 = unsafe { Port::new(self.io_base + REG_DATA).read() };
-            chunk.copy_from_slice(&word.to_le_bytes());
+            core::arch::asm!(
+                "cld", "rep insw",
+                in("dx") self.io_base + REG_DATA,
+                inout("rdi") buf.as_mut_ptr() => _,
+                inout("rcx") SECTOR_SIZE / 2 => _,
+                options(nostack),
+            );
         }
 
-        self.delay_400ns();
-        Ok(())
     }
 
     /// Writes a single 512-byte sector via LBA28 PIO and flushes the cache.

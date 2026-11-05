@@ -19,6 +19,7 @@
 #![allow(clippy::missing_assert_message)]
 
 mod common;
+extern crate alloc;
 
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
@@ -34,6 +35,12 @@ entry_point!(main);
 fn main(boot_info: &'static BootInfo) -> ! {
     let phys_mem_offset = VirtAddr::new(boot_info.physical_memory_offset);
     self_rust_os::init(phys_mem_offset, common::FRAMEBUFFER_INFO, common::framebuffer_addr());
+    // SAFETY: This single-CPU harness is the only mapper and allocator. The
+    // bootloader maps its immutable usable-RAM description at this offset.
+    let mut mapper = unsafe { self_rust_os::memory::init(phys_mem_offset) };
+    // SAFETY: These usable frames have not been allocated by this harness.
+    let mut frames = unsafe { self_rust_os::memory::BootInfoFrameAllocator::new(&boot_info.memory_map) };
+    self_rust_os::allocator::init_heap(&mut mapper, &mut frames).expect("ATA test heap");
 
     test_main();
     #[expect(clippy::empty_loop)]
@@ -119,6 +126,15 @@ fn when_writing_and_reading_sectors_then_data_round_trips() {
         disk.read_sector(lba, &mut read_buf)
             .expect("ATA sector read failed");
 
+        // String I/O must accept an odd destination without touching either
+        // adjacent byte. The fixture is explicitly the disposable ATA disk.
+        let mut guarded = [0xa5u8; SECTOR_SIZE + 2];
+        let odd: &mut [u8; SECTOR_SIZE] = (&mut guarded[1..SECTOR_SIZE + 1]).try_into().unwrap();
+        disk.read_sector(lba, odd).expect("unaligned sector read");
+        assert_eq!(&guarded[1..SECTOR_SIZE + 1], &write_buf);
+        assert_eq!(guarded[0], 0xa5);
+        assert_eq!(guarded[SECTOR_SIZE + 1], 0xa5);
+
         assert_eq!(
             write_buf, read_buf,
             "round-trip mismatch at LBA {lba}"
@@ -136,4 +152,29 @@ fn when_writing_and_reading_sectors_then_data_round_trips() {
         "[ata] round-trip OK: {} sectors, checksum={:#018x}",
         TEST_SECTORS, total_checksum
     );
+}
+
+#[test_case]
+fn bulk_read_crosses_command_boundary_without_overwriting_guards() {
+    let mut disk = AtaDisk::primary(AtaDrive::Slave);
+    let info = disk.identify().unwrap().unwrap();
+    let mut guarded = alloc::vec![[0xa5; SECTOR_SIZE]; 258];
+    let first = info.sector_count - 256;
+    // Populate only the same disposable tail used by the round-trip case.
+    for lba in info.sector_count - TEST_SECTORS..info.sector_count {
+        let mut sector = [0; SECTOR_SIZE];
+        for (i, byte) in sector.iter_mut().enumerate() { *byte = pattern_byte(lba, i); }
+        disk.write_sector(lba, &sector).unwrap();
+    }
+    assert_eq!(disk.read_sectors(first, &mut guarded[1..257]), Ok(256));
+    assert_eq!(guarded[0], [0xa5; SECTOR_SIZE]);
+    assert_eq!(guarded[257], [0xa5; SECTOR_SIZE]);
+    for (i, sector) in guarded[1..257].iter().enumerate() {
+        let mut scalar = [0; SECTOR_SIZE];
+        disk.read_sector(first + i as u32, &mut scalar).unwrap();
+        assert_eq!(*sector, scalar, "sector order across the 255-sector boundary");
+    }
+    assert_eq!(disk.read_sectors(u32::MAX, &mut []), Ok(0));
+    assert_eq!(disk.read_sectors((1 << 28) - 1, &mut guarded[..2]),
+        Err(self_rust_os::drivers::block::ata::AtaError::InvalidRequest));
 }

@@ -54,6 +54,13 @@ pub(super) fn poll() {
     if !enabled() {
         return;
     }
+    // Serialize STATUS/DATA pairs across CPUs. IRQs never wait for a transport
+    // owner; all ordinary callers mask local IRQs before polling. Lock order is
+    // TRANSPORT -> MOUSE, with neither held across scheduler or entry calls.
+    static TRANSPORT: spin::Mutex<()> = spin::Mutex::new(());
+    let Some(_transport) = TRANSPORT.try_lock() else {
+        return;
+    };
     // Bound work per syscall even if the host sends a continuous event stream.
     for _ in 0..64 {
         let status = request(STATUS, 0).0;
@@ -77,5 +84,6 @@ pub(super) fn poll() {
         dev.state.buttons = u8::from(flags & 0x20 != 0)
             | (u8::from(flags & 0x10 != 0) << 1)
             | (u8::from(flags & 0x08 != 0) << 2);
+        super::publish();
     }
 }

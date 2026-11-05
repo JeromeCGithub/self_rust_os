@@ -97,7 +97,7 @@ pub(crate) fn write(bytes: &[u8]) -> usize {
             match send(word) {
                 Ok(()) => break,
                 Err(MessageError::Full) => {
-                    let _ = sys::sleep_ticks(1);
+                    if sys::wait_events(sys::Events::STDIO_WRITE, 0).is_err() { return written; }
                 }
                 Err(_) => return written,
             }
@@ -118,7 +118,7 @@ pub(crate) fn read(bytes: &mut [u8], blocking: bool) -> usize {
             }
             Ok(Some(_)) => return 0,
             Ok(None) if blocking => {
-                let _ = sys::sleep_ticks(1);
+                if sys::wait_events(sys::Events::STDIO_READ, 0).is_err() { sys::exit(0); }
             }
             Ok(None) => return 0,
             Err(_) => sys::exit(0),

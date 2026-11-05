@@ -1,6 +1,7 @@
 //! Terminal text storage, independent of shell command syntax and window rendering.
 pub const COLS: usize = 58;
 pub const ROWS: usize = 22;
+#[derive(Clone)]
 pub struct Screen {
     pub lines: [[u8; COLS]; ROWS],
     pub row: usize,

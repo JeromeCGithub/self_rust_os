@@ -100,7 +100,7 @@ const SYSCALL_ERROR: u64 = u64::MAX - 1;
 /// The syscall return value, or [`PROCESS_EXIT_SENTINEL`] to signal process exit.
 pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
     crate::scheduler::reap_retired();
-    if (96..=108).contains(&num) {
+    if (96..=109).contains(&num) {
         return thread_dispatch(num, arg1, arg2, arg3);
     }
     match num {
@@ -215,6 +215,7 @@ fn thread_dispatch(number: u64, first: u64, second: u64, third: u64) -> u64 {
         abi::SYS_THREAD_WAIT => s::wait_word(first, second, third),
         abi::SYS_THREAD_WAKE if third == 0 => s::wake_word(first, second),
         abi::SYS_MESSAGE_WAIT if second == 0 && third == 0 => s::wait_message(first),
+        abi::SYS_EVENT_WAIT if third == 0 => s::wait_events(first, second),
         abi::SYS_THREAD_CREATE => {
             if second != core::mem::size_of::<abi::Create>() as u64 || third != 0 {
                 return SYSCALL_ERROR;
@@ -630,10 +631,10 @@ fn sys_waitpid(pid: u64) -> u64 {
 /// Returns the packed mouse state.
 ///
 /// Bits: `[63:32]` = buttons (bit 0 = left, 1 = right, 2 = middle),
-/// `[31:16]` = y (0-199), `[15:0]` = x (0-319).
+/// `[31:16]` = y, `[15:0]` = x, in framebuffer pixels clamped to u16.
 fn sys_mouse() -> u64 {
-    let (x, y) = crate::drivers::input::mouse::position();
-    let buttons = crate::drivers::input::mouse::buttons();
+    let (x, y, buttons, revision) = crate::drivers::input::mouse::snapshot();
+    crate::scheduler::observe_pointer(revision);
     // Clamp to u16 ranges (driver already clamps to screen, but be safe).
     let x = x.clamp(0, 0xFFFF) as u64;
     let y = y.clamp(0, 0xFFFF) as u64;

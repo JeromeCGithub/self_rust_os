@@ -14,7 +14,7 @@ opt-level = "z"
 lto = true
 
 [dependencies]
-userlib = { path = "../userlib" }
+userlib = { path = "../userlib", features = ["threads"] }
 
 [dependencies.font8x8]
 version = "0.3"

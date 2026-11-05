@@ -17,6 +17,17 @@ static RESCHEDULE: [AtomicBool; 32] = [const { AtomicBool::new(false) }; 32];
 // interrupt can request timer-wait service without acquiring scheduler locks.
 static IDLE_CPUS: AtomicU32 = AtomicU32::new(0);
 
+/// IRQ-only doorbell for pending input. The idle BSP will service its own wake;
+/// otherwise ask at most one idle AP to inspect readiness. No scheduler lock,
+/// allocation or stack switch occurs in this hard IRQ path.
+pub fn notify_input() {
+    let here = super::smp::current_cpu();
+    let idle = IDLE_CPUS.load(Ordering::Acquire);
+    if idle & (1 << here) == 0 && idle != 0 {
+        super::smp::wake_cpus(1 << idle.trailing_zeros());
+    }
+}
+
 /// Enter with local maskable interrupts disabled. No blocking while held.
 pub extern "C" fn enter() {
     let ticket = NEXT.fetch_add(1, Ordering::Relaxed);

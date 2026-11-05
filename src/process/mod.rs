@@ -42,6 +42,8 @@ pub enum BlockReason {
     Word(u64, Option<u64>),
     /// Process mailbox readiness and optional PIT deadline.
     Mailbox(Option<u64>),
+    /// Process-local readiness mask and optional PIT deadline.
+    Events(u64, Option<u64>),
 }
 /// PID-owned resources, shared by all threads in this address space.
 pub struct Process {
@@ -68,6 +70,7 @@ pub struct Process {
     pub(crate) inbox_len: usize,
     pub(crate) io_peer: Option<(Pid, bool)>,
     pub(crate) io_inbox: VecDeque<u32>,
+    pub(crate) pointer_seen: u64,
 }
 pub(crate) struct UserStack {
     pub(crate) slot: usize,

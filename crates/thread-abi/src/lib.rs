@@ -26,6 +26,17 @@ pub const SYS_THREAD_PAGES: u64 = 106;
 pub const SYS_FRAME_COUNT: u64 = 107;
 /// Wait until the calling process's mailbox is nonempty or a deadline expires.
 pub const SYS_MESSAGE_WAIT: u64 = 108;
+/// Wait for a set of process-local readiness conditions, without consuming data.
+pub const SYS_EVENT_WAIT: u64 = 109;
+/// Scalar readiness bits returned by SYS_EVENT_WAIT.
+pub const EVENT_MAILBOX: u64 = 1;
+pub const EVENT_STDIO_READ: u64 = 2;
+pub const EVENT_STDIO_WRITE: u64 = 4;
+pub const EVENT_KEYBOARD: u64 = 8;
+/// Pointer revision changed since the display owner's last mouse sample.
+pub const EVENT_POINTER: u64 = 16;
+/// Supported readiness mask. Zero and unknown bits are invalid requests.
+pub const EVENT_ALL: u64 = 31;
 /// ABI version.
 pub const VERSION: u32 = 1;
 /// Default worker stack, excluding the guard page.

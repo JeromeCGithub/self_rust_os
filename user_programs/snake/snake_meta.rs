@@ -3,9 +3,9 @@
 // Contains compile-time metadata about the snake user binary layout so the
 // kernel can apply read-only page permissions to the code and rodata pages.
 
-/// Number of bytes from the start of the flat binary that should be mapped
+/// Number of bytes from the linked image base that should be mapped
 /// as read-only (no `WRITABLE` flag). This value is always page-aligned.
 ///
-/// Pages beyond this offset (if any) contain mutable `.data`/\`.bss` sections
+/// Pages beyond this offset (if any) contain mutable data, GOT or BSS sections
 /// and are mapped as writable.
 pub const READONLY_SIZE: usize = 12288;

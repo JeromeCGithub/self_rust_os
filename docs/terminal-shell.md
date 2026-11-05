@@ -6,7 +6,8 @@ Terminal starts `/BIN/PORTAL.BIN`; Portal creates its glass window and launches
 
 | Component | Responsibility |
 | --- | --- |
-| Portal event loop | Window events, keyboard forwarding, output draining and repaint scheduling |
+| Portal renderer thread | Window events, screen snapshots and repaint scheduling |
+| Portal I/O thread | Owns the shell connection, forwards focused input and drains output independently of compositor acknowledgements |
 | Portal screen model | Bounded text rows, wrapping, scrolling, carriage return and backspace |
 | Forge | Prompt, line editing, command parsing, filesystem commands and executable search/launch policy |
 | User SDK | Standard-I/O packet framing, retry/backpressure and owned child cleanup |
@@ -41,16 +42,17 @@ executable names or interpret bytes as shell commands.
 The transport has 4096 scalar packets per direction. Input packets contain one
 byte; output packets contain up to three bytes. A full queue never overwrites
 earlier packets. Portal drains output before sending more input and retains the
-next unsent byte. Child-side blocking reads and full output queues sleep for one
-PIT tick before retrying. Normal console applications keep the original syscalls.
+next unsent byte. Child-side blocking reads and full output queues park on kernel readiness, then
+recheck the operation after a wake. Forge uses the same event mechanism for input;
+only active asynchronous ping retains a bounded deadline. Normal console applications keep the original syscalls.
 
 After a child exits, the host drains buffered output and then observes EOF.
 Portal reaps the shell and exits, allowing the compositor to remove the window.
-Closing Portal explicitly drops the child. If the terminal is killed or exits
+Closing Portal exits its process, stopping the renderer, I/O thread and owned child. If the terminal is killed or exits
 without dropping it, the kernel stops its owned child and reaps that child's PCB
 when the terminal is reaped. Reaping the child independently releases the host's
-endpoint so it can spawn another child. This does not repair existing address-space
-frame or kernel-stack reclamation gaps.
+endpoint so it can spawn another child. Deferred reclamation retains frames and stacks until every CPU has stopped
+executing the retired context and TLB invalidation has completed.
 
 ## Current limits
 
@@ -73,3 +75,12 @@ HTTP/TLS dependencies. The independent CURL application remains available.
 Endpoint queues reserve 16 KiB each only on connected spawning. Allocation
 failure leaves both endpoints unchanged; reaping releases their queue storage.
 The larger bounded output batch preserves HTTP streaming within existing deadlines.
+
+A process-local mutex protects the text model. After the previous frame release,
+the renderer copies the latest text snapshot and releases the mutex before painting.
+The compositor releases the submitted frame after presentation, bounding stale
+frames while the I/O thread continues independently.
+The I/O worker publishes a revision with release ordering and wakes the renderer's
+process-private atomic-word wait. The renderer acquires the revision before reading
+text; its one-tick deadline services window messages and blink animation when idle.
+See [two-terminal latency evidence](parallel-latency-validation.md).

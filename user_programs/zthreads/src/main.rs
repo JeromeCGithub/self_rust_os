@@ -19,6 +19,15 @@ fn until(mut predicate: impl FnMut() -> bool) {
     }
 }
 fn fault_probe(mode: u8) {
+    if mode == 5 {
+        // SAFETY: This isolated regression child deliberately attempts a write
+        // to its read-only text mapping using assembly, without forming a Rust
+        // reference. The parent verifies a Ring 3 page fault and frame recovery.
+        unsafe {
+            core::arch::asm!("mov byte ptr [{address}],0", address=in(reg)0x400000u64, options(nostack));
+        }
+        panic!("Ring 3 unexpectedly modified executable text");
+    }
     if mode == 4 {
         // SAFETY: Deliberately privileged instruction in an isolated Ring 3
         // child. Its GP fault must terminate only this process with status 13.
@@ -120,6 +129,14 @@ fn main() {
         sys::SYSCALL_ERROR
     );
     assert_eq!(raw(abi::SYS_MESSAGE_WAIT, 1, 1, 0), sys::SYSCALL_ERROR);
+    assert_eq!(raw(abi::SYS_EVENT_WAIT, abi::EVENT_MAILBOX, 1, 0), 0);
+    let _ = sys::mouse();
+    assert_eq!(raw(abi::SYS_EVENT_WAIT, abi::EVENT_POINTER, 1, 0), 0);
+    for (mask, timeout, reserved) in [(0, 0, 0), (32, 0, 0), (1, u64::MAX, 0), (1, 0, 1)] {
+        assert_eq!(raw(abi::SYS_EVENT_WAIT, mask, timeout, reserved), sys::SYSCALL_ERROR);
+    }
+    assert_eq!(raw(abi::SYS_EVENT_WAIT, abi::EVENT_STDIO_READ, 0, 0), sys::SYSCALL_ERROR,
+        "unconnected process cannot wait on a foreign endpoint");
     assert_eq!(
         raw(abi::SYS_THREAD_YIELD, 0, 0, 0),
         0,
@@ -332,7 +349,7 @@ fn main() {
     // Freed worker addresses, including cached remote translations, stay absent.
     assert_eq!(raw(1, addresses[0] as u64, 1, 0), sys::SYSCALL_ERROR);
     println!("[threads] lifecycle and invalid arguments PASS");
-    for (mode, code) in [(1u8, 14), (2, 14), (4, 13)] {
+    for (mode, code) in [(1u8, 14), (2, 14), (4, 13), (5, 14)] {
         assert_eq!(sys::write_file("/TMP/THREAD.CFG", &[mode]), Some(1));
         let child = sys::spawn("/BIN/ZTHREADS.BIN").expect("isolated fault child");
         assert_eq!(
@@ -342,7 +359,7 @@ fn main() {
         );
         until(|| thread::allocated_frames() == baseline);
     }
-    println!("[threads] guard and remote unmap isolation PASS");
+    println!("[threads] guard, read-only text and remote unmap isolation PASS");
     assert_eq!(sys::write_file("/TMP/EMPTY.TXT", &[]), Some(0));
     assert_eq!(sys::write_file("/TMP/THREAD.CFG", &[3]), Some(1));
     let mut child = userlib::process::Child::spawn("/BIN/ZTHREADS.BIN").unwrap();

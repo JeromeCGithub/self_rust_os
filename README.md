@@ -88,7 +88,7 @@ or run concurrent writers against one fixture. Screenshots are in
 [docs/screenshots](docs/screenshots).
 
 To rebuild one app, use `./tools/build-user.sh portal` (substitute the crate name).
-The builder regenerates both flat `.bin` files and `_meta.rs` layout metadata.
+The builder regenerates both compact static ELF `.bin` files and `_meta.rs` permission metadata.
 Programs use [userlib](user_programs/userlib/src/lib.rs) and implement `fn main()`;
 the SDK supplies `_start` and the panic handler. Rebuild the disk after an app change.
 

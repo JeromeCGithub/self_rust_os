@@ -87,7 +87,10 @@ exception stacks, local timer and idle stack. IRQs that interrupt kernel code do
 not preempt a lock holder. The fair CPU entry gate spans context handoff; waiting
 CPUs halt with interrupts enabled and receive targeted wake IPIs. Filesystem work
 uses owned buffers and its own service lock outside this gate. Keyboard IRQs queue
-bounded work; ordinary scheduler entry consumes pending wakeups.
+bounded work; ordinary scheduler entry consumes pending wakeups. Readiness syscall
+109 atomically checks and parks on mailbox, connected-I/O, focused-keyboard and
+display-owner pointer events.
+Portal uses a native I/O thread independently of its renderer; app policy stays in Ring 3.
 
 Blocking reads, waits and sleeps affect the calling thread. Thread states are
 `Ready`, `Running`, `Blocked` and `Zombie`; process lifetime is `Live`/`Zombie`.
@@ -100,7 +103,7 @@ Current virtual layout, defined in [kernel constants](../src/userspace/mod.rs):
 
 | Region | Current address |
 | --- | --- |
-| Flat user binary entry | `0x400000` |
+| Linked image base / legacy flat entry | `0x400000` |
 | User stack bottom/top | `0x2c00000` / `0x3000000` (4 MiB) |
 | Application framebuffer/surface | `0x3100000`, `pitch * height` bytes rounded up to pages |
 | Legacy drawing-surface limit | `0x4000000` (exclusive) |
@@ -109,12 +112,15 @@ Current virtual layout, defined in [kernel constants](../src/userspace/mod.rs):
 | GRUB physical-memory offset | `0xffff800000000000` |
 | GRUB kernel framebuffer mapping | `0xffff900000000000` |
 
-These are project-specific mappings, not Linux's process layout. Flat user binaries
-are linked at a fixed address. The builder materializes `.bss` into the flat image;
-metadata records the read-only section boundary. Disk-spawned processes currently
-use a read-only boundary of zero, so metadata generation alone does not establish
-read-only code or W^X enforcement. No ELF loader, `fork`/`exec`, signals, or per-process
-file-descriptor table is exposed by the current syscall interface.
+These are project-specific mappings, not Linux's process layout. The builder writes
+stripped static x86-64 ELF files under the existing `.bin` names. The kernel validates
+all load segments before allocating resources, copies initialized bytes and zeroes
+BSS in private RAM. Byte ranges cannot overlap or reach kernel/stack mappings.
+Distinct segments sharing a page are copied into one frame with the union of their
+writable permissions. Separate code pages are read only; writable data still permits
+execution, so this is not complete W^X or RELRO. Legacy raw flat images remain
+supported for compatibility. No dynamic linker, compiler TLS, `fork`/`exec`, signals,
+or per-process file-descriptor table is exposed. See [latency validation](parallel-latency-validation.md).
 
 ## Display and input ownership
 

@@ -97,6 +97,10 @@ impl Scheduler {
 }
 static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 
+mod events;
+mod placement;
+pub use events::wait_events;
+
 /// Initialize the shared ready queue and physical-frame ownership pool once.
 pub fn init(phys_offset: VirtAddr, mut frame_allocator: RegionFrameAllocator) {
     smp::retain_boot_root();
@@ -169,7 +173,7 @@ fn make_thread(
         joiner: None,
     }
 }
-/// Create an isolated flat-binary process and its initial native thread.
+/// Create an isolated static ELF/legacy flat process and its initial native thread.
 pub fn spawn_process(binary: &[u8], readonly_size: usize) -> Result<Pid, &'static str> {
     x86_64::instructions::interrupts::without_interrupts(|| {
         spawn_process_inner(binary, readonly_size)
@@ -278,6 +282,8 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
     if binary.len() as u64 > userspace::USER_STACK_BOTTOM - userspace::USER_CODE_START {
         return Err("user binary overlaps stack");
     }
+    let image = rustos_exec_image::Image::parse(binary, userspace::USER_CODE_START, userspace::USER_STACK_BOTTOM)
+        .map_err(|_| "invalid or unsupported executable image")?;
     let mut sched = SCHEDULER.lock();
     if sched.processes.iter().flatten().count() + sched.retired.len() >= 128
         || sched.next_pid == u32::MAX
@@ -353,8 +359,8 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
     // (virtual address, valid in current address space). Binary content is
     // copied via physical addresses (phys_offset + frame).
     let map_result = (|| {
-        crate::userspace::process::map_user_binary_via_phys(
-            binary,
+        crate::userspace::process::map_user_image_via_phys(
+            &image,
             readonly_size,
             &mut new_mapper,
             allocator,
@@ -392,12 +398,13 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
         inbox_len: 0,
         io_peer: None,
         io_inbox: VecDeque::new(),
+        pointer_seen: crate::drivers::input::mouse::revision(),
     };
     let thread = make_thread(
         tid,
         pid,
         kernel_stack,
-        userspace::USER_CODE_START,
+        image.entry(),
         userspace::USER_STACK_TOP,
         0,
         u64::MAX,
@@ -601,6 +608,7 @@ fn stop_process_locked(s: &mut Scheduler, pid: Pid, code: u64) {
     smp::reschedule_all();
     crate::net::cleanup(pid);
     stop_owned_child_locked(s, pid);
+    events::wake_locked(s);
     wake_waiters_locked(s, pid);
 }
 /// Process exit stops every sibling before allowing shared resource reclamation.
@@ -718,6 +726,7 @@ pub fn wake_timers() {
     }
     let now = crate::interrupts::ticks();
     let mut s = SCHEDULER.lock();
+    events::wake_locked(&mut s);
     let Scheduler {
         threads,
         ready_queue,
@@ -756,6 +765,7 @@ pub fn block_on_keyboard() -> u64 {
 /// IRQ-safe wakeup: all queue capacity was reserved at scheduler initialization.
 pub fn wake_keyboard_waiters() {
     let mut s = SCHEDULER.lock();
+    events::wake_locked(&mut s);
     let Scheduler {
         threads,
         ready_queue,
@@ -838,6 +848,7 @@ pub fn send_message(target: u32, payload: u32) -> u64 {
     let tail = (proc.inbox_head + proc.inbox_len) % proc.inbox.len();
     proc.inbox[tail] = ((u64::from(sender) + 1) << 32) | u64::from(payload);
     proc.inbox_len += 1;
+    events::wake_locked(&mut sched);
     let Scheduler {
         threads,
         ready_queue,
@@ -878,6 +889,18 @@ pub fn receive_message() -> u64 {
     proc.inbox_head = (proc.inbox_head + 1) % proc.inbox.len();
     proc.inbox_len -= 1;
     message
+}
+
+/// Record the coherent revision returned by this process's mouse sample. A
+/// concurrent IRQ after the sample remains visible to the next readiness wait.
+pub fn observe_pointer(revision: u64) {
+    let mut s = SCHEDULER.lock();
+    if let Some(pid) = s.current_pid() {
+        if let Some(process) = s.processes.get_mut(pid as usize).and_then(Option::as_mut) {
+            process.pointer_seen = revision;
+        }
+    }
+    events::wake_locked(&mut s);
 }
 
 /// Publishes a completed rendering update from the current application.
@@ -1086,6 +1109,7 @@ pub fn stdio(operation: u64, payload: u32) -> u64 {
             .as_mut()
             .expect("validated current endpoint");
         let word = proc.io_inbox.pop_front().expect("nonempty endpoint queue");
+        events::wake_locked(&mut sched);
         return u64::from(word) + 1;
     }
     let Some(target) = sched
@@ -1104,6 +1128,7 @@ pub fn stdio(operation: u64, payload: u32) -> u64 {
                 return 1;
             }
             target.io_inbox.push_back(payload);
+            events::wake_locked(&mut sched);
             0
         }
         2 => 0,
@@ -1151,11 +1176,7 @@ fn reap_connection_locked(sched: &mut Scheduler, pid: Pid) {
             }
         } else {
             // exit/kill has already stopped this owned child.
-            if let Some(slot) = sched.processes.get_mut(peer as usize) {
-                if let Some(process) = slot.take() {
-                    sched.retired.push(process);
-                }
-            }
+            retire_process(sched, peer);
         }
     }
 }
@@ -1203,11 +1224,11 @@ pub fn idle_targets() -> u32 {
     let idle = s.current.iter().enumerate().fold(0u32, |mask, (i, t)| {
         mask | if t.is_none() { 1u32 << i } else { 0 }
     });
-    s.ready_queue
+    placement::wake_targets(idle & !(1 << smp::current_cpu()), s.ready_queue
         .iter()
         .filter_map(|tid| s.thread(*tid))
         .filter(|t| t.state == ThreadState::Ready)
-        .fold(0u32, |mask, t| mask | (t.affinity as u32 & idle))
+        .map(|t| t.affinity as u32))
 }
 
 /// Whether a user entry still belongs to a live, running execution context.

@@ -31,7 +31,7 @@ Unused arguments are zero in SDK wrappers. `ptr` means a user virtual address.
 | 5 | `ls` | path ptr, output ptr, max entries | Entry count; each entry is 11 raw 8.3 filename bytes plus one attribute byte; directory bit `0x10` |
 | 6 | `read_file` | path ptr, output ptr, byte capacity | Bytes read from a file by path |
 | 7 | `write_file` | path ptr, input ptr, byte length | Bytes written; create/overwrite by path |
-| 8 | `spawn` / `Child::spawn` | explicit executable path ptr, flags (0 ordinary, 1 connected stdio), zero | New PID; parent continues; flat binary loaded from FAT32 |
+| 8 | `spawn` / `Child::spawn` | explicit executable path ptr, flags (0 ordinary, 1 connected stdio), zero | New PID; parent continues; static ELF/legacy flat image loaded from FAT32 |
 | 9 | `kill` | PID | Zero on success; killing self does not resume the caller |
 | 10 | `waitpid` | PID | Exit code; blocks while running, reaps zombie when applicable |
 | 11 | `mouse` | none | Packed coordinates/buttons, decoded by SDK to `(x, y, buttons)` |
@@ -83,7 +83,7 @@ stack. Apps use `userlib::sys::FRAMEBUFFER_ADDR`; rebuild all apps with
 `fb_info`/`snapshot` formats are unchanged. Surfaces cover `pitch * height`, including
 padding and the final partial page. User mappings occupy private page tables below
 `0x6000000`; unused gaps are unmapped. The surface region still ends at
-`0x4000000`, where the separate guarded worker-stack arena begins. The kernel heap is 64 MiB to stage flat images and service concurrent allocations.
+`0x4000000`, where the separate guarded worker-stack arena begins. The kernel heap is 64 MiB to stage executables and service concurrent allocations.
 
 Graphical apps must call `present_surface()` after each rendering update. The WM
 queries `surface_status()` and retains cached window pixels until the revision or
@@ -213,7 +213,7 @@ process-control permission limitations still apply. See [terminal architecture](
 
 The [shared threading ABI](../crates/thread-abi/src/lib.rs),
 [kernel dispatch](../src/userspace/syscall.rs), and
-[typed Ring 3 SDK](../user_programs/userlib/src/thread.rs) define operations 96–108.
+[typed Ring 3 SDK](../user_programs/userlib/src/thread.rs) define operations 96–109.
 See [threading](threading.md#syscalls) for the register contracts, shared resources,
 join/detach semantics, atomic-word waits, lifecycle and limits. Existing syscall
 numbers and the `int 0x80` calling convention are unchanged. The custom target
@@ -221,3 +221,19 @@ still has no port of Rust `std`; enable the SDK's `threads` feature instead.
 Mailbox readiness (108) is also exposed as `userlib::sys::wait_message` without
 the threads feature. It parks only the caller, returns 1 for queued data or 0
 on deadline, and leaves consumption and protocol interpretation in userspace.
+
+
+Readiness waiting (109) takes a mask in RDI, timeout PIT ticks in RSI (zero means
+indefinite), and reserved RDX=0. Bits are mailbox=1, connected-I/O read=2,
+connected-I/O write=4, focused keyboard=8, display-owner pointer=16; zero/unknown bits and timeouts exceeding
+`i64::MAX` fail. It returns ready bits, zero on timeout, or `SYSCALL_ERROR`.
+Inspection and parking share the scheduler lock; queue changes wake readers and
+backpressured writers immediately. EOF counts as readiness; I/O reports the final
+status. It does not consume data or expose foreign endpoints/keyboard input.
+`userlib::sys::{Events, wait_events, wait_stdin}` are available without the threads
+feature. Readiness is a hint: competing same-process consumers must recheck I/O.
+
+Pointer readiness compares a complete driver sample's published revision with the
+display owner's last mouse read. Only PID 0 can select this bit. The existing
+mouse syscall's packed return format is unchanged. IRQs publish complete samples
+and send at most one idle-CPU doorbell; ordinary kernel entry performs wakeups.

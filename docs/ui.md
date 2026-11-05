@@ -117,8 +117,8 @@ components, layout and styles. The window protocol and syscall ABI are unchanged
   Canvas operations clip and preserve row padding. Existing XRGB applications
   remain opaque legacy clients.
 - `draw` publishes a completed frame and sends COMMIT. The next draw waits for
-  RELEASE, which the WM sends only after copying the submitted pixels to its own
-  cache. Pixels stay unchanged while a submission is outstanding. This supplies
+  RELEASE, which the WM sends after copying submitted pixels to its cache and
+  presenting the frame. Pixels stay unchanged while a submission is outstanding. This supplies
   coherent snapshots for SDK clients; it is not buffer swapping or display vsync.
   Raw clients remain responsible for following the same protocol.
 - `poll_event` provides local pointer, focus and close events. The WM routes
@@ -173,7 +173,7 @@ or pointers. Sender IDs come from the kernel.
 | `1` CONFIGURE | App → WM | Width bits 0–9, height 10–18, material 19–20; other low bits zero |
 | `2` TITLE | App → WM | Three ASCII bytes in bits 0–23; chunk index 24–27 (0–7); NUL pads a 24-byte title |
 | `3` COMMIT | App → WM | 28-bit frame serial; do not modify the buffer until matching RELEASE |
-| `4` RELEASE | WM → app | Matching frame serial, after snapshot copy |
+| `4` RELEASE | WM → app | Matching frame serial, after snapshot copy and presentation |
 | `5` POINTER | WM → app | Signed 11-bit x in 0–10, signed 11-bit y in 11–21, buttons 22–24; outside coordinates clamp to −1024…1023 |
 | `6` FOCUS | WM → app | Bit 0 is focused |
 | `7` CLOSE | Either | Window close/disconnect request |
@@ -187,8 +187,10 @@ message kinds and syscall numbers are preserved.
 
 Only the first configuration is accepted for a window. Geometry, content, and
 material are fixed for its lifetime. Unknown message kinds are ignored. Configuration
-and frame replies are retried before coalesced pointer motion; pending focus state
-is also retried when a client inbox is full. This is a small project protocol,
+replies precede pointer delivery; frame releases follow presentation. Pending replies
+and focus state are retried when a client inbox is full. Button transitions sampled
+during rendering are queued in order (32 entries); motion coalesces to its latest
+position. Overflow retains the oldest edges and reconciles to the newest state. This is a small project protocol,
 not Wayland compatibility or a general capability/session system.
 
 ## Validation

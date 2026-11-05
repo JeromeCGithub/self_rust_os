@@ -20,6 +20,11 @@ static WAKER: AtomicWaker = AtomicWaker::new();
 // through console locks when interrupted code or another CPU may own them.
 static DROPPED: AtomicUsize = AtomicUsize::new(0);
 
+/// Readiness only: the focused reader still owns decoding and consumption.
+pub fn has_scancodes() -> bool {
+    SCANCODE_QUEUE.try_get().map(|queue| !queue.is_empty()).unwrap_or(false)
+}
+
 pub(crate) fn add_scancode(scancode: u8) {
     if let Ok(queue) = SCANCODE_QUEUE.try_get() {
         if queue.push(scancode).is_err() {
