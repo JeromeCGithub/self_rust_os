@@ -14,6 +14,11 @@ extern "C" {
 
 /// Kernel entry point for user programs.
 ///
+/// # Safety
+/// Called once by the loader with argc <= MAX_VECTOR and aligned argv/envp tables
+/// of readable pointers plus null sentinels. Strings must be bounded,
+/// NUL-terminated UTF-8, private to this process and immutable for its lifetime.
+///
 /// Calls the program's `user_main`. If it returns, issues the exit syscall
 /// directly (inline asm, so LTO cannot reason it away).
 ///
@@ -21,8 +26,14 @@ extern "C" {
 /// (`0x400000`), where the kernel jumps to start the program.
 #[no_mangle]
 #[link_section = ".text.start"]
-pub extern "C" fn _start() -> ! {
+pub unsafe extern "C" fn _start(argc: usize, argv: *const *const u8, envp: *const *const u8) -> ! {
+    // SAFETY: The kernel supplies a bounded, validated argv in this process's
+    // private initial stack. Initialization runs exactly once before main or
+    // any user threads; that stack remains mapped for the process lifetime.
     unsafe {
+        crate::args::initialize(argc, argv);
+        #[cfg(feature = "alloc")]
+        crate::env::initialize(envp);
         user_main();
         // user_main returned: exit(0) via raw syscall.
         asm!(

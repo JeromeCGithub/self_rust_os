@@ -26,7 +26,14 @@ pub(crate) fn map_user_image_via_phys(
 ) -> Result<(), &'static str> {
     if !image.is_elf() {
         let segment = image.segments().next().expect("validated flat image");
-        return map_user_binary_via_phys(segment.bytes, readonly_size, mapper, allocator, phys_offset).map(|_| ());
+        return map_user_binary_via_phys(
+            segment.bytes,
+            readonly_size,
+            mapper,
+            allocator,
+            phys_offset,
+        )
+        .map(|_| ());
     }
     let mut pages = 0;
     let mut mapped_until = 0;
@@ -34,18 +41,25 @@ pub(crate) fn map_user_image_via_phys(
         let start = (segment.address & !4095).max(mapped_until);
         let end = (segment.address + segment.memory_size + 4095) & !4095;
         for address in (start..end).step_by(4096) {
-            let frame = allocator.allocate_frame().ok_or("ELF frame allocation failed")?;
+            let frame = allocator
+                .allocate_frame()
+                .ok_or("ELF frame allocation failed")?;
             let destination = (phys_offset + frame.start_address().as_u64()).as_mut_ptr::<u8>();
             let mut flags = PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE;
             // SAFETY: A fresh exclusively owned, direct-mapped RAM frame is
             // initialized before publication. No application or other CPU can
             // access it; the transaction records its complete ownership.
-            unsafe { core::ptr::write_bytes(destination, 0, 4096); }
+            unsafe {
+                core::ptr::write_bytes(destination, 0, 4096);
+            }
             // Distinct byte ranges may share a page (e.g. rodata and GOT).
             // Map it once, union its writable permission, then copy each file
             // intersection without overwriting another segment with BSS zeros.
             for part in image.segments() {
-                if part.address < address + 4096 && part.address + part.memory_size > address && part.writable {
+                if part.address < address + 4096
+                    && part.address + part.memory_size > address
+                    && part.writable
+                {
                     flags |= PageTableFlags::WRITABLE;
                 }
                 let first = address.max(part.address);
@@ -59,8 +73,10 @@ pub(crate) fn map_user_image_via_phys(
                     // and fresh physical destination are disjoint allocations.
                     unsafe {
                         core::ptr::copy_nonoverlapping(
-                            part.bytes[file_offset..file_offset+count].as_ptr(),
-                            destination.add((first-address) as usize), count);
+                            part.bytes[file_offset..file_offset + count].as_ptr(),
+                            destination.add((first - address) as usize),
+                            count,
+                        );
                     }
                 }
             }
@@ -71,14 +87,23 @@ pub(crate) fn map_user_image_via_phys(
             // used this CR3, and dispatch reloads it before user execution, so
             // there is no cached translation to invalidate during construction.
             unsafe {
-                mapper.map_to(page, frame, flags, allocator).map_err(|_| "ELF mapping failed")?.ignore();
+                mapper
+                    .map_to(page, frame, flags, allocator)
+                    .map_err(|_| "ELF mapping failed")?
+                    .ignore();
             }
             pages += 1;
         }
         mapped_until = end;
     }
-    serial_println!("[kernel] mapped ELF image: {} pages; {} file bytes", pages,
-        image.segments().map(|segment| segment.bytes.len()).sum::<usize>());
+    serial_println!(
+        "[kernel] mapped ELF image: {} pages; {} file bytes",
+        pages,
+        image
+            .segments()
+            .map(|segment| segment.bytes.len())
+            .sum::<usize>()
+    );
     Ok(())
 }
 
@@ -377,4 +402,39 @@ pub(crate) fn map_user_framebuffer(
     );
 
     Ok(frames)
+}
+
+/// Initialize argv through the RAM direct map before the child's page tables
+/// or initial thread are published. All argument bytes are kernel-owned.
+pub(crate) fn prepare_arguments(
+    mapper: &impl x86_64::structures::paging::Translate,
+    phys_offset: VirtAddr,
+    argv: &[&str],
+    envp: &[&str],
+) -> Result<rustos_process_abi::Startup, &'static str> {
+    let size =
+        rustos_process_abi::startup_size(argv, envp).map_err(|_| "invalid startup vectors")?;
+    let mut bytes = alloc::vec::Vec::new();
+    bytes
+        .try_reserve_exact(size)
+        .map_err(|_| "startup staging allocation failed")?;
+    bytes.resize(size, 0);
+    let startup =
+        rustos_process_abi::write_startup(userspace::USER_STACK_TOP, argv, envp, &mut bytes)
+            .map_err(|_| "invalid startup layout")?;
+    for (index, source) in bytes.chunks_exact(4096).enumerate() {
+        let address = userspace::USER_STACK_TOP - size as u64 + index as u64 * 4096;
+        let physical = mapper
+            .translate_addr(VirtAddr::new(address))
+            .ok_or("startup page missing")?;
+        let destination = phys_offset + physical.as_u64();
+        // SAFETY: Each destination is a fresh private aligned stack frame in
+        // the unpublished transaction-owned child. Exactly one initialized page
+        // is copied from distinct owned staging RAM through the direct map.
+        // No user/CPU can access the child yet; failure rolls back all frames.
+        unsafe {
+            core::ptr::copy_nonoverlapping(source.as_ptr(), destination.as_mut_ptr::<u8>(), 4096);
+        }
+    }
+    Ok(startup)
 }

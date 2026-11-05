@@ -56,8 +56,8 @@ executing the retired context and TLB invalidation has completed.
 
 ## Current limits
 
-This is a small duplex standard-I/O connection, not a POSIX PTY or file-descriptor
-implementation. There is no ANSI escape parser, job control, signal delivery,
+This is a small duplex standard-I/O connection, not a POSIX PTY. Regular-file
+descriptors use a separate filesystem API. There is no ANSI escape parser, job control, signal delivery,
 terminal-size negotiation, stderr separation or general pipeline support.
 The screen supports printable ASCII, newlines, carriage return and backspace.
 Forge preserves main's 512-byte input limit, asynchronous ping and HTTP/HTTPS curl commands. Standalone Forge retains its existing
@@ -69,7 +69,7 @@ values and [testing](testing.md) for the existing execution matrix.
 
 See [validation evidence](terminal-validation.md) for red/green checks and remaining gaps.
 
-Networking commands and the TLS-enabled heap live in Forge; Portal has no
+Networking commands and HTTPS libraries live in Forge; Portal has no
 HTTP/TLS dependencies. The independent CURL application remains available.
 
 Endpoint queues reserve 16 KiB each only on connected spawning. Allocation
@@ -84,3 +84,69 @@ The I/O worker publishes a revision with release ordering and wakes the renderer
 process-private atomic-word wait. The renderer acquires the revision before reading
 text; its one-tick deadline services window messages and blink animation when idle.
 See [two-terminal latency evidence](parallel-latency-validation.md).
+
+## Filesystem commands and medit
+
+All commands below run inside the Forge shell in Ring 3. **`cd` is a shell
+builtin**, so it changes Forge's working directory; Portal only forwards input
+and renders output. The kernel owns per-process cwd and file descriptors, checks
+paths and mappings, and performs FAT32 operations. It does not parse commands.
+
+| Command | Behavior |
+| --- | --- |
+| `cd [path]` | Change Forge cwd; no argument selects `/`. Failed changes preserve cwd. Supports absolute/relative paths, `.` and `..`. |
+| `pwd` | Print the actual canonical cwd (uppercase FAT32 spelling). |
+| `ls [path]` | List a directory; no argument selects cwd. |
+| `mkdir path` | Create relative/absolute directories with missing parents (existing `mkdir -p` behavior). |
+| `cat file` | Stream bytes through an owned descriptor until EOF; no former 1 KiB file limit. Adds a final newline. |
+| `write file text` | Replace a file relative to cwd or by absolute path. |
+| `medit file` | Open the basic modal text editor within the shell's standard-I/O connection. |
+
+`medit` supports ASCII text, LF newlines and stored tabs, up to 16 KiB. Opening
+a missing file creates an empty file. It rejects directories, unreadable files,
+non-ASCII/CRLF content and oversized files. New files remain empty on disk until
+saved; quitting without saving leaves that initially created empty file.
+
+Start in normal mode: `i` inserts before the cursor, `a` inserts after it, `h/j/k/l`
+move, `0`/`$` select line start/end, and `x` deletes. Insert mode accepts text,
+Enter and Backspace; Escape returns to normal mode. `:w` saves, `:q` quits only
+when clean, `:wq` saves then quits, and `:q!` discards edits. Failed saves retain
+the edited buffer. There is no undo, search, selection, syntax highlighting or
+arrow-key protocol. Tabs display as one space and retain their stored byte.
+
+The terminal has no ANSI parser. The editor redraws a bounded scrolling page,
+shows `|` at the cursor, and displays its mode and dirty marker. This works through
+Portal and standalone Forge using the same shell logic. No command/editor code
+was added to Portal. See the [ABI](syscalls.md#regular-files-and-working-directories),
+[regression evidence](file-commands-validation.md) and
+[editor screenshot](screenshots/desktop-medit.png).
+
+## Launching programs with arguments
+
+Forge parses executable arguments in Ring 3; Portal only forwards bytes. For
+example, `./hello alpha "two words" ""` launches `/bin/HELLO.BIN` with four argv
+entries: executable path, `alpha`, `two words`, and an empty string. Single/double
+quotes group text; backslash escapes the next character outside single quotes.
+Unterminated quotes/escapes and more than 32 words fail without launching a child.
+There is no variable expansion, globbing or command substitution. The existing
+512-byte input limit remains.
+
+The `./name` shorthand still searches `/bin/NAME.BIN`. A name containing a slash
+or an extension is an explicit path resolved against cwd; absolute executable
+paths are also accepted. Spawn and argument passing use the typed SDK; kernel
+code does not tokenize a command or search for executables. See
+[the startup ABI](syscalls.md#program-arguments-and-entry) and
+[validation evidence](arguments-validation.md).
+
+## Environment and long paths
+
+Forge owns `export KEY=value`, `unset KEY`, and `env`. Quotes allow values such as
+`export TEST_ENV="hello world"`. The SDK copies an inherited environment into each
+child; subsequent parent/child mutations are independent. `spawn_with_env` selects
+an explicit environment. Portal forwards input and displays output; `cd`, parsing,
+and environment policy remain shell responsibilities.
+
+`cd`, `mkdir`, `ls`, `cat` and `medit` accept a quoted single path, including spaces.
+`ls` uses the full-name directory ABI and displays VFAT long names. UTF-8 paths
+must be shorter than 4096 bytes; a component allows up to 255 UTF-16 code units.
+Short-name aliases remain accessible. See [current limits and evidence](capabilities-validation.md).

@@ -110,6 +110,8 @@ fn ownership_and_wait_boundaries() {
     let mut context = scheduler::schedule(0);
     let parent = scheduler::current_tid().unwrap();
     let baseline = scheduler::frame_count();
+    argument_mapping_checks(&mut context);
+    heap_mapping_checks(&mut context);
     elf_mapping_checks(&mut context);
     let child = scheduler::spawn_process(&[0xc3], 0).unwrap();
     assert_eq!(scheduler::wait_message(u64::MAX), u64::MAX - 1);
@@ -194,80 +196,206 @@ fn ownership_and_wait_boundaries() {
     );
 }
 
+fn heap_mapping_checks(context: &mut u64) {
+    use self_rust_os::userspace::usercopy;
+    let parent = scheduler::current_pid().unwrap();
+    let baseline = scheduler::frame_count();
+    for _ in 0..3 {
+        let child = scheduler::spawn_process(&[0xc3], 0).unwrap();
+        activate_pid(child, context);
+        let base = rustos_thread_abi::HEAP_BASE;
+        assert_eq!(scheduler::program_break(0), base);
+        assert_eq!(scheduler::program_break(base + 8192), base + 8192);
+        let mut zero = [1; 16];
+        assert!(usercopy::from_user(base, &mut zero));
+        assert_eq!(zero, [0; 16]);
+        assert!(usercopy::to_user(base, &[42; 16]));
+        assert_eq!(scheduler::program_break(base - 1), base + 8192);
+        assert_eq!(scheduler::program_break(base), base);
+        assert!(!usercopy::validate(base, 1, true));
+        assert_eq!(scheduler::program_break(base + 8192), base + 8192);
+        assert!(usercopy::from_user(base, &mut zero));
+        assert_eq!(zero, [0; 16]);
+        activate_pid(parent, context);
+        assert!(!usercopy::validate(base, 1, false));
+        scheduler::kill(child).unwrap();
+        assert_eq!(scheduler::waitpid(child), 9);
+        scheduler::reap_retired();
+        assert_eq!(scheduler::frame_count(), baseline);
+    }
+}
+
+// Verify physical child ownership and the actual saved entry registers, then
+// reap repeatedly to cover startup-page staging and frame/heap cleanup.
+fn argument_mapping_checks(context: &mut u64) {
+    use self_rust_os::userspace::usercopy;
+    let parent = scheduler::current_pid().unwrap();
+    let baseline = scheduler::frame_count();
+    let heap = allocator::allocated_bytes();
+    let arguments =
+        rustos_process_abi::Arguments::new(&["probe", "", "two words", "café"]).unwrap();
+    for _ in 0..3 {
+        let child = scheduler::spawn_process_with_args(&[0xc3], 0, &arguments).unwrap();
+        activate_pid(child, context);
+        // SAFETY: The scheduler selected this live child's canonical frame;
+        // this single-CPU harness does not concurrently resume user code.
+        let frame = unsafe { &*(*context as *const scheduler::SavedContext) };
+        assert_eq!(frame.rdi, 4);
+        assert_eq!(frame.rsp % 16, 8);
+        assert_eq!(
+            frame.rsi,
+            self_rust_os::userspace::USER_STACK_TOP - 4096 + 8
+        );
+        let mut pointer_bytes = [0; 40];
+        assert!(usercopy::from_user(frame.rsi, &mut pointer_bytes));
+        for (index, expected) in ["probe", "", "two words", "café"].iter().enumerate() {
+            let pointer =
+                u64::from_le_bytes(pointer_bytes[index * 8..index * 8 + 8].try_into().unwrap());
+            assert!((self_rust_os::userspace::USER_STACK_TOP - 4096
+                ..self_rust_os::userspace::USER_STACK_TOP)
+                .contains(&pointer));
+            let mut string = [255; 16];
+            assert!(usercopy::from_user(
+                pointer,
+                &mut string[..expected.len() + 1]
+            ));
+            assert_eq!(&string[..expected.len()], expected.as_bytes());
+            assert_eq!(string[expected.len()], 0);
+        }
+        assert_eq!(&pointer_bytes[32..], &[0; 8]);
+        // User virtual addresses coincide, but the initial process's argument
+        // page remains empty and cannot alias the newly populated child page.
+        activate_pid(parent, context);
+        let mut bytes = [255; 8];
+        assert!(usercopy::from_user(
+            self_rust_os::userspace::USER_STACK_TOP - 4096,
+            &mut bytes
+        ));
+        assert_eq!(bytes, [0; 8]);
+        scheduler::kill(child).unwrap();
+        assert_eq!(scheduler::waitpid(child), 9);
+        scheduler::reap_retired();
+        assert_eq!(scheduler::frame_count(), baseline);
+    }
+    assert_eq!(
+        allocator::allocated_bytes(),
+        heap,
+        "argument staging and process metadata must be reclaimed"
+    );
+}
+
 fn elf_mapping_checks(context: &mut u64) {
     use self_rust_os::userspace::usercopy;
     let parent = scheduler::current_pid().unwrap();
     let baseline = scheduler::frame_count();
     let mut bytes = alloc::vec![0u8; 0x2004];
     bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
-    for (offset,value) in [(16,2u16),(18,62),(52,64),(54,56),(56,2)] {
-        bytes[offset..offset+2].copy_from_slice(&value.to_le_bytes());
+    for (offset, value) in [(16, 2u16), (18, 62), (52, 64), (54, 56), (56, 2)] {
+        bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
     }
     bytes[20..24].copy_from_slice(&1u32.to_le_bytes());
     bytes[24..32].copy_from_slice(&0x400001u64.to_le_bytes());
     bytes[32..40].copy_from_slice(&64u64.to_le_bytes());
-    for (i,address,flags,memory) in [(0,0x400000u64,5u32,4u64),(1,0x401000,6,0x5001)] {
-        let p=64+i*56;
-        bytes[p..p+4].copy_from_slice(&1u32.to_le_bytes());
-        bytes[p+4..p+8].copy_from_slice(&flags.to_le_bytes());
-        for (field,value) in [(8,(i as u64+1)*0x1000),(16,address),(32,4),(40,memory),(48,4096)] {
-            bytes[p+field..p+field+8].copy_from_slice(&value.to_le_bytes());
+    for (i, address, flags, memory) in [(0, 0x400000u64, 5u32, 4u64), (1, 0x401000, 6, 0x5001)] {
+        let p = 64 + i * 56;
+        bytes[p..p + 4].copy_from_slice(&1u32.to_le_bytes());
+        bytes[p + 4..p + 8].copy_from_slice(&flags.to_le_bytes());
+        for (field, value) in [
+            (8, (i as u64 + 1) * 0x1000),
+            (16, address),
+            (32, 4),
+            (40, memory),
+            (48, 4096),
+        ] {
+            bytes[p + field..p + field + 8].copy_from_slice(&value.to_le_bytes());
         }
     }
-    bytes[0x1000..0x1004].copy_from_slice(&[0x90,0xc3,0x90,0x90]);
+    bytes[0x1000..0x1004].copy_from_slice(&[0x90, 0xc3, 0x90, 0x90]);
     bytes[0x2000..].copy_from_slice(b"data");
     for _ in 0..3 {
-        let child=scheduler::spawn_process(&bytes,0).unwrap();
-        activate_pid(child,context);
-        let mut code=[0;4];
-        assert!(usercopy::from_user(0x400000,&mut code));
-        assert_eq!(code,[0x90,0xc3,0x90,0x90],"ELF headers are not application instructions");
-        assert!(!usercopy::validate(0x400000,4,true),"ELF code is read only");
-        assert!(usercopy::validate(0x401000,0x6000,true));
-        let mut data=[0;4];
-        assert!(usercopy::from_user(0x401000,&mut data));
-        assert_eq!(&data,b"data");
-        let mut zero=[0xa5;4096];
-        assert!(usercopy::from_user(0x406000,&mut zero));
-        assert_eq!(zero,[0;4096],"zero fill includes padding on the final BSS page");
-        assert!(!usercopy::validate(0x407000,1,false),"unmapped segment guard");
+        let child = scheduler::spawn_process(&bytes, 0).unwrap();
+        activate_pid(child, context);
+        let mut code = [0; 4];
+        assert!(usercopy::from_user(0x400000, &mut code));
+        assert_eq!(
+            code,
+            [0x90, 0xc3, 0x90, 0x90],
+            "ELF headers are not application instructions"
+        );
+        assert!(
+            !usercopy::validate(0x400000, 4, true),
+            "ELF code is read only"
+        );
+        assert!(usercopy::validate(0x401000, 0x6000, true));
+        let mut data = [0; 4];
+        assert!(usercopy::from_user(0x401000, &mut data));
+        assert_eq!(&data, b"data");
+        let mut zero = [0xa5; 4096];
+        assert!(usercopy::from_user(0x406000, &mut zero));
+        assert_eq!(
+            zero, [0; 4096],
+            "zero fill includes padding on the final BSS page"
+        );
+        assert!(
+            !usercopy::validate(0x407000, 1, false),
+            "unmapped segment guard"
+        );
         // SAFETY: activate selected the child's owned initialized kernel frame.
-        assert_eq!(unsafe { (*(*context as *const scheduler::SavedContext)).rip },0x400001);
-        assert!(usercopy::to_user(0x401000,b"edit"));
-        activate_pid(parent,context);
-        assert!(!usercopy::validate(0x401000,1,false),"child mapping cannot alter its parent");
+        assert_eq!(
+            unsafe { (*(*context as *const scheduler::SavedContext)).rip },
+            0x400001
+        );
+        assert!(usercopy::to_user(0x401000, b"edit"));
+        activate_pid(parent, context);
+        assert!(
+            !usercopy::validate(0x401000, 1, false),
+            "child mapping cannot alter its parent"
+        );
         scheduler::kill(child).unwrap();
-        assert_eq!(scheduler::waitpid(child),9);
+        assert_eq!(scheduler::waitpid(child), 9);
         scheduler::reap_retired();
-        assert_eq!(scheduler::frame_count(),baseline);
+        assert_eq!(scheduler::frame_count(), baseline);
     }
-    let mut shared=bytes.clone();
-    shared.resize(0x200c,0);
+    let mut shared = bytes.clone();
+    shared.resize(0x200c, 0);
     shared[56..58].copy_from_slice(&3u16.to_le_bytes());
-    shared[64+56+4..64+56+8].copy_from_slice(&4u32.to_le_bytes());
-    shared[64+56+40..64+56+48].copy_from_slice(&4u64.to_le_bytes());
-    let p=64+2*56;
-    shared[p..p+4].copy_from_slice(&1u32.to_le_bytes());
-    shared[p+4..p+8].copy_from_slice(&6u32.to_le_bytes());
-    for (field,value) in [(8,0x2004u64),(16,0x401004),(32,8),(40,8),(48,4096)] {
-        shared[p+field..p+field+8].copy_from_slice(&value.to_le_bytes());
+    shared[64 + 56 + 4..64 + 56 + 8].copy_from_slice(&4u32.to_le_bytes());
+    shared[64 + 56 + 40..64 + 56 + 48].copy_from_slice(&4u64.to_le_bytes());
+    let p = 64 + 2 * 56;
+    shared[p..p + 4].copy_from_slice(&1u32.to_le_bytes());
+    shared[p + 4..p + 8].copy_from_slice(&6u32.to_le_bytes());
+    for (field, value) in [(8, 0x2004u64), (16, 0x401004), (32, 8), (40, 8), (48, 4096)] {
+        shared[p + field..p + field + 8].copy_from_slice(&value.to_le_bytes());
     }
     shared[0x2004..].copy_from_slice(b"got-data");
-    let child=scheduler::spawn_process(&shared,0).unwrap();
-    activate_pid(child,context);
-    let mut combined=[0;12];
-    assert!(usercopy::from_user(0x401000,&mut combined));
-    assert_eq!(&combined,b"datagot-data","shared page preserves both segment payloads");
-    assert!(usercopy::validate(0x401000,4096,true),"shared GOT page unions writable permission");
-    assert!(!usercopy::validate(0x400000,1,true),"separate code page stays read only");
-    activate_pid(parent,context);
+    let child = scheduler::spawn_process(&shared, 0).unwrap();
+    activate_pid(child, context);
+    let mut combined = [0; 12];
+    assert!(usercopy::from_user(0x401000, &mut combined));
+    assert_eq!(
+        &combined, b"datagot-data",
+        "shared page preserves both segment payloads"
+    );
+    assert!(
+        usercopy::validate(0x401000, 4096, true),
+        "shared GOT page unions writable permission"
+    );
+    assert!(
+        !usercopy::validate(0x400000, 1, true),
+        "separate code page stays read only"
+    );
+    activate_pid(parent, context);
     scheduler::kill(child).unwrap();
-    assert_eq!(scheduler::waitpid(child),9);
+    assert_eq!(scheduler::waitpid(child), 9);
     scheduler::reap_retired();
-    assert_eq!(scheduler::frame_count(),baseline);
-    bytes[64+40..64+48].copy_from_slice(&u64::MAX.to_le_bytes());
-    assert!(scheduler::spawn_process(&bytes,0).is_err());
-    assert_eq!(scheduler::frame_count(),baseline,"malformed image must allocate no frames");
+    assert_eq!(scheduler::frame_count(), baseline);
+    bytes[64 + 40..64 + 48].copy_from_slice(&u64::MAX.to_le_bytes());
+    assert!(scheduler::spawn_process(&bytes, 0).is_err());
+    assert_eq!(
+        scheduler::frame_count(),
+        baseline,
+        "malformed image must allocate no frames"
+    );
 }
 fn activate_pid(pid: u32, context: &mut u64) {
     for _ in 0..64 {

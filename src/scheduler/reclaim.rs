@@ -28,6 +28,8 @@ pub fn reap_retired() {
             slot,
             user_base: base,
             frames,
+            tls_base,
+            tls_frames,
         }) = t.user_stack
         {
             let root = s
@@ -45,6 +47,15 @@ pub fn reap_retired() {
                 let table =
                     unsafe { &mut *((offset + root.start_address().as_u64()) as *mut PageTable) };
                 let mut mapper = unsafe { OffsetPageTable::new(table, VirtAddr::new(offset)) };
+                for (i, frame) in tls_frames.iter().enumerate() {
+                    let (unmapped, flush) = mapper
+                        .unmap(Page::<Size4KiB>::containing_address(VirtAddr::new(
+                            tls_base + i as u64 * 4096,
+                        )))
+                        .expect("owned TLS mapping");
+                    assert_eq!(*frame, unmapped);
+                    flush.ignore();
+                }
                 for (i, frame) in frames.iter().enumerate() {
                     let (unmapped, flush) = mapper
                         .unmap(Page::<Size4KiB>::containing_address(VirtAddr::new(
@@ -65,7 +76,7 @@ pub fn reap_retired() {
             for waiter in threads.iter_mut().flatten() {
                 if waiter.pid == t.pid
                     && waiter.state == ThreadState::Blocked
-                    && matches!(waiter.reason,BlockReason::Word(address,_) if address>=base && address<end)
+                    && matches!(waiter.reason,BlockReason::Word(address,_) if (address>=base && address<end)||(address>=tls_base&&address<tls_base+tls_frames.len() as u64*4096))
                 {
                     set_return(waiter, ERROR);
                     waiter.state = ThreadState::Ready;
@@ -74,7 +85,7 @@ pub fn reap_retired() {
                 }
             }
             smp::shootdown();
-            for frame in frames {
+            for frame in frames.into_iter().chain(tls_frames) {
                 // SAFETY: Thread is off every CPU, its leaves were removed,
                 // all remote TLBs acknowledged, and this ledger is the sole owner.
                 unsafe {

@@ -187,11 +187,30 @@ fn surface_pages_cover_pitch_and_reject_invalid_geometry() {
 
 #[test_case]
 fn oversized_image_is_rejected_before_allocating_process_resources() {
-    let capacity = (userspace::USER_STACK_BOTTOM - userspace::USER_CODE_START) as usize;
-    let image = alloc::vec![0u8; capacity + 1];
+    // A compact ELF can describe an oversized mapping without requiring a
+    // multi-gigabyte host/kernel allocation just to exercise the loader bound.
+    let mut image = alloc::vec![0u8;0x1001];
+    image[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+    for (at, value) in [(16, 2u16), (18, 62), (52, 64), (54, 56), (56, 1)] {
+        image[at..at + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    image[20..24].copy_from_slice(&1u32.to_le_bytes());
+    image[24..32].copy_from_slice(&userspace::USER_CODE_START.to_le_bytes());
+    image[32..40].copy_from_slice(&64u64.to_le_bytes());
+    image[64..68].copy_from_slice(&1u32.to_le_bytes());
+    image[68..72].copy_from_slice(&5u32.to_le_bytes());
+    for (at, value) in [
+        (72, 0x1000u64),
+        (80, userspace::USER_CODE_START),
+        (96, 1),
+        (104, rustos_thread_abi::IMAGE_END),
+        (112, 4096),
+    ] {
+        image[at..at + 8].copy_from_slice(&value.to_le_bytes());
+    }
     assert_eq!(
         self_rust_os::scheduler::spawn_process(&image, 0),
-        Err("user binary overlaps stack")
+        Err("invalid or unsupported executable image")
     );
 }
 

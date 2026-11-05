@@ -29,9 +29,13 @@ as well. Use this exact filename so coding agents discover it automatically.
   automated checks; it does not replace them.
 - Documentation-only changes require documentation checks; changes to tooling
   require executable regression tests first. Do not invent runtime tests for prose.
-- Run **all tests applicable to every changed subsystem and its integration paths**
-  before reporting completion, following the matrix in [testing](docs/testing.md).
-  Compilation, `--no-run`, a screenshot, or a log message alone is not a test pass.
+- Run tests that can detect regressions in the changed behavior and its direct
+  integration paths. Use the matrix in [testing](docs/testing.md) to select useful
+  checks, not as a requirement to run every suite for every edit. Explain the scope
+  of the selected tests. After a check passes, rerun it only when subsequent edits,
+  a failure, or an unresolved concern could affect its result; do not repeatedly
+  run unrelated or already-passing suites. Compilation, `--no-run`, a screenshot,
+  or a log message alone is not a test pass.
 - Establish the baseline for failing suites. Never delete, skip, weaken, change an
   expected value, increase a timeout, or suppress a failure merely to obtain green.
   Existing failures must remain visible with reproduction details. Fix failures

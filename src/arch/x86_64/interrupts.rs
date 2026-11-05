@@ -70,6 +70,9 @@ lazy_static! {
         // SAFETY: Architecture entries save/restore the canonical frame.
         // NMI has a CPU-private IST and never enters the ordinary kernel gate.
         unsafe {
+            idt.invalid_opcode.set_handler_addr(VirtAddr::new(crate::arch::x86_64::entry::invalid_opcode_entry as *const () as u64));
+            idt.x87_floating_point.set_handler_addr(VirtAddr::new(crate::arch::x86_64::entry::floating_point_entry as *const () as u64));
+            idt.simd_floating_point.set_handler_addr(VirtAddr::new(crate::arch::x86_64::entry::simd_exception_entry as *const () as u64));
             idt.page_fault.set_handler_addr(VirtAddr::new(crate::arch::x86_64::entry::page_fault_entry as *const () as u64));
             idt.general_protection_fault.set_handler_addr(VirtAddr::new(crate::arch::x86_64::entry::general_protection_entry as *const () as u64));
             idt[0x40].set_handler_addr(VirtAddr::new(crate::arch::x86_64::entry::local_timer_entry as *const () as u64));

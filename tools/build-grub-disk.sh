@@ -104,10 +104,7 @@ printf 'Welcome to self_rust_os!\r\nThis file lives on the FAT32 boot disk.\r\nT
 echo "[grub-disk] Disk image ready: ${IMG}"
 ls -la "${IMG}"
 
-# Desktop assets and every available user application.
+# Desktop assets and applications; host-driven test-only probes stay private.
 mmd -i "${IMG}@@${PART_OFFSET}" ::/BIN ::/ETC ::/HOME ::/TMP
-for binary in "${ROOT}"/user_programs/*/*.bin; do
-    base="$(basename "${binary}")"
-    mcopy -i "${IMG}@@${PART_OFFSET}" "${binary}" "::/BIN/${base^^}"
-done
+python3 "${ROOT}/tools/install_user_programs.py" "${ROOT}/user_programs" "${IMG}@@${PART_OFFSET}"
 mcopy -i "${IMG}@@${PART_OFFSET}" "${ROOT}/user_programs/de/wallpaper.ppm" ::/ETC/WALL.PPM

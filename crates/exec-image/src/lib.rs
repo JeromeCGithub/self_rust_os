@@ -15,6 +15,13 @@ pub struct Segment<'a> {
     pub executable: bool,
 }
 
+/// Static initial-exec/local-exec TLS template, copied privately per thread.
+#[derive(Clone, Copy, Debug)]
+pub struct Tls<'a> {
+    pub bytes: &'a [u8],
+    pub memory_size: u64,
+    pub alignment: u64,
+}
 /// Validated executable layout; segment bytes borrow immutable kernel storage.
 #[derive(Clone, Copy, Debug)]
 pub struct Image<'a> {
@@ -72,12 +79,39 @@ impl<'a> Image<'a> {
         };
         let mut previous_end = base;
         let mut entry_found = false;
+        let mut tls_seen = false;
         for index in 0..count {
             let p = offset + index * 56;
             match u32_at(bytes, p)? {
-                // Runtime relocation, interpreter and compiler TLS are not
-                // implemented. Reject rather than partially load such a file.
-                2 | 3 | 7 => return Err(InvalidImage),
+                // Runtime relocation and interpreters are not implemented.
+                // Reject rather than partially load such a file.
+                2 | 3 => return Err(InvalidImage),
+                7 => {
+                    if tls_seen {
+                        return Err(InvalidImage);
+                    }
+                    tls_seen = true;
+                    let template = image.elf_segment(p)?;
+                    let alignment = u64_at(bytes, p + 48)?.max(1);
+                    if u32_at(bytes, p + 4)? & !7 != 0
+                        || u32_at(bytes, p + 4)? & 4 == 0
+                        || template.bytes.len() as u64 > template.memory_size
+                        || template.memory_size > 1024 * 1024
+                        || !alignment.is_power_of_two()
+                        || alignment > 4096
+                        || template.address % alignment != 0
+                        || template.address < base
+                        || template
+                            .address
+                            .checked_add(template.memory_size)
+                            .filter(|&end| end <= limit)
+                            .is_none()
+                        || u64_at(bytes, p + 8)? % alignment != 0
+                    {
+                        return Err(InvalidImage);
+                    }
+                    continue;
+                }
                 1 => {}
                 _ => continue,
             }
@@ -115,6 +149,22 @@ impl<'a> Image<'a> {
             return Err(InvalidImage);
         }
         Ok(image)
+    }
+    /// Static TLS template, if this image declares PT_TLS.
+    pub fn tls(&self) -> Option<Tls<'a>> {
+        let (offset, count) = self.headers?;
+        for index in 0..count {
+            let p = offset + index * 56;
+            if u32_at(self.bytes, p).ok()? == 7 {
+                let segment = self.elf_segment(p).ok()?;
+                return Some(Tls {
+                    bytes: segment.bytes,
+                    memory_size: segment.memory_size,
+                    alignment: u64_at(self.bytes, p + 48).ok()?.max(1),
+                });
+            }
+        }
+        None
     }
     pub fn entry(&self) -> u64 {
         self.entry
@@ -243,6 +293,41 @@ mod tests {
         b[0x1000..0x1004].copy_from_slice(&[0x90, 0x90, 0xeb, 0xfe]);
         b[0x2000..].copy_from_slice(b"data");
         b
+    }
+    #[test]
+    fn static_tls_template_is_validated_without_requiring_a_dynamic_linker() {
+        let mut bytes = executable();
+        put16(&mut bytes, 56, 3);
+        let p = 64 + 2 * 56;
+        put32(&mut bytes, p, 7);
+        put32(&mut bytes, p + 4, 4);
+        for (field, value) in [
+            (8, 0x2000u64),
+            (16, BASE + 4096),
+            (32, 4),
+            (40, 32),
+            (48, 16),
+        ] {
+            put64(&mut bytes, p + field, value);
+        }
+        let image = Image::parse(&bytes, BASE, LIMIT).unwrap();
+        let tls = image.tls().unwrap();
+        assert_eq!(tls.bytes, b"data");
+        assert_eq!(tls.memory_size, 32);
+        assert_eq!(tls.alignment, 16);
+        let original = bytes.clone();
+        for (field, value) in [
+            (32, 33),
+            (40, 2),
+            (40, 2 * 1024 * 1024),
+            (48, 3),
+            (48, 8192),
+            (8, u64::MAX),
+        ] {
+            let mut bad = original.clone();
+            put64(&mut bad, p + field, value);
+            assert!(Image::parse(&bad, BASE, LIMIT).is_err());
+        }
     }
     #[test]
     fn accepts_compact_static_elf_with_large_zero_fill() {

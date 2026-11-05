@@ -20,8 +20,15 @@ integration paths, including error paths, not an unsupported claim of exhaustive
 
 ## Change-to-test matrix
 
-Run the union of rows matching the change. A blocked or failing required test remains
-an explicit verification gap; do not replace it with `--no-run` and claim completion.
+Select tests that can expose a regression in the actual behavior changed and its
+direct integration paths. The rows below identify relevant coverage, not a command
+to run every listed suite whenever a shared file changes. Explain why the selected
+checks are useful. After they pass, rerun only checks affected by subsequent edits,
+new failures or unresolved concerns. Do not repeatedly run unrelated suites or
+repeat a broad pass after documentation or test-only edits.
+
+A blocked or failing check needed to establish the requested behavior remains an
+explicit verification gap; do not replace it with `--no-run` and claim completion.
 
 | Changed area | Required verification |
 | --- | --- |
@@ -223,3 +230,81 @@ cargo +nightly-2025-01-30 test --manifest-path /path/to/self_rust_os/crates/exec
 ```
 The kernel `threads` integration verifies actual segment bytes, BSS/padding zeros,
 entry address, shared GOT pages, permissions, isolation and repeated frame recovery.
+
+## File commands and editor
+
+Build a disposable disk, then run the real Ring 3 descriptor probe and the full
+desktop interaction suite. The probe replaces only the initial executable in its
+private disk copy; it exercises actual `int 0x80` calls without GUI timing.
+
+```bash
+./tools/build-grub-disk.sh target/file-commands.img
+RUSTOS_TEST_DISK=target/file-commands.img python3 -B e2e/file_io.py
+RUSTOS_TEST_DISK=target/file-commands.img RUSTOS_CPUS=8 python3 -B e2e/file_io.py
+RUSTOS_TEST_DISK=target/file-commands.img RUSTOS_CPUS=32 python3 -B e2e/file_io.py
+RUSTOS_TEST_DISK=target/file-commands.img python3 -B e2e/desktop.py
+rustc --edition=2021 --test user_programs/forge/src/editor.rs -o /tmp/rustos-editor-tests
+/tmp/rustos-editor-tests
+```
+
+The `.test-only` probe is built with the apps but excluded from ordinary desktop
+disks; its runner installs it only in a private image. The descriptor probe covers
+independent open cursors, access modes, seek/EOF/gaps,
+invalid pointers/lengths, cwd inheritance/isolation, quotas with no create/truncate
+side effects, descriptor reuse, exit/kill cleanup, streaming and exactly-once
+record delivery through a shared descriptor from eight native workers. The desktop
+suite exercises Forge's cd/mkdir/write/cat through Portal, saves and reopens an
+editor file, rejects a dirty quit, discards edits, and reads a file larger than
+1 KiB. Editor model cases cover cursor boundaries and the 16 KiB input limit.
+See [executed evidence and limits](file-commands-validation.md).
+
+## Program arguments
+
+For argument ABI/runtime or shell argument parsing, select these focused checks:
+
+```bash
+# Run this host Cargo test from /tmp, outside the root bare-metal configuration.
+cargo +nightly-2025-01-30 test --manifest-path /path/to/self_rust_os/crates/process-abi/Cargo.toml --target x86_64-unknown-linux-gnu
+rustc --edition=2021 --test user_programs/forge/src/command.rs -o /tmp/rustos-command-tests
+/tmp/rustos-command-tests
+cargo test --test threads --test stdio --test display_mapping
+./tools/build-grub-disk.sh target/arguments.img
+RUSTOS_TEST_DISK=target/arguments.img python3 -B e2e/arguments.py
+RUSTOS_TEST_DISK=target/arguments.img RUSTOS_CPUS=8 python3 -B e2e/arguments.py
+RUSTOS_TEST_DISK=target/arguments.img RUSTOS_DESKTOP_CASE=arguments python3 -B e2e/desktop.py
+```
+
+The desktop case selects only argument parsing/delivery and child/shell usability;
+it does not repeat the editor/file/network command suites. The ordinary full
+desktop suite also includes the argument interaction. See
+[argument evidence and limits](arguments-validation.md).
+
+## Expanded native capabilities
+
+Select individual regressions after a fresh build. The private-image runner installs
+only its test executable and fixtures; cases do not share writable disks.
+
+```bash
+./tools/build-grub-disk.sh target/capabilities.img
+RUSTOS_TEST_DISK=target/capabilities.img RUSTOS_CPUS=1 python3 -B e2e/capabilities.py --case heap
+```
+
+Cases: `heap`, `image`, `fds`, `files`, `names`, `env`, `fpu`, `tls` (compiler TLS).
+Choose affected cases, not every case for every edit. FPU/TLS or scheduler state
+changes additionally require those two cases at 1, 8 and 32 CPUs. Heap changes
+require `cargo test --test threads` for mapping isolation, shrink and resource
+recovery. FAT changes require `cargo test --lib` and `./e2e/fat32.sh`; the `files`
+case streams beyond 1 MiB and `names` verifies both directions against host mtools.
+`cargo test --lib` is a custom boot harness without ordinary name filtering.
+
+Use the focused desktop case for environment/long-path/argument changes:
+
+```bash
+RUSTOS_TEST_DISK=target/capabilities.img RUSTOS_CPUS=8 RUSTOS_DESKTOP_CASE=capabilities python3 -B e2e/desktop.py
+```
+
+The SDK target enables SSE2 and static local-exec TLS. Heap/target changes should
+also exercise a representative existing allocation-heavy application; the local
+`e2e/tls.py` HTTPS fixture covers certificate validation, streaming and exhaustion
+cleanup without requiring a public endpoint. This is separate from compiler TLS.
+See [executed capability evidence](capabilities-validation.md).

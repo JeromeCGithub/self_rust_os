@@ -59,6 +59,7 @@ pub fn init(
     }
     console::init();
 
+    arch::x86_64::extended::init_cpu();
     gdt::init();
     interrupts::init_idt();
 

@@ -8,3 +8,6 @@ pub mod gdt;
 /// CPU interrupt tables and IRQ dispatch.
 pub mod interrupts;
 pub mod smp;
+
+/// Eager floating-point/SIMD and thread-pointer state.
+pub mod extended;

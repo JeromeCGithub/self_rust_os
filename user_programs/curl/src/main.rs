@@ -1,4 +1,4 @@
-// Standalone HTTP client. The current process ABI has no argv; prompt for a URL.
+// Standalone HTTP client; retains its interactive URL prompt.
 use userlib::{http, println, sys};
 fn main() {
     println!("curl: enter an http:// or https:// URL (empty line exits)");

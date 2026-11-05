@@ -11,8 +11,11 @@
     "linker": "rust-lld",
     "panic-strategy": "abort",
     "disable-redzone": true,
-    "features": "-mmx,-sse,+soft-float",
+    "features": "-mmx,+sse,+sse2",
     "pre-link-args": {
-        "ld.lld": ["-Tlinker.ld"]
-    }
+        "ld.lld": [
+            "-Tlinker.ld"
+        ]
+    },
+    "has-thread-local": true
 }

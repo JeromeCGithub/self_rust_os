@@ -11,7 +11,7 @@
 //! The return value is placed in `rax`.
 //!
 //! Besides process control (`sys_exit`) and console output (`sys_write`),
-//! the interface exposes the in-memory filesystem (see [`crate::fs`]) so
+//! the interface exposes the mounted FAT32 filesystem (see [`crate::fs`]) so
 //! user programs can create, read, and write files.
 
 use x86_64::VirtAddr;
@@ -24,7 +24,7 @@ pub const SYS_EXIT: u64 = 0;
 /// Syscall number for `sys_write`: writes a buffer to the console.
 pub const SYS_WRITE: u64 = 1;
 
-/// Syscall number for `sys_read`: reads keyboard input (stdin) into a buffer.
+/// Syscall number for `sys_read`: reads stdin or a regular-file descriptor.
 pub const SYS_READ: u64 = 2;
 
 /// Syscall number for `sys_ticks`: returns the monotonic timer tick count.
@@ -34,7 +34,7 @@ pub const SYS_TICKS: u64 = 3;
 pub const SYS_READ_NB: u64 = 4;
 
 /// Syscall number for `sys_ls`: lists directory entries.
-/// Takes a null-terminated path ("" or "/" = root).
+/// Takes a null-terminated path ("" = cwd, "/" = root).
 pub const SYS_LS: u64 = 5;
 
 /// Syscall number for `sys_read_file`: reads a file by path.
@@ -110,6 +110,11 @@ pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: 
         }
         SYS_WRITE => sys_write(arg1, arg2),
         SYS_READ => sys_read(arg1, arg2, arg3),
+        25 if arg1 == 1 || arg1 == 2 => sys_write(arg2, arg3),
+        23..=28 => crate::fs::handles::syscall(num, arg1, arg2, arg3),
+        32 => crate::scheduler::thread_pointer(arg1, arg2, arg3),
+        33 => crate::fs::handles::readdir(arg1, arg2, arg3),
+        31 if arg2 == 0 && arg3 == 0 => crate::scheduler::program_break(arg1),
         SYS_TICKS => crate::interrupts::ticks(),
         SYS_SLEEP_TICKS => crate::scheduler::sleep_ticks(arg1),
         SYS_PRESENT_SURFACE => crate::scheduler::present_surface(),
@@ -144,8 +149,22 @@ pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: 
             if arg2 == 1 && !crate::scheduler::can_connect_stdio() {
                 return SYSCALL_ERROR;
             }
-            sys_spawn(arg1, arg2 == 1)
+            sys_spawn(arg1, arg2 == 1, None)
         }
+        rustos_process_abi::SYS_SPAWN_ARGS => {
+            if arg3 > 1 || (arg3 == 1 && !crate::scheduler::can_connect_stdio()) {
+                return SYSCALL_ERROR;
+            }
+            let mut bytes = [0; rustos_process_abi::SIZE];
+            if !userspace::usercopy::from_user(arg2, &mut bytes) {
+                return SYSCALL_ERROR;
+            }
+            let Ok(arguments) = rustos_process_abi::Arguments::from_bytes(bytes) else {
+                return SYSCALL_ERROR;
+            };
+            sys_spawn(arg1, arg3 == 1, Some(&arguments))
+        }
+        30 if arg3 == 48 => crate::userspace::launch::spawn(arg1, arg2),
         SYS_STDIO => {
             if arg1 > 2 || arg2 > u32::MAX as u64 || arg3 != 0 || (arg1 != 1 && arg2 != 0) {
                 return SYSCALL_ERROR;
@@ -305,11 +324,13 @@ fn sys_write(buf_ptr: u64, len: u64) -> u64 {
 ///
 /// # Arguments
 ///
-/// * `fd` - File descriptor (only 0 = stdin is supported).
+/// * `fd` - File descriptor (0 = stdin, 3..18 = regular files).
 /// * `buf_ptr` - Virtual address of the user buffer.
 /// * `len` - Maximum bytes to read.
 fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
-    // Only stdin (fd 0) is supported.
+    if fd >= 3 {
+        return crate::fs::handles::read(fd, buf_ptr, len);
+    }
     if fd != 0 {
         return SYSCALL_ERROR;
     }
@@ -428,20 +449,13 @@ fn validate_user_buffer(ptr: u64, len: u64) -> bool {
 
 /// Copy the path before invoking filesystem mechanisms.
 fn with_user_path<R>(ptr: u64, f: impl FnOnce(&str) -> R) -> Option<R> {
-    let mut bytes = [0u8; 256];
-    if !userspace::usercopy::from_user(ptr, &mut bytes) {
-        return None;
-    }
-    let len = bytes.iter().position(|&b| b == 0)?;
-    if len >= 255 {
-        return None;
-    }
-    Some(f(core::str::from_utf8(&bytes[..len]).ok()?))
+    let path = crate::fs::handles::path(ptr, crate::fs::handles::PathKind::Existing)?;
+    Some(f(&path))
 }
 
 /// Lists directory entries into a user buffer.
 ///
-/// `path_ptr` is a null-terminated path ("" or "/" = root).
+/// `path_ptr` is a null-terminated path ("" = cwd, "/" = root).
 /// Each entry is 12 bytes: 11-byte 8.3 name + 1 byte attribute
 /// (`0x10` = directory, `0x20` = file).
 /// Returns the number of entries, or SYSCALL_ERROR.
@@ -452,9 +466,8 @@ fn sys_ls(path_ptr: u64, buf_ptr: u64, max_entries: u64) -> u64 {
         return SYSCALL_ERROR;
     }
 
-    let result = with_user_path(path_ptr, |path| {
-        crate::fs::with_fs(|fs| fs.list_dir(Some(path)))
-    });
+    let result = crate::fs::handles::path(path_ptr, crate::fs::handles::PathKind::Listing)
+        .map(|path| crate::fs::with_fs(|fs| fs.list_dir(Some(&path))));
     let entries = match result {
         Some(Some(Ok(entries))) => entries,
         _ => return SYSCALL_ERROR,
@@ -478,9 +491,8 @@ fn sys_ls(path_ptr: u64, buf_ptr: u64, max_entries: u64) -> u64 {
 /// Takes a null-terminated path in `path_ptr`. Returns 0 on success,
 /// or SYSCALL_ERROR.
 fn sys_mkdir(path_ptr: u64) -> u64 {
-    let result = with_user_path(path_ptr, |path| {
-        crate::fs::with_fs(|fs| fs.create_dir(path))
-    });
+    let result = crate::fs::handles::path(path_ptr, crate::fs::handles::PathKind::RecursiveCreate)
+        .map(|path| crate::fs::with_fs(|fs| fs.create_dir(&path)));
     match result {
         Some(Some(Ok(()))) => 0,
         _ => {
@@ -556,26 +568,37 @@ fn sys_write_file(path_ptr: u64, buf_ptr: u64, len: u64) -> u64 {
 /// preempt to the new process.
 ///
 /// Returns `SYSCALL_ERROR` if the path is invalid or the program can't be loaded.
-fn sys_spawn(path_ptr: u64, connected: bool) -> u64 {
-    let mut path_bytes = [0u8; 256];
-    if !userspace::usercopy::from_user(path_ptr, &mut path_bytes) {
-        return SYSCALL_ERROR;
-    }
-    let Some(path_len) = path_bytes.iter().position(|&b| b == 0) else {
-        return SYSCALL_ERROR;
-    };
-    if path_len == 0 || path_len >= 255 {
-        return SYSCALL_ERROR;
-    }
-    let Ok(path) = core::str::from_utf8(&path_bytes[..path_len]) else {
+fn sys_spawn(
+    path_ptr: u64,
+    connected: bool,
+    arguments: Option<&rustos_process_abi::Arguments>,
+) -> u64 {
+    let Some(path) = crate::fs::handles::path(path_ptr, crate::fs::handles::PathKind::Existing)
+    else {
         return SYSCALL_ERROR;
     };
 
-    // Load the binary from disk.
-    // The kernel takes the path as-is. It does NOT do PATH resolution —
-    // that is the shell's job (policy, not mechanism). Callers must pass
-    // a full path like "/bin/SNAKE.BIN".
-    let binary = match crate::scheduler::load_program_from_disk(path) {
+    let mut argv = [""; rustos_process_abi::MAX_ARGS];
+    let count = if let Some(arguments) = arguments {
+        for (index, slot) in argv.iter_mut().take(arguments.len()).enumerate() {
+            let Some(argument) = arguments.get(index) else {
+                return SYSCALL_ERROR;
+            };
+            *slot = argument;
+        }
+        arguments.len()
+    } else {
+        argv[0] = &path;
+        1
+    };
+    spawn_at(&path, connected, &argv[..count], &[])
+}
+
+/// Complete a validated process launch. All strings borrow kernel-owned data.
+pub(crate) fn spawn_at(path: &str, connected: bool, argv: &[&str], envp: &[&str]) -> u64 {
+    // Resolve relative paths as filesystem mechanism; executable search remains
+    // shell policy. The loader receives one explicit canonical absolute path.
+    let binary = match crate::scheduler::load_program_from_disk(&path) {
         Ok(b) => b,
         Err(e) => {
             serial_println!("[kernel] sys_spawn: failed to load '{}': {}", path, e);
@@ -589,7 +612,7 @@ fn sys_spawn(path_ptr: u64, connected: bool) -> u64 {
         return PROCESS_EXIT_SENTINEL;
     }
     // Create the process (read-only size 0 = all writable for now).
-    match crate::scheduler::spawn_process(&binary, 0) {
+    match crate::scheduler::spawn_process_with_environment(&binary, 0, argv, envp) {
         Ok(pid) => {
             if connected && !crate::scheduler::connect_stdio(pid) {
                 let _ = crate::scheduler::kill(pid);

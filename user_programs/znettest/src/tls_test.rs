@@ -6,7 +6,10 @@ pub fn run(config: [u8; 12]) -> ! {
     let _ = sys::read_file("/TMP/TLS.MOD", &mut mode);
     if mode[0] == b'O' {
         let _socket = net::open(net::Kind::Udp).unwrap();
-        let oversized = alloc::vec![0x55u8;32*1024*1024];
+        // The SDK heap now grows: 32 MiB is a valid allocation. Exceed the
+        // explicit 1 GiB guest RAM fixture to retain the allocation-failure
+        // exit-code and live-socket cleanup regression below.
+        let oversized = alloc::vec![0x55u8;2*1024*1024*1024];
         core::hint::black_box(&oversized);
         sys::exit(1);
     }
@@ -60,9 +63,9 @@ pub fn run(config: [u8; 12]) -> ! {
         (u64::MAX - 4, 16),
         (0x4000000 - 8, 16),
         (0xffff800000000000, 32),
-        (0x2ffffff, 2),   // mapped final stack byte crosses its upper guard
-        (0x2bfffff, 2),   // lower stack guard crosses into mapped stack
-        (0x2c00000, 257), // request exceeds bounded syscall output
+        (0x3ffffffff, 2),   // mapped final stack byte crosses its upper guard
+        (0x3ffbfffff, 2),   // lower stack guard crosses into mapped stack
+        (0x3ffc00000, 257), // request exceeds bounded syscall output
     ] {
         // SAFETY: Deliberately malformed output ranges exercise validation; they must
         // be rejected by the kernel before any memory access or entropy operation.

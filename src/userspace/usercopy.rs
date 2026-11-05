@@ -14,7 +14,7 @@ pub fn validate_with(
     let Some(end) = ptr.checked_add(len) else {
         return false;
     };
-    if ptr < 0x400000 || end > 0x6000000 || end < ptr {
+    if ptr < 0x400000 || end > rustos_thread_abi::USER_END || end < ptr {
         return false;
     }
     let last = (end - 1) & !4095;
@@ -219,4 +219,29 @@ pub fn to_user(destination: u64, source: &[u8]) -> bool {
         copy_raw(destination as *mut u8, source.as_ptr(), source.len());
     }
     true
+}
+
+/// Copy a bounded C string page by page into owned kernel storage. Reads never
+/// cross an unvalidated page, and no user reference survives a copy or syscall.
+#[cfg(target_os = "none")]
+pub fn cstring(pointer: u64, limit: usize) -> Option<alloc::vec::Vec<u8>> {
+    let mut result = alloc::vec::Vec::new();
+    let mut scratch = [0; 256];
+    while result.len() < limit {
+        let address = pointer.checked_add(result.len() as u64)?;
+        let amount = (4096 - (address as usize & 4095))
+            .min(scratch.len())
+            .min(limit - result.len());
+        if !from_user(address, &mut scratch[..amount]) {
+            return None;
+        }
+        let end = scratch[..amount].iter().position(|&b| b == 0);
+        let take = end.unwrap_or(amount);
+        result.try_reserve(take).ok()?;
+        result.extend_from_slice(&scratch[..take]);
+        if end.is_some() {
+            return Some(result);
+        }
+    }
+    None
 }

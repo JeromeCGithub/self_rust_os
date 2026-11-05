@@ -5,7 +5,7 @@ QEMU platform supports 1–32 logical CPUs and native Ring 3 threads; bootimage
 harnesses retain their single-CPU path. See [threading and SMP](threading.md).
 The responsibility split resembles Linux: a privileged kernel supplies mechanisms,
 and unprivileged applications implement policy. This is **not Linux**, is not
-POSIX-compatible, and does not execute Linux ELF applications or expose Linux syscalls.
+POSIX-compatible, and does not execute Linux ELF applications or expose Linux syscall numbers. Supported file flags and FS-base operations use Linux values.
 Drivers currently live in the kernel; the userspace compositor does not make it a
 microkernel.
 
@@ -104,11 +104,12 @@ Current virtual layout, defined in [kernel constants](../src/userspace/mod.rs):
 | Region | Current address |
 | --- | --- |
 | Linked image base / legacy flat entry | `0x400000` |
-| User stack bottom/top | `0x2c00000` / `0x3000000` (4 MiB) |
-| Application framebuffer/surface | `0x3100000`, `pitch * height` bytes rounded up to pages |
-| Legacy drawing-surface limit | `0x4000000` (exclusive) |
-| Guarded worker-stack arena | Starts at `0x4000000`, 63 slots of `0x41000` bytes each |
-| Private user page-table region | `0x400000` through `0x6000000` (exclusive); gaps stay unmapped |
+| Image end / growable heap base | `0x100000000` (4 GiB) |
+| User stack bottom/top | `0x3ffc00000` / `0x400000000` (4 MiB) |
+| Application framebuffer/surface | `0x410000000`, `pitch * height` bytes rounded up to pages |
+| Guarded worker-stack arena | `0x420000000`, 63 slots of `0x41000` bytes each |
+| Static compiler-TLS arena | `0x440000000`, 64 private slots of 2 MiB each |
+| Private user page-table region | `0x400000` through `0x8000000000` (512 GiB, exclusive); gaps stay unmapped |
 | GRUB physical-memory offset | `0xffff800000000000` |
 | GRUB kernel framebuffer mapping | `0xffff900000000000` |
 
@@ -117,10 +118,13 @@ stripped static x86-64 ELF files under the existing `.bin` names. The kernel val
 all load segments before allocating resources, copies initialized bytes and zeroes
 BSS in private RAM. Byte ranges cannot overlap or reach kernel/stack mappings.
 Distinct segments sharing a page are copied into one frame with the union of their
-writable permissions. Separate code pages are read only; writable data still permits
+writable permissions. Startup arguments are copied into the private initial stack and delivered through
+RDI/RSI/RDX to the SDK's [argc/argv/environment runtime](syscalls.md#program-arguments-and-entry).
+Separate code pages are read only; writable data still permits
 execution, so this is not complete W^X or RELRO. Legacy raw flat images remain
-supported for compatibility. No dynamic linker, compiler TLS, `fork`/`exec`, signals,
-or per-process file-descriptor table is exposed. See [latency validation](parallel-latency-validation.md).
+supported for compatibility. Static local-exec compiler TLS is initialized per thread from PT_TLS. No dynamic linker, `fork`/`exec`, signals,
+or Linux ABI is exposed. Regular-file descriptors and process working directories
+use the native [filesystem syscall contract](syscalls.md#regular-files-and-working-directories). See [latency validation](parallel-latency-validation.md).
 
 ## Display and input ownership
 
@@ -151,7 +155,7 @@ window dragging, application discovery and theme belong in userspace.
 ## Storage and policy
 
 GRUB boots from the primary master's first FAT32 partition. The root mount uses
-MBR-relative sector offsets. Files use FAT32 8.3 names and directory traversal;
+MBR-relative sector offsets. Files support VFAT UTF-16 long names (255 code units) and compatible 8.3 aliases;
 the current root filesystem is not the old ramfs described in historical notes.
 
 The disk builder installs `/BIN`, `/ETC`, `/HOME`, and `/TMP`. The DE discovers
@@ -182,7 +186,7 @@ by callers; there is no background network worker. Static IPv4, connected UDP an
 outgoing TCP are supported. The [HTTP SDK and curl](http.md) implement DNS A
 resolution and streaming HTTP/HTTPS GET in Ring 3. [TLS](tls.md) uses Rustls,
 WebPKI verification and a RustCrypto provider; platform syscalls 80/81 supply
-hardware entropy and UTC. TLS-enabled apps reserve a private 16 MiB BSS heap; all
+hardware entropy and UTC. The SDK heap grows through native `brk` into zeroed private pages; all
 initial process threads receive 4 MiB user stacks with unmapped guards. Kernel stacks remain
 16 KiB. Server socket interfaces remain future work. Independent host fixtures verify framing,
 redirects, response streaming and cleanup through real socket syscalls.
@@ -193,6 +197,23 @@ without requiring a contiguous maximum-size user image allocation. A blocked
 waitpid receives the exit code in its saved return register and reaps the child.
 
 ## Existing limitations and design obligations
+
+Image segments may occupy the arena below 4 GiB; RAM and kernel staging allocations
+still bound actual loads. The heap has roughly 12 GiB of virtual growth space below
+the initial stack, allocated eagerly from available physical memory. The kernel
+heap remains 64 MiB. There is no anonymous `mmap`, demand paging, swap or overcommit.
+
+Each thread owns eagerly saved/restored x87/MMX/SSE2 state and its FS base on every
+user-context handoff. Kernel code remains soft-float. AVX/XSAVE and dynamic TLS
+modules are unsupported. Static TLS templates are bounded to 1 MiB with alignment
+at most 4096; thread-local destructors are not implemented.
+
+Regular-file tables grow to 1024 descriptors per process. Offset writes touch only
+affected data clusters and can grow to FAT32's `u32::MAX` file size, subject to
+storage/resources. Startup supports up to 4096 arguments and 4096 environment
+entries with a combined 128 KiB NUL-inclusive string budget. These are explicit
+native limits, not a Linux ABI/feature-completeness claim. See
+[current capability evidence](capabilities-validation.md).
 
 - Initial WM path and PID 0 compositor privileges are explicit boot/protocol
   exceptions, not general capability or session management. Other process-control

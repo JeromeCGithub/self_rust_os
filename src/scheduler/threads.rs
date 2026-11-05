@@ -51,9 +51,22 @@ pub fn create_thread(request: abi::Create) -> u64 {
     // unmapped guard. No Rust page-table reference survives this function.
     let table = unsafe { &mut *((offset + root.start_address().as_u64()) as *mut PageTable) };
     let mut mapper = unsafe { OffsetPageTable::new(table, VirtAddr::new(offset)) };
-    let pool = s.frame_allocator.as_mut().expect("frame pool");
+    let Scheduler {
+        processes,
+        frame_allocator,
+        ..
+    } = &mut *s;
+    let template = processes[pid as usize]
+        .as_ref()
+        .expect("TLS owner")
+        .tls
+        .as_ref();
+    let pool = frame_allocator.as_mut().expect("frame pool");
     let mut transaction = crate::memory::owned::FrameTransaction::new(pool);
     let mut mapped = 0;
+    let mut mapped_tls = 0;
+    let mut tls_base = 0;
+    let mut fs_base = 0;
     let result = (|| {
         for i in 0..size / 4096 {
             let frame = transaction.allocate_frame().ok_or(())?;
@@ -84,9 +97,33 @@ pub fn create_thread(request: abi::Create) -> u64 {
             }
             mapped += 1;
         }
+        if let Some(template) = template {
+            let (pointer, base) = crate::userspace::tls::map(
+                template,
+                slot + 1,
+                &mut mapper,
+                &mut transaction,
+                VirtAddr::new(offset),
+                &mut mapped_tls,
+            )?;
+            fs_base = pointer;
+            tls_base = base;
+        }
         Ok::<(), ()>(())
     })();
     if result.is_err() {
+        if mapped_tls > 0 {
+            let base = crate::userspace::tls::region(template.expect("TLS template"), slot + 1).0;
+            for index in 0..mapped_tls {
+                mapper
+                    .unmap(Page::<Size4KiB>::containing_address(VirtAddr::new(
+                        base + index as u64 * 4096,
+                    )))
+                    .expect("partial TLS leaf")
+                    .1
+                    .ignore();
+            }
+        }
         for i in 0..mapped {
             mapper
                 .unmap(Page::<Size4KiB>::containing_address(VirtAddr::new(
@@ -101,7 +138,8 @@ pub fn create_thread(request: abi::Create) -> u64 {
         return ERROR; // transaction returns every unpublished allocation.
     }
     drop(mapper);
-    let frames = transaction.commit();
+    let mut frames = transaction.commit();
+    let tls_frames = frames.split_off((size / 4096) as usize);
     smp::shootdown();
     let mask = if request.affinity == 0 {
         (1u64 << smp::online_count()) - 1
@@ -114,13 +152,16 @@ pub fn create_thread(request: abi::Create) -> u64 {
         stack,
         request.entry,
         base + size - 8,
-        request.argument,
+        (request.argument, 0, 0),
         mask,
     );
+    thread.fs_base = fs_base;
     thread.user_stack = Some(UserStack {
         slot,
         user_base: base,
         frames,
+        tls_base,
+        tls_frames,
     });
     s.processes[pid as usize]
         .as_mut()
@@ -305,4 +346,48 @@ pub fn frame_count() -> u64 {
         .as_ref()
         .map(|f| f.allocated() as u64)
         .unwrap_or(ERROR)
+}
+
+/// Native arch_prctl subset with Linux ARCH_SET_FS/ARCH_GET_FS operation values.
+pub fn thread_pointer(operation: u64, value: u64, reserved: u64) -> u64 {
+    if reserved != 0 {
+        return ERROR;
+    }
+    if operation == 0x1002 {
+        if value >= abi::USER_END || (value != 0 && !userspace::usercopy::validate(value, 8, false))
+        {
+            return ERROR;
+        }
+        let mut scheduler = SCHEDULER.lock();
+        let Some(tid) = scheduler.current_tid() else {
+            return ERROR;
+        };
+        let Some(thread) = scheduler.thread_mut(tid) else {
+            return ERROR;
+        };
+        thread.fs_base = value;
+        // SAFETY: Canonical validated user mapping or zero; this caller owns the
+        // current CPU/thread. Kernel code does not use FS-relative accesses.
+        unsafe {
+            crate::arch::x86_64::extended::set_fs(value);
+        }
+        0
+    } else if operation == 0x1003 {
+        let scheduler = SCHEDULER.lock();
+        let Some(tid) = scheduler.current_tid() else {
+            return ERROR;
+        };
+        let Some(thread) = scheduler.thread(tid) else {
+            return ERROR;
+        };
+        let pointer = thread.fs_base;
+        drop(scheduler);
+        if userspace::usercopy::to_user(value, &pointer.to_le_bytes()) {
+            0
+        } else {
+            ERROR
+        }
+    } else {
+        ERROR
+    }
 }

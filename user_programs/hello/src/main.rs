@@ -5,8 +5,17 @@ use userlib::{
     ui::{Color, Error, Material, Style, View, Window, WindowOptions},
 };
 
-fn main() {
+fn main(argc: usize, argv: &[&str]) {
     println!("Hello from user space!");
+    if let Some(value) = userlib::env::var("TEST_ENV") {
+        println!("[hello] TEST_ENV={}", value);
+    }
+    if argc > 1 {
+        println!("[hello] argc={}", argc);
+        for (index, argument) in argv.iter().enumerate() {
+            println!("[hello] argv[{}]={}", index, argument);
+        }
+    }
     assert!(matches!(
         Window::create(WindowOptions::new("bad").content_size(0, 100)),
         Err(Error::InvalidGeometry)
@@ -16,10 +25,13 @@ fn main() {
         Err(Error::InvalidTitle)
     ));
     assert!(userlib::process::Child::spawn("/MISSING.BIN").is_err());
-    for (op, payload, reserved) in [(3,0,0),(1,u64::MAX,0),(0,1,0),(2,1,0),(0,0,1)] {
+    for (op, payload, reserved) in [(3, 0, 0), (1, u64::MAX, 0), (0, 1, 0), (2, 1, 0), (0, 0, 1)] {
         // SAFETY: These register-only probes contain no user pointers. The
         // kernel must reject malformed values without truncating them.
-        assert_eq!(unsafe { sys::syscall(sys::SYS_STDIO,op,payload,reserved) }, sys::SYSCALL_ERROR);
+        assert_eq!(
+            unsafe { sys::syscall(sys::SYS_STDIO, op, payload, reserved) },
+            sys::SYSCALL_ERROR
+        );
     }
     println!("[hello-ui] stdio invalid requests rejected");
     verify_desktop_role();
