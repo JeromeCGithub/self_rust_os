@@ -336,6 +336,7 @@ pub extern "C" fn grub_entry_rust(magic: u64, info_ptr: u64) -> ! {
         &mut mapper,
         &mut frame_allocator,
         boot_info.regions(),
+        boot_info.acpi_root,
     );
 
     // From here on, this is the same bring-up as the legacy boot path.

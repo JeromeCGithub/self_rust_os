@@ -43,7 +43,7 @@ its framebuffer tag as informational only: the current kernel validates and uses
    disabled, with the Multiboot2 magic in EAX and info pointer in EBX.
 3. The assembly stub saves boot arguments, identity maps the first GiB with 2 MiB
    pages, enables PAE and long mode/paging, loads a 64-bit GDT, then calls Rust.
-4. [The parser](../src/boot/multiboot2.rs) reads memory and framebuffer tags. Rust
+4. [The parser](../src/boot/multiboot2.rs) reads memory, framebuffer and ACPI RSDP tags (14/15). Rust
    validates the framebuffer format and reserves the kernel image from usable RAM.
 5. [Boot paging](../src/boot/mod.rs) establishes the physical-memory offset at
    `0xffff800000000000`; the framebuffer is separately mapped as device memory at
@@ -52,9 +52,15 @@ its framebuffer tag as informational only: the current kernel validates and uses
    heap and input. Early timer IRQs must remain masked until scheduling can safely run.
 7. [The root mount](../src/fs.rs) reads the primary master's MBR, selects its FAT32
    partition, and applies the partition offset through [MBR helpers](../src/mbr.rs).
-8. The kernel loads `/BIN/WM.BIN`, creates PID 0 with a valid kernel/user context,
+8. The BSP discovers MADT CPUs through the supplied ACPI root, prepares the
+   trampoline and per-CPU stacks/tables, sends INIT/SIPI to APs and waits for
+   acknowledgement after each AP installs its local timer. Scheduling is released
+   after all supported CPUs are ready; see [the audit](smp-boot-audit-validation.md).
+9. The kernel loads `/BIN/WM.BIN`, creates PID 0 with a valid kernel/user context,
    then enters the scheduler. `iretq` restores user flags and interrupts. The WM
-   loads the image wallpaper, discovers apps and presents the desktop in Ring 3.
+   starts the separate DE, which loads wallpaper and discovers apps. The WM
+   composes/presents in Ring 3. Drivers publish the [device inventory](devices.md)
+   and the kernel mounts virtual `/dev` independently of desktop policy.
 
 The initial WM filename is currently boot policy embedded in the kernel. It is a
 known exception, not permission to put general app discovery or shell policy there.

@@ -223,3 +223,15 @@ cargo +nightly-2025-01-30 test --manifest-path /path/to/self_rust_os/crates/exec
 ```
 The kernel `threads` integration verifies actual segment bytes, BSS/padding zeros,
 entry address, shared GOT pages, permissions, isolation and repeated frame recovery.
+
+
+## Boot handoff and device namespace
+
+[The boot/device validation report](smp-boot-audit-validation.md) covers the
+bootloader ACPI tag parser, AP readiness, per-CPU GDT/TSS, noncooperative timer
+preemption and virtual device-file behavior. `cargo test --lib` includes bounded
+registry, malformed ACPI/tag, path-alias, entropy-failure and repeated-publication
+cases. The SMP probe runs device I/O from PID 0 and an ordinary child, plants a
+conflicting FAT `/DEV/NULL` in its private image and verifies backing bytes remain
+unchanged. `e2e/desktop.py` also runs `ls /dev` and `ls /dev/cpu` and `cat /dev/devices/info`; its
+`desktop-device-tree.png` must come from the tested build.

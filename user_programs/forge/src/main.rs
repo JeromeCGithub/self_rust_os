@@ -17,8 +17,12 @@ fn ls(path: &[u8]) {
             return;
         }
     };
-    let mut buf = [0u8; 12 * 32]; // Max 32 entries.
-    match sys::ls(path_str, &mut buf, 32) {
+    // Cover the complete bounded device inventory plus its metadata file.
+    // This remains a userspace presentation limit; the kernel returns up to
+    // the caller's requested capacity without interpreting shell commands.
+    const MAX_ENTRIES: usize = 128;
+    let mut buf = [0u8; 12 * MAX_ENTRIES];
+    match sys::ls(path_str, &mut buf, MAX_ENTRIES) {
         None => println!("ls failed"),
         Some(0) => println!("(empty)"),
         Some(count) => {
@@ -63,7 +67,8 @@ fn cat(path: &[u8]) {
             return;
         }
     };
-    let mut buf = [0u8; 1024];
+    // Fits the bounded device inventory as well as ordinary small text files.
+    let mut buf = [0u8; 8192];
     match sys::read_file(path_str, &mut buf) {
         None => println!("cat failed"),
         Some(n) => {

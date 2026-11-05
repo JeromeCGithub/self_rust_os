@@ -14,10 +14,12 @@ from qemu_test import disk_image, connect as connect_monitor, copy_disk
 WIDTH,HEIGHT=1920,1080
 OUT=ROOT/'docs/screenshots'
 OUT.mkdir(parents=True,exist_ok=True)
+platform=platform_arguments()
+cpu_count=int(platform[platform.index('-smp')+1]) if '-smp' in platform else 1
 with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
     disk=copy_disk(disk_image(ROOT),pathlib.Path(tmp))
     monpath=f'{tmp}/monitor'; qmppath=f'{tmp}/qmp'; log=pathlib.Path(tmp)/'serial.log'
-    qemu=subprocess.Popen(['qemu-system-x86_64','-drive',f'format=raw,file={disk}','-machine','pc,i8042=on,vmport=on','-vga','std','-serial',f'file:{log}','-display','none','-no-reboot','-monitor',f'unix:{monpath},server,nowait','-qmp',f'unix:{qmppath},server,nowait'] + platform_arguments() + network_arguments())
+    qemu=subprocess.Popen(['qemu-system-x86_64','-drive',f'format=raw,file={disk}','-machine','pc,i8042=on,vmport=on','-vga','std','-serial',f'file:{log}','-display','none','-no-reboot','-monitor',f'unix:{monpath},server,nowait','-qmp',f'unix:{qmppath},server,nowait'] + platform + network_arguments())
     try:
         deadline=time.monotonic()+60
         while not pathlib.Path(monpath).exists():
@@ -102,6 +104,31 @@ with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
         assert hosted, 'no independently spawned Forge'
         wait_for("sys_spawn: '/BIN/FORGE.BIN' -> pid "+hosted[0])
         shot('desktop-terminal')
+        start=log.stat().st_size
+        type_command('ls /dev')
+        wait_for('[portal] output: NULL\n',after=start)
+        wait_for('[portal] output: ZERO\n',after=start)
+        wait_for('[portal] output: DEVICES/\n',after=start)
+        wait_for('[portal] output: CPU/\n',after=start)
+        start=log.stat().st_size
+        type_command('ls /dev/devices')
+        wait_for('[portal] output: CPU0/\n',after=start)
+        wait_for(f'[portal] output: CPU{cpu_count-1}/\n',after=start)
+        start=log.stat().st_size
+        type_command('ls /dev/cpu')
+        wait_for('[portal] output: 0/\n',after=start)
+        wait_for(f'[portal] output: {cpu_count-1}/\n',after=start)
+        type_command('cat /dev/cpu/0/info')
+        wait_for('cpu0 driver=x86-64 apic=0 role=bsp',after=start)
+        time.sleep(.5)
+        shot('desktop-cpu-tree')
+        start=log.stat().st_size
+        type_command('cat /dev/devices/info')
+        wait_for('fb0 driver=framebuffer pixels=1920x1080',after=start)
+        # The serial result verifies actual device content; capture that same
+        # tested session for review without replacing the behavioral assertions.
+        time.sleep(.5)
+        shot('desktop-device-tree')
         # Opening Snake must leave the terminal intact and both processes scheduled.
         click(450,65);wait_for("sys_spawn: '/BIN/SNAKE.BIN'");time.sleep(2);shot('desktop-multitasking')
         click(92+470,136+12);time.sleep(.5) # Close top (Snake) window.

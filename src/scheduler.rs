@@ -784,6 +784,9 @@ pub fn wake_keyboard_waiters() {
 ///
 /// Returns the binary bytes, or an error string.
 pub fn load_program_from_disk(path: &str) -> Result<Vec<u8>, &'static str> {
+    if crate::fs::is_device_path(path).map_err(|_| "invalid executable path")? {
+        return Err("device nodes are not executable files");
+    }
     // Persistent resources such as socket buffers can fragment the heap. Stage
     // only the actual file, rather than demanding a contiguous maximum-size
     // user image on every spawn. Hold the FS lock across metadata and read.

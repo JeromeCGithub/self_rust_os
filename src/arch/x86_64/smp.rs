@@ -65,60 +65,60 @@ fn table(address: u64) -> Option<&'static [u8]> {
     (bytes.iter().fold(0u8, |a, b| a.wrapping_add(*b)) == 0).then_some(bytes)
 }
 #[cfg(feature = "grub")]
-fn discover() -> Option<acpi::Topology> {
-    // SAFETY: BIOS data area is present in the boot identity map; use an
-    // unaligned integer read and create no reference to firmware fields.
+fn legacy_root() -> Option<acpi::RootTable> {
+    // SAFETY: The BIOS data area is mapped at boot; no unaligned field reference.
     let ebda = u64::from(unsafe { (0x40e as *const u16).read_unaligned() }) << 4;
     for (start, end) in [(ebda, ebda + 1024), (0xe0000, 0x100000)] {
         for address in (start..end).step_by(16) {
-            let Some(rsdp) = physical(address, 20) else {
+            let Some(prefix) = physical(address, 20) else {
                 continue;
             };
-            if &rsdp[..8] != b"RSD PTR " || rsdp.iter().fold(0u8, |a, b| a.wrapping_add(*b)) != 0 {
-                continue;
-            }
-            let mut stride = 4;
-            let mut root = u64::from(u32::from_le_bytes(rsdp[16..20].try_into().ok()?));
-            if rsdp[15] >= 2 {
-                let extended = physical(address, 36)?;
-                let length = u32::from_le_bytes(extended[20..24].try_into().ok()?) as usize;
-                if length < 36 || length > 4096 {
-                    return None;
-                }
-                if physical(address, length)?
-                    .iter()
-                    .fold(0u8, |a, b| a.wrapping_add(*b))
-                    != 0
-                {
-                    return None;
-                }
-                let xsdt = u64::from_le_bytes(extended[24..32].try_into().ok()?);
-                if xsdt != 0 {
-                    root = xsdt;
-                    stride = 8;
-                }
-            }
-            let root = table(root)?;
-            if &root[..4] != if stride == 8 { b"XSDT" } else { b"RSDT" }
-                || (root.len() - 36) % stride != 0
-            {
-                return None;
-            }
-            for pointer in root[36..].chunks_exact(stride) {
-                let address = if stride == 8 {
-                    u64::from_le_bytes(pointer.try_into().ok()?)
-                } else {
-                    u64::from(u32::from_le_bytes(pointer.try_into().ok()?))
-                };
-                let Some(bytes) = table(address) else {
+            let extended = prefix[15] >= 2;
+            let bytes = if extended {
+                let Some(header) = physical(address, 36) else {
                     continue;
                 };
-                if &bytes[..4] == b"APIC" {
-                    return Some(
-                        acpi::parse_madt(bytes).expect("invalid or unsupported MADT topology"),
-                    );
+                let len = u32::from_le_bytes(header[20..24].try_into().ok()?) as usize;
+                if !(36..=4096).contains(&len) {
+                    continue;
                 }
+                let Some(bytes) = physical(address, len) else {
+                    continue;
+                };
+                bytes
+            } else {
+                prefix
+            };
+            if let Ok(root) = acpi::parse_rsdp(bytes, extended) {
+                return Some(root);
             }
+        }
+    }
+    None
+}
+
+#[cfg(feature = "grub")]
+fn discover(root: acpi::RootTable) -> Option<acpi::Topology> {
+    let bytes = table(root.physical_address)?;
+    let signature = match root.entry_bytes {
+        4 => b"RSDT",
+        8 => b"XSDT",
+        _ => return None,
+    };
+    if &bytes[..4] != signature || (bytes.len() - 36) % root.entry_bytes != 0 {
+        return None;
+    }
+    for pointer in bytes[36..].chunks_exact(root.entry_bytes) {
+        let address = if root.entry_bytes == 8 {
+            u64::from_le_bytes(pointer.try_into().ok()?)
+        } else {
+            u64::from(u32::from_le_bytes(pointer.try_into().ok()?))
+        };
+        let Some(bytes) = table(address) else {
+            continue;
+        };
+        if &bytes[..4] == b"APIC" {
+            return Some(acpi::parse_madt(bytes).expect("invalid or unsupported MADT topology"));
         }
     }
     None
@@ -130,12 +130,32 @@ pub fn prepare(
     mapper: &mut x86_64::structures::paging::OffsetPageTable<'_>,
     frames: &mut crate::memory::RegionFrameAllocator,
     regions: &[crate::memory::MemRegion],
+    supplied_root: Option<acpi::RootTable>,
 ) {
     use x86_64::{
         structures::paging::{Mapper, Page, PageTableFlags, PhysFrame},
         PhysAddr, VirtAddr,
     };
-    let mut topology = discover().expect("ACPI MADT required for GRUB CPU discovery");
+    // Prefer the bootloader's copied, validated RSDP. A malformed supplied root
+    // is fatal; BIOS scanning is compatibility only when no ACPI tag was given.
+    let source = if supplied_root.is_some() {
+        "multiboot2"
+    } else {
+        "bios"
+    };
+    let root = supplied_root
+        .or_else(legacy_root)
+        .expect("ACPI RSDP required for GRUB CPU discovery");
+    let mut topology = discover(root).expect("ACPI MADT required for GRUB CPU discovery");
+    crate::serial_println!(
+        "[smp] firmware={} root={}",
+        source,
+        if root.entry_bytes == 8 {
+            "xsdt"
+        } else {
+            "rsdt"
+        }
+    );
     let bsp = apic_id();
     let pos = topology.ids[..topology.count]
         .iter()
@@ -215,6 +235,9 @@ pub fn start() {
         IDLE_STACKS[i].store(top, Ordering::Release);
         let _ = alloc::boxed::Box::leak(stack); // CPU-lifetime ownership, bounded at 32.
     }
+    if IDS[0].load(Ordering::Relaxed) == u32::MAX {
+        IDS[0].store(u32::from(apic_id()), Ordering::Relaxed);
+    }
     ONLINE[0].store(true, Ordering::Release);
     #[cfg(feature = "grub")]
     {
@@ -272,6 +295,28 @@ pub fn start() {
         }
         apic::timer(timer);
     }
+    for i in 0..count {
+        crate::devices::register(crate::devices::Device {
+            name: "cpu",
+            instance: i as u8,
+            bus: if cfg!(feature = "grub") {
+                crate::devices::Bus::Acpi
+            } else {
+                crate::devices::Bus::Boot
+            },
+            driver: "x86-64",
+            details: crate::devices::Details::Cpu {
+                apic_id: IDS[i].load(Ordering::Relaxed) as u8,
+                bsp: i == 0,
+            },
+        });
+        crate::serial_println!(
+            "[smp] cpu={} apic={} role={} ready",
+            i,
+            IDS[i].load(Ordering::Relaxed),
+            if i == 0 { "bsp" } else { "ap" }
+        );
+    }
     RELEASED.store(true, Ordering::Release);
     crate::serial_println!("[smp] online={}", count);
 }
@@ -281,11 +326,13 @@ extern "C" fn ap_main() -> ! {
     crate::gdt::init();
     crate::interrupts::init_idt();
     apic::init(false);
+    // Readiness includes the local timer. IRQs remain disabled until scheduler
+    // entry/idle installs a valid context; Release publishes completed CPU setup.
+    apic::timer(TIMER.load(Ordering::Acquire));
     ONLINE[current_cpu()].store(true, Ordering::Release);
     while !RELEASED.load(Ordering::Acquire) {
         core::hint::spin_loop();
     }
-    apic::timer(TIMER.load(Ordering::Acquire));
     super::entry::idle()
 }
 

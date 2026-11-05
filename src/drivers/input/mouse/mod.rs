@@ -298,6 +298,9 @@ pub fn init() {
 
             serial_println!("[mouse] initialized (IRQ12, 3-byte packets)");
             absolute::init();
+            crate::devices::register(crate::devices::Device { name:"mouse",instance:0,
+                bus:crate::devices::Bus::Legacy,driver:if absolute::enabled() {"vmware-pointer"}else{"ps2-mouse"},
+                details:crate::devices::Details::None });
         }
     });
 }

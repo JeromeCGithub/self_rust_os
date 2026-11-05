@@ -5,7 +5,8 @@
 //! This module parses the tags the kernel needs:
 //!
 //! - tag 6: the firmware memory map (available RAM), and
-//! - tag 8: the framebuffer GRUB configured for us.
+//! - tag 8: the framebuffer GRUB configured for us,
+//! - tags 14/15: copied ACPI RSDP (prefer the extended format).
 //!
 //! The parser is allocation-free (fixed-size arrays) because it runs before
 //! the heap exists. It is pure enough to be unit-tested without GRUB: tests
@@ -25,6 +26,8 @@ const MEM_AVAILABLE: u32 = 1;
 /// Information extracted from the Multiboot2 structure.
 #[derive(Debug)]
 pub struct BootInfo {
+    /// Owned selection from GRUB's copied ACPI RSDP; no boot-tag borrow survives.
+    pub acpi_root: Option<crate::arch::x86_64::acpi::RootTable>,
     /// Available-RAM regions (`[start, end)`), sorted by address.
     pub regions: [MemRegion; MAX_REGIONS],
     /// Number of valid entries in `regions`.
@@ -80,6 +83,8 @@ pub enum ParseError {
     NoFramebuffer,
     /// The memory map holds more than [`MAX_REGIONS`] available regions.
     TooManyRegions,
+    /// A supplied ACPI RSDP tag was malformed or duplicated.
+    InvalidAcpi,
 }
 
 // Multiboot2 tag types we interpret.
@@ -131,11 +136,12 @@ pub unsafe fn parse(magic: u64, info_ptr: u64) -> Result<BootInfo, ParseError> {
 
     // SAFETY: Guaranteed readable by the caller.
     let total_size = unsafe { read_u32(info_ptr) };
-    if total_size < 16 {
+    if total_size < 16 || info_ptr.checked_add(u64::from(total_size)).is_none() {
         return Err(ParseError::Truncated);
     }
 
     let mut info = BootInfo {
+        acpi_root: None,
         regions: [MemRegion { start: 0, end: 0 }; MAX_REGIONS],
         region_count: 0,
         framebuffer: Framebuffer {
@@ -149,6 +155,8 @@ pub unsafe fn parse(magic: u64, info_ptr: u64) -> Result<BootInfo, ParseError> {
     };
     let mut have_mmap = false;
     let mut have_fb = false;
+    let mut acpi_old = false;
+    let mut acpi_new = false;
 
     // Tags start after the 8-byte header; each tag is 8-byte aligned.
     let mut offset = 8_u64;
@@ -168,8 +176,34 @@ pub unsafe fn parse(magic: u64, info_ptr: u64) -> Result<BootInfo, ParseError> {
                 have_mmap = true;
             }
             TAG_FRAMEBUFFER => {
+                if tag_size < 32 {
+                    return Err(ParseError::Truncated);
+                }
                 info.framebuffer = parse_framebuffer(body);
                 have_fb = true;
+            }
+            14 | 15 => {
+                let extended = tag_type == 15;
+                let seen = if extended {
+                    &mut acpi_new
+                } else {
+                    &mut acpi_old
+                };
+                if *seen {
+                    return Err(ParseError::InvalidAcpi);
+                }
+                *seen = true;
+                // SAFETY: This complete body is bounded by the tag and total
+                // sizes above and the caller's readable boot allocation. Byte
+                // alignment suffices; parsing retains only owned scalar fields.
+                let bytes = unsafe {
+                    core::slice::from_raw_parts(body as *const u8, (tag_size - 8) as usize)
+                };
+                let root = crate::arch::x86_64::acpi::parse_rsdp(bytes, extended)
+                    .map_err(|_| ParseError::InvalidAcpi)?;
+                if extended || !acpi_new {
+                    info.acpi_root = Some(root);
+                }
             }
             _ => {}
         }
@@ -189,15 +223,17 @@ pub unsafe fn parse(magic: u64, info_ptr: u64) -> Result<BootInfo, ParseError> {
 /// Parses a memory map tag body into `info.regions`.
 ///
 /// Only entries of type "available RAM" are recorded.
-fn parse_memory_map(
-    body: u64,
-    tag_size: u32,
-    info: &mut BootInfo,
-) -> Result<(), ParseError> {
+fn parse_memory_map(body: u64, tag_size: u32, info: &mut BootInfo) -> Result<(), ParseError> {
+    if tag_size < 16 {
+        return Err(ParseError::Truncated);
+    }
     // SAFETY: `body` points inside the validated information structure.
     let entry_size = unsafe { read_u32(body) } as u64;
+    if entry_size < 24 || (u64::from(tag_size) - 16) % entry_size != 0 {
+        return Err(ParseError::Truncated);
+    }
     let entries_start = body + 8;
-    let entries_end = body + u64::from(tag_size);
+    let entries_end = body + u64::from(tag_size) - 8;
 
     let mut addr = entries_start;
     while addr + entry_size <= entries_end && entry_size >= 24 {
@@ -266,7 +302,7 @@ mod tests {
         write_u32(buf, &mut off, 0); // size patched later
         write_u32(buf, &mut off, 24); // entry_size
         write_u32(buf, &mut off, 0); // entry_version
-        // Region 1: 1 MiB .. 128 MiB, available.
+                                     // Region 1: 1 MiB .. 128 MiB, available.
         write_u64(buf, &mut off, 0x10_0000);
         write_u64(buf, &mut off, 0x7F0_0000);
         write_u32(buf, &mut off, 1);
@@ -302,6 +338,76 @@ mod tests {
         let total = off;
         buf[0..4].copy_from_slice(&(total as u32).to_le_bytes());
         total
+    }
+
+    fn append_tag(buf: &mut [u8], kind: u32, bytes: &[u8]) {
+        let total = u32::from_le_bytes(buf[..4].try_into().unwrap()) as usize;
+        let at = total - 8;
+        let size = 8 + bytes.len();
+        let end = at + (size + 7 & !7);
+        buf[at..at + 4].copy_from_slice(&kind.to_le_bytes());
+        buf[at + 4..at + 8].copy_from_slice(&(size as u32).to_le_bytes());
+        buf[at + 8..at + size].copy_from_slice(bytes);
+        buf[end..end + 4].fill(0);
+        buf[end + 4..end + 8].copy_from_slice(&8u32.to_le_bytes());
+        buf[..4].copy_from_slice(&((end + 8) as u32).to_le_bytes());
+    }
+    fn rsdp(extended: bool) -> [u8; 36] {
+        let mut b = [0; 36];
+        b[..8].copy_from_slice(b"RSD PTR ");
+        b[15] = if extended { 2 } else { 0 };
+        b[16..20].copy_from_slice(&0x123400u32.to_le_bytes());
+        b[20..24].copy_from_slice(&36u32.to_le_bytes());
+        b[24..32].copy_from_slice(&0x567800u64.to_le_bytes());
+        b[8] = 0u8.wrapping_sub(b[..20].iter().fold(0u8, |s, v| s.wrapping_add(*v)));
+        b[32] = 0u8.wrapping_sub(b.iter().fold(0u8, |s, v| s.wrapping_add(*v)));
+        b
+    }
+    #[test_case]
+    fn acpi_tags_prefer_extended_root_independently_of_tag_order() {
+        for order in [[14, 15], [15, 14], [14, 0], [15, 0]] {
+            let mut buf = [0u8; 512];
+            build_fake_info(&mut buf);
+            for kind in order {
+                if kind != 0 {
+                    let bytes = rsdp(kind == 15);
+                    append_tag(&mut buf, kind, &bytes[..if kind == 15 { 36 } else { 20 }]);
+                }
+            }
+            // SAFETY: The buffer owns the complete initialized tag structure.
+            let info = unsafe { parse(u64::from(MULTIBOOT2_MAGIC), buf.as_ptr() as u64) }.unwrap();
+            assert_eq!(
+                info.acpi_root.unwrap().physical_address,
+                if order.contains(&15) {
+                    0x567800
+                } else {
+                    0x123400
+                }
+            );
+        }
+    }
+    #[test_case]
+    fn malformed_acpi_and_short_required_tag_bodies_are_rejected() {
+        for kind in [14, 15] {
+            let mut buf = [0u8; 512];
+            build_fake_info(&mut buf);
+            append_tag(&mut buf, kind, &[0u8; 19]);
+            // SAFETY: Malformed wire bytes remain entirely within this allocation.
+            assert_eq!(
+                unsafe { parse(u64::from(MULTIBOOT2_MAGIC), buf.as_ptr() as u64) }.unwrap_err(),
+                ParseError::InvalidAcpi
+            );
+        }
+        for kind in [6, 8] {
+            let mut buf = [0u8; 512];
+            build_fake_info(&mut buf);
+            append_tag(&mut buf, kind, &[]);
+            // SAFETY: Backing storage is readable; the parser must honor tag bounds.
+            assert_eq!(
+                unsafe { parse(u64::from(MULTIBOOT2_MAGIC), buf.as_ptr() as u64) }.unwrap_err(),
+                ParseError::Truncated
+            );
+        }
     }
 
     #[test_case]
@@ -344,8 +450,7 @@ mod tests {
     #[test_case]
     fn test_parse_rejects_null_pointer() {
         // SAFETY: Null pointer must be rejected before any read.
-        let err =
-            unsafe { parse(u64::from(MULTIBOOT2_MAGIC), 0) }.expect_err("null ptr must fail");
+        let err = unsafe { parse(u64::from(MULTIBOOT2_MAGIC), 0) }.expect_err("null ptr must fail");
         assert_eq!(err, ParseError::Truncated);
     }
 }

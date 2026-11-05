@@ -154,7 +154,13 @@ pub fn ls(path: &str, buf: &mut [u8], max_entries: usize) -> Option<usize> {
     }
 }
 
-/// Reads a whole file into `buf`. Returns bytes read, or `None` on error.
+/// Reads a whole FAT file, or a bounded device read, into `buf`.
+/// `/dev/null` returns EOF; `/dev/zero` fills the buffer; `/dev/random` returns
+/// at most 256 bytes or an error if hardware entropy is unavailable. Reading
+/// `/dev/devices/info` returns the inventory prefix that fits. Individual CPU
+/// information is available at `/dev/cpu/N/info`; use `ls` for directories.
+/// No offset is retained.
+/// Returns bytes read, or `None` on error.
 pub fn read_file(path: &str, buf: &mut [u8]) -> Option<usize> {
     let path_buf = path_buf(path)?;
     let n = unsafe {
@@ -172,7 +178,9 @@ pub fn read_file(path: &str, buf: &mut [u8]) -> Option<usize> {
     }
 }
 
-/// Creates or overwrites a file with `data`. Returns bytes written,
+/// Creates or overwrites a FAT file, or writes an existing device endpoint.
+/// `/dev/null` and `/dev/zero` discard writes; other device writes fail.
+/// Returns bytes written,
 /// or `None` on error.
 pub fn write_file(path: &str, data: &[u8]) -> Option<usize> {
     let path_buf = path_buf(path)?;

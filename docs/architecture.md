@@ -65,7 +65,9 @@ PIC routing code remains architecture glue in the existing core modules.
 Boot calls driver initialization explicitly. The framebuffer driver retains boot
 console drawing helpers and input retains the legacy asynchronous scancode helper.
 This is an initial Linux-style source layout and responsibility split: there is
-no loadable-module ABI, Linux driver API, common device registry or hotplug support.
+no loadable-module ABI, Linux driver API or hotplug support. The bounded
+[device inventory](devices.md) records initialized driver instances and backs a
+virtual `/dev` namespace; it does not provide raw hardware access.
 Future hardware drivers belong under the appropriate `drivers/` subsystem.
 
 ## Boot and process lifecycle
@@ -154,7 +156,9 @@ GRUB boots from the primary master's first FAT32 partition. The root mount uses
 MBR-relative sector offsets. Files use FAT32 8.3 names and directory traversal;
 the current root filesystem is not the old ramfs described in historical notes.
 
-The disk builder installs `/BIN`, `/ETC`, `/HOME`, and `/TMP`. The DE discovers
+The disk builder installs `/BIN`, `/ETC`, `/HOME`, and `/TMP`. The filesystem
+facade mounts an in-memory `/dev` above FAT32; null/zero/random operations and
+read-only inventory retain the existing validated path syscall interface. The DE discovers
 launchers from `/BIN` and reads `/ETC/WALL.PPM`; the compositor understands neither
 the wallpaper path/format nor executable names. Portal hosts Forge over an owned standard-I/O connection; terminal rendering and
 shell execution live in different processes. See [terminal architecture](terminal-shell.md).
