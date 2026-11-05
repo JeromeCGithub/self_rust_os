@@ -96,6 +96,7 @@ fn stdio_checks() {
     );
     assert_eq!(scheduler::stdio(0, 0), (u64::from(child) + 1) << 1);
     assert_eq!(scheduler::stdio(2, 0), 0);
+    readiness_checks(host, child, &mut context);
     for word in 0u32..4096 {
         assert_eq!(scheduler::stdio(1, word), 0);
     }
@@ -150,6 +151,71 @@ fn stdio_checks() {
     );
     connected_waiter_checks(&mut context);
     foreign_waiter_checks(&mut context);
+    readiness_eof_check(&mut context);
+}
+
+fn readiness_eof_check(context: &mut u64) {
+    let host = scheduler::spawn_process(&[0xc3], 0).unwrap();
+    let child = scheduler::spawn_process(&[0xc3], 0).unwrap();
+    activate(host, context);
+    assert!(scheduler::connect_stdio(child));
+    assert_eq!(scheduler::wait_events(2, 0), scheduler::PROCESS_BLOCK_SENTINEL);
+    *context = scheduler::schedule(*context);
+    activate(child, context);
+    scheduler::exit_current(0);
+    *context = scheduler::schedule(0);
+    activate(host, context);
+    // SAFETY: This is the selected host's live, exclusively owned saved frame.
+    assert_eq!(unsafe { (*(*context as *const scheduler::SavedContext)).rax }, 2,
+        "peer exit wakes an empty reader for EOF without waiting for a tick");
+    assert_eq!(scheduler::stdio(2, 0), u64::MAX - 1);
+    assert_eq!(scheduler::waitpid(child), 0);
+    activate(0, context);
+    scheduler::kill(host).unwrap();
+    assert_eq!(scheduler::waitpid(host), 9);
+}
+
+// Exercise atomic check/park, wake return value and FIFO through real contexts.
+fn readiness_checks(host: u32, child: u32, context: &mut u64) {
+    const READ: u64 = 2;
+    const WRITE: u64 = 4;
+    let error = u64::MAX - 1;
+    assert_eq!(scheduler::wait_events(16, 0), error, "pointer readiness belongs to the display owner");
+    for (mask, timeout) in [(0, 0), (32, 0), (READ, u64::MAX)] {
+        assert_eq!(scheduler::wait_events(mask, timeout), error);
+    }
+    assert_eq!(scheduler::wait_events(WRITE, 0), WRITE);
+    assert_eq!(scheduler::wait_events(READ, 0), scheduler::PROCESS_BLOCK_SENTINEL,
+        "empty live stream must park rather than poll a timer");
+    *context = scheduler::schedule(*context);
+    activate(child, context);
+    assert_eq!(scheduler::stdio(1, 123), 0);
+    activate(host, context);
+    // SAFETY: activate selects this live thread's kernel-owned saved frame;
+    // the supervisor harness does not restore or concurrently modify it.
+    assert_eq!(unsafe { (*(*context as *const scheduler::SavedContext)).rax }, READ,
+        "enqueue must wake a reader immediately with its readiness bits");
+    assert_eq!(scheduler::wait_events(READ, 0), READ,
+        "enqueue before wait must not lose a wake");
+    assert_eq!(scheduler::stdio(2, 0), 124);
+    for word in 0..4096 {
+        assert_eq!(scheduler::stdio(1, word), 0);
+    }
+    assert_eq!(scheduler::wait_events(WRITE, 0), scheduler::PROCESS_BLOCK_SENTINEL,
+        "a full peer queue must park its writer");
+    *context = scheduler::schedule(*context);
+    activate(child, context);
+    assert_eq!(scheduler::stdio(2, 0), 1);
+    activate(host, context);
+    // SAFETY: Same CPU-owned saved frame invariant as the reader check above.
+    assert_eq!(unsafe { (*(*context as *const scheduler::SavedContext)).rax }, WRITE,
+        "dequeue must immediately wake backpressured writers");
+    activate(child, context);
+    for word in 1..4096 {
+        assert_eq!(scheduler::stdio(2, 0), word + 1);
+    }
+    activate(host, context);
+
 }
 
 // Main completes waitpid by writing the exit code and reaping during wakeup.

@@ -150,6 +150,8 @@ with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
         assert 'Kernel panic' not in log.read_text()
         print('PASS: separate compositor/DE, space wallpaper, 1920x1080 edges/pointer, launchers, commands, concurrency, focus/drag/close, and compositor survival after DE exit')
     except Exception:
+        shot('desktop-failure')
+        if log.exists():(ROOT/'target'/'desktop-failure.log').write_bytes(log.read_bytes())
         if log.exists():print(log.read_text(errors='replace')[-8000:])
         raise
     finally:

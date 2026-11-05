@@ -62,5 +62,12 @@ pub fn with_fs<F, R>(f: F) -> Option<R>
 where
     F: FnOnce(&mut Fat32<OffsetDisk<AtaDisk>>) -> R,
 {
-    ROOT_FS.try_get().ok().map(|fs| f(&mut fs.lock()))
+    let fs = ROOT_FS.try_get().ok()?;
+    // Syscalls copy paths/data into kernel-owned storage before taking this
+    // service lock. PIO must not prevent other CPUs scheduling or acknowledging
+    // user frames. Release the filesystem guard before reacquiring CPU entry.
+    Some(crate::arch::x86_64::entry::without_gate(|| {
+        let mut filesystem = fs.lock();
+        f(&mut filesystem)
+    }))
 }

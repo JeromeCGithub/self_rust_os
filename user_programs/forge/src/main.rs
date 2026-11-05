@@ -114,7 +114,7 @@ fn main() {
             }
             let n = sys::read_nb(sys::STDIN_FD, &mut char_buf);
             if n == 0 {
-                sys::sleep_ticks(1).expect("shell input wait");
+                sys::wait_stdin(network.input_wait_ticks()).expect("shell input wait");
                 continue;
             }
             let c = char_buf[0];

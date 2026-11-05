@@ -1,6 +1,39 @@
 //! Dirty tiles bound writes to video memory without another full-screen buffer.
 pub const TILE: usize = 32;
 pub const ROWS: usize = 34;
+/// Conservative reach of the quarter-resolution glass backdrop sampler.
+pub const BACKDROP_MARGIN: usize = 16;
+
+pub type Bounds = (usize, usize, usize, usize);
+
+/// A content-only update can redraw one window when its complete paint bounds
+/// and backdrop sampling reach do not intersect another window. Layout and
+/// background changes use full compose.
+pub fn isolated_content(
+    bounds: &[Bounds],
+    changed: u32,
+    scene_changed: bool,
+) -> Option<(usize, Bounds)> {
+    if scene_changed || changed.count_ones() != 1 {
+        return None;
+    }
+    let index = changed.trailing_zeros() as usize;
+    let target = *bounds.get(index)?;
+    for (other, rect) in bounds.iter().enumerate() {
+        if rect.0 >= rect.2 || rect.1 >= rect.3 {
+            return None;
+        }
+        if other != index
+            && target.0 < rect.2.saturating_add(BACKDROP_MARGIN)
+            && rect.0 < target.2.saturating_add(BACKDROP_MARGIN)
+            && target.1 < rect.3.saturating_add(BACKDROP_MARGIN)
+            && rect.1 < target.3.saturating_add(BACKDROP_MARGIN)
+        {
+            return None;
+        }
+    }
+    Some((index, target))
+}
 
 pub struct Damage {
     rows: [u64; ROWS],
@@ -56,6 +89,31 @@ impl Damage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn disjoint_content_does_not_redraw_unchanged_windows() {
+        let bounds = [(868, 310, 1380, 650), (80, 120, 592, 460)];
+        assert_eq!(isolated_content(&bounds, 2, false), Some((1, bounds[1])));
+        assert_eq!(isolated_content(&bounds, 1, false), Some((0, bounds[0])));
+        assert_eq!(isolated_content(&bounds, 0, false), None);
+        assert_eq!(
+            isolated_content(&bounds, 2, true),
+            None,
+            "background, focus and geometry changes require a complete scene"
+        );
+        assert_eq!(isolated_content(&bounds, 3, false), None);
+        assert_eq!(isolated_content(&bounds, 1 << 31, false), None);
+        assert_eq!(
+            isolated_content(&[(0, 0, 100, 100), (90, 90, 200, 200)], 2, false),
+            None,
+            "overlapping glass retains bottom-to-top backdrop recomposition"
+        );
+        assert_eq!(isolated_content(&[(0, 0, 0, 100)], 1, false), None);
+        assert_eq!(
+            isolated_content(&[(0, 0, 100, 100), (108, 0, 208, 100)], 1, false),
+            None,
+            "nearby glass can sample changed pixels even when paint rectangles do not overlap"
+        );
+    }
     #[test]
     fn idle_and_single_pixel_do_not_damage_the_screen() {
         let mut damage = Damage::new();

@@ -43,8 +43,9 @@ graceful TCP shutdown.
   globally. Each live TCP endpoint needs 28 KiB more heap memory. At sixteen TCP
   endpoints that is an extra 448 KiB, allocated on open and released on cleanup.
 - Ingress remains bounded to eight frames per service call. Driver DMA ownership,
-  descriptor counts, packet copies, IRQ masks and single-CPU synchronization are
-  unchanged. No busy polling or new background thread was introduced.
+  descriptor counts, packet copies and IRQ masks were unchanged by this window
+  optimization. The service remains serialized on the native SMP platform.
+  No busy polling or background network thread was introduced.
 
 The NIC already uses DMA. Its pair of 32-entry rings and 64 packet buffers use
 66 physical frames (264 KiB) reserved at boot. DMA moves Ethernet frames between
@@ -109,8 +110,8 @@ flow-control or latency measurements.
    DMA ownership and process mapping checks must remain explicit. HTTP compression
    is another userspace option for large textual responses.
 
-The current OS is single-CPU and the network service uses one lock. Additional
+The current OS supports 1–32 QEMU CPUs; the network service uses one lock. Additional
 application threads do not enlarge a TCP window or make locked protocol work
-parallel. A single event-driven network worker is a useful next architecture step;
-SMP or per-connection threads require independent scheduler and synchronization
-work and are not justified by this benchmark.
+parallel. A single event-driven network worker is a useful next architecture step.
+Per-connection concurrency must preserve synchronization and resource ownership;
+this benchmark does not establish a benefit from it.

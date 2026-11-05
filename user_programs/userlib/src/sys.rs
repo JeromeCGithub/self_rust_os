@@ -310,7 +310,7 @@ pub fn focus(pid: u32) -> Result<(), ()> {
 /// continue to reach the serial log without drawing over graphical content.
 pub fn graphics_mode() { unsafe { syscall(16, 0, 0, 0); } }
 
-/// Deschedules this process for a duration in PIT ticks (~55 ms each).
+/// Deschedules the calling thread for a duration in PIT ticks (~55 ms each).
 /// Zero returns immediately. Durations above i64::MAX or overflowing the
 /// absolute tick deadline return Err. No CPU time is consumed while waiting.
 pub fn sleep_ticks(duration: u64) -> Result<(), ()> {
@@ -359,4 +359,50 @@ pub fn receive_message() -> Result<Option<(u32, u32)>, MessageError> {
     if value == SYSCALL_ERROR { return Err(MessageError::Unavailable); }
     if value == 0 { return Ok(None); }
     Ok(Some((((value >> 32) - 1) as u32, value as u32)))
+}
+
+/// Park only this thread until its process mailbox has data (true) or the PIT
+/// deadline expires (false). Zero waits indefinitely. This does not consume a
+/// message: other same-process readers can race, so recheck receive_message.
+pub fn wait_message(timeout_ticks: u64) -> Result<bool, MessageError> {
+    // SAFETY: Only a scalar timeout crosses the boundary; no user references
+    // are retained while the kernel blocks this native execution context.
+    match unsafe { syscall(rustos_thread_abi::SYS_MESSAGE_WAIT,timeout_ticks,0,0) } {
+        0=>Ok(false),
+        1=>Ok(true),
+        _=>Err(MessageError::Unavailable),
+    }
+}
+
+/// Process-local readiness conditions. Waiting never consumes input or messages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Events(u64);
+impl Events {
+    pub const MAILBOX: Self = Self(rustos_thread_abi::EVENT_MAILBOX);
+    pub const STDIO_READ: Self = Self(rustos_thread_abi::EVENT_STDIO_READ);
+    pub const STDIO_WRITE: Self = Self(rustos_thread_abi::EVENT_STDIO_WRITE);
+    pub const KEYBOARD: Self = Self(rustos_thread_abi::EVENT_KEYBOARD);
+    /// Display-owner pointer changes since its last `mouse()` sample.
+    pub const POINTER: Self = Self(rustos_thread_abi::EVENT_POINTER);
+    /// Whether all requested conditions were included in this readiness hint.
+    pub fn contains(self, other: Self) -> bool { self.0 & other.0 == other.0 }
+}
+impl core::ops::BitOr for Events {
+    type Output = Self;
+    fn bitor(self, other: Self) -> Self { Self(self.0 | other.0) }
+}
+
+/// Park this native thread until any selected condition is ready, or timeout.
+/// Zero ticks means no deadline. An empty returned mask means timeout; I/O EOF
+/// also counts as readiness. Recheck the operation because readers may race.
+pub fn wait_events(events: Events, timeout_ticks: u64) -> Result<Events, MessageError> {
+    // SAFETY: Only scalar flags/deadline cross this blocking syscall. The kernel
+    // retains no user buffers; process ownership determines accessible queues.
+    let value = unsafe { syscall(rustos_thread_abi::SYS_EVENT_WAIT, events.0, timeout_ticks, 0) };
+    if value == SYSCALL_ERROR { Err(MessageError::Unavailable) } else { Ok(Events(value)) }
+}
+
+/// Wait for this process's standard input, including redirected child input.
+pub fn wait_stdin(timeout_ticks: u64) -> Result<Events, MessageError> {
+    wait_events(if crate::process::redirected() { Events::STDIO_READ } else { Events::KEYBOARD }, timeout_ticks)
 }

@@ -55,8 +55,8 @@ The driver advertises 31 usable receive descriptors to bound TCP receive bursts.
 See [network performance](network-performance.md) for the receive-window fix and
 measured HTTP throughput. Completed RX is copied to CPU-owned storage before returning the frame to DMA;
 TX is reused only after completion. Malformed/incomplete frames are discarded.
-Device reset polling is bounded. This is a single-CPU QEMU implementation, not
-tested support for arbitrary physical Intel NICs or SMP.
+Device reset polling is bounded. The device service remains serialized on the
+[native SMP platform](threading.md); arbitrary physical Intel NICs are unverified.
 
 Every socket syscall services at most eight received frames and a bounded egress
 pass. smoltcp's unbounded ingress loop is not used. Only active callers drive
@@ -205,7 +205,8 @@ rustc +nightly-2025-01-30 --edition=2021 --test "$REPO/src/userspace/usercopy.rs
 Set `REPO` to the absolute checkout path first. Follow the complete applicable
 [testing matrix](testing.md) as well. The lifecycle probe additionally reproduced
 and drove fixes for maximum-size loader staging allocations and blocked waitpid
-return-register/reaping behavior. Existing process frame/stack leaks and the
-debug heap stress timeout remain explicit limitations; socket cleanup tests do
-not establish general process reclamation. Actual evidence is recorded in
+return-register/reaping behavior. Process frame/stack reclamation is deferred until
+execution and TLB quiescence. The debug heap stress timeout remains an explicit
+limitation; socket cleanup tests alone do not establish process reclamation.
+Actual evidence is recorded in
 [networking validation](networking-validation.md).

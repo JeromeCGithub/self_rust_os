@@ -6,6 +6,8 @@ pub struct Network {
     ping_address: [u8; 4],
 }
 impl Network {
+    /// An active asynchronous ping needs deadline service; idle shells do not.
+    pub fn input_wait_ticks(&self) -> u64 { if self.ping.is_some() { 1 } else { 0 } }
     pub fn new() -> Self {
         Self {
             ping: None,

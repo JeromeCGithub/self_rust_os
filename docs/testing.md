@@ -86,10 +86,13 @@ python3 -B e2e/tls.py --bad-clock
 python3 -B e2e/net_perf.py --label current --assert-fast
 cargo test --test stdio
 python3 e2e/desktop_perf.py
+RUSTOS_CPUS=16 python3 -B e2e/desktop_parallel.py
 python3 e2e/glass_ui.py
 bash e2e/build_profile.sh
 rustc --edition=2021 --test user_programs/wm/src/damage.rs -o /tmp/rustos-damage-tests
 /tmp/rustos-damage-tests
+rustc --edition=2021 --test user_programs/wm/src/input.rs -o /tmp/rustos-pointer-tests
+/tmp/rustos-pointer-tests
 rustc --edition=2021 --test user_programs/userlib/src/ui/host_tests.rs -o /tmp/rustos-ui-tests
 /tmp/rustos-ui-tests
 rustc --edition=2021 --test user_programs/wm/src/glass.rs -o /tmp/rustos-glass-tests
@@ -114,8 +117,9 @@ Screenshots go to `docs/screenshots/desktop*.png`; inspect changes before commit
 The desktop test also asserts a 1920×1080 framebuffer, full-width panels, edge
 pointer coordinates and dragging to the far display edge. `display_mapping` checks
 large compositor mappings, padded pitch, final partial pages, independent snapshots,
-preserved parent code and three pairs of spawn/kill/reap operations. Existing frame/stack leaks
-remain; a bounded repetition test does not establish resource reclamation.
+preserved parent code and three pairs of spawn/kill/reap operations. The native [thread/process lifecycle tests](threading.md#validation) additionally
+assert physical-frame and kernel-heap recovery; bounded repetition is not an
+exhaustive proof of resource ownership.
 See [1080p validation](1080p-validation.md) for recorded red/green evidence and limits.
 The desktop and CPU tests now boot private copies of the development disk,
 so file operations in the test cannot mutate an interactive VM's image. It needs Pillow and permission to
@@ -195,3 +199,27 @@ cleanup in a small RAM display fixture. Native text-model checks use
 followed by `/tmp/rustos-screen-tests`. The desktop E2E verifies actual independent
 Forge spawning, shell-only commands through Portal, filesystem results, shell exit
 and reaping of hosted shells after terminal close.
+
+## Native threading and SMP
+
+See [threading validation](threading.md#validation) for CPU-profile, compile-fail,
+fault-isolation, syscall and cleanup checks. SMP changes require actual QEMU
+execution across CPU counts, including 1, 8 and 32; topology unit tests alone
+cannot establish AP startup or simultaneous Ring 3 execution. Preserve existing
+GUI timeout values when exposing concurrent execution races.
+
+
+The [parallel desktop regression](../e2e/desktop_parallel.py) launches two distinct
+Portal/Forge pairs, asserts focused command delivery, and measures launch, pointer
+and Enter-to-response latency. Its budgets are 1 second per launch (including QMP
+click injection), 50 ms for pointer response while idle/during launch, and 75 ms for command
+response. Run performance measurements without competing test VMs. Output, metrics
+and the two-window screenshot are retained under `target/desktop-parallel/`.
+Compact ELF parser host cases run from outside the root bare-metal Cargo configuration:
+
+```bash
+cd /tmp
+cargo +nightly-2025-01-30 test --manifest-path /path/to/self_rust_os/crates/exec-image/Cargo.toml --target x86_64-unknown-linux-gnu
+```
+The kernel `threads` integration verifies actual segment bytes, BSS/padding zeros,
+entry address, shared GOT pages, permissions, isolation and repeated frame recovery.

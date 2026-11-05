@@ -135,7 +135,8 @@ fn surface_pages_cover_pitch_and_reject_invalid_geometry() {
         }),
         Ok(2042)
     );
-    let capacity = (userspace::USER_REGION_END - userspace::USER_FRAMEBUFFER) as usize;
+    // Native worker stacks occupy a separate arena above the surface region.
+    let capacity = (userspace::USER_FRAMEBUFFER_END - userspace::USER_FRAMEBUFFER) as usize;
     assert_eq!(
         userspace::framebuffer_pages(&FbInfo {
             width: 1,

@@ -29,7 +29,11 @@ fn dispatch(number: u64, first: u64, second: u64, third: u64) -> Result<u64, Err
             // The initialized, distinct local record is copied without a user
             // reference. Syscall execution cannot unmap/schedule on this CPU.
             unsafe {
-                core::ptr::copy_nonoverlapping(bytes.as_ptr(), first as *mut u8, second as usize);
+                crate::userspace::usercopy::copy_raw(
+                    first as *mut u8,
+                    bytes.as_ptr(),
+                    second as usize,
+                );
             }
             Ok(second)
         }

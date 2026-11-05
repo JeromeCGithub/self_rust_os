@@ -24,10 +24,11 @@ do not change the OS toolchain merely to work around a missing host utility.
 | `cargo build` | Compile the default kernel boot path; does not prove desktop boot |
 | `cargo build --features grub` | Compile the GRUB kernel |
 | `cargo build --release --features grub` | Compile optimized GRUB kernel |
-| `./tools/build-user.sh` | Build every application; generate flat binaries and section metadata |
+| `./tools/build-user.sh` | Build every application; generate compact ELF images and permission metadata |
 | `./tools/build-user.sh portal` | Build one application and regenerate its artifacts |
 | `./tools/build-grub-disk.sh` | Build applications/release kernel and overwrite `target/grub-disk.img` |
-| `cargo run` | Build the desktop disk and start graphical QEMU through the runner |
+| `cargo run` | Build the desktop disk and start graphical QEMU with 8 CPUs through the runner |
+| `RUSTOS_CPUS=32 cargo run` | Select 1–32 CPUs; invalid counts are rejected |
 | `RUSTOS_DISPLAY=none cargo run` | Same boot path without GUI; runs until terminated |
 | `python3 e2e/desktop.py` | Runtime desktop regression checks after a fresh disk build |
 | `python3 -B tools/check_docs.py` | Check required guides and local inline Markdown links/anchors |
@@ -69,8 +70,9 @@ Use `userlib` rather than hand-written syscall assembly. Programs implement
 `fn main()`; [the runtime](../user_programs/userlib/src/rt.rs) supplies `_start` and
 the panic handler. Keep linker scripts/custom targets aligned with kernel loading.
 
-The unified builder converts ELF to flat `.bin`, materializes `.bss`, and writes
-`*_meta.rs`. These artifacts are tracked and must match source. Never edit them
+The unified builder strips ELF debug/symbol data into `.bin`, preserves PT_LOAD
+file/memory sizes (BSS is zeroed in RAM), and writes `*_meta.rs`. Metadata uses
+page-aligned load permissions, including GOT sections sharing a page. These artifacts are tracked and must match source. Never edit them
 manually. The boot disk contains binaries loaded at runtime; the kernel no longer
 embeds `hello.bin`. Adding an app requires a separate crate, compatible target/linker
 layout, `userlib`, and a rebuilt disk. `/BIN` discovery provides its launcher.
@@ -124,7 +126,9 @@ arguments or return value. Use regular comments in the included application root
 crate-level attributes and inner documentation belong in the shared root.
 
 This is a Cargo convention for the current custom target, not a port of Rust's
-standard library. `core` and `userlib` are available; APIs such as `std::fs` and threads are not. Networking is provided by
+standard library. `core` and `userlib` are available; APIs such as `std::fs` and `std::thread` are not. Networking is provided by
 `userlib::net`, `userlib::http` and the optional `userlib::tls` feature. Dependencies must support `no_std` and the pinned
-target. The OS still loads fixed-address flat binaries rather than Linux ELF files.
+target. Native threads are available through `userlib` with `features = ["threads"]`;
+see [the threading guide](threading.md). The OS loads fixed-address static ELF images and supports legacy flat binaries.
+Using the ELF container does not provide Linux ABI compatibility or dynamic linking.
 The shared root does not change syscall numbers, linker layout, or privileges.

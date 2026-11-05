@@ -17,6 +17,7 @@ pub(super) struct Compositor {
     pub(super) damage: Damage,
     pub(super) cursor: Option<(i32, i32)>,
     pub(super) cursor_under: [u32; 8 * 14],
+    pub(super) pointer_input: crate::input::PointerInput,
 }
 static mut BACK: [u32; MAX_PITCH / 4 * MAX_H] = [0; MAX_PITCH / 4 * MAX_H];
 static mut BASE: [u32; MAX_W * MAX_H] = [0; MAX_W * MAX_H];
@@ -24,9 +25,11 @@ static mut SURFACE: [u32; MAX_PITCH / 4 * 480] = [0; MAX_PITCH / 4 * 480];
 pub(super) const CONTENT_W: usize = protocol::MAX_WIDTH;
 pub(super) const CONTENT_H: usize = protocol::MAX_HEIGHT;
 pub(super) const TITLE_H: i32 = 28;
-pub(super) const HALO: i32 = 16;
+pub(super) const HALO: i32 = crate::damage::BACKDROP_MARGIN as i32;
 pub(super) const BLUR_LEN: usize = 168 * 115;
 static mut CACHE: [[u32; CONTENT_W * CONTENT_H]; MAX] = [[0; CONTENT_W * CONTENT_H]; MAX];
+static mut BACKDROP_CACHE: [[u32; CONTENT_W * (CONTENT_H + TITLE_H as usize)]; MAX] =
+    [[0; CONTENT_W * (CONTENT_H + TITLE_H as usize)]; MAX];
 static mut BLUR_A: [u32; BLUR_LEN] = [0; BLUR_LEN];
 static mut BLUR_B: [u32; BLUR_LEN] = [0; BLUR_LEN];
 pub(super) fn string(bytes: &[u8]) -> &str {
@@ -77,7 +80,7 @@ impl Compositor {
                 );
             }
         });
-        let (mx, my, _) = sys::mouse();
+        let (mx, my, _) = self.sample_pointer();
         self.draw_cursor(mx, my);
     }
     pub(super) fn restore_cursor(&mut self) {
@@ -132,11 +135,22 @@ impl Compositor {
         self.cursor = Some((mx, my));
     }
     pub(super) fn refresh_cursor(&mut self) {
-        let (x, y, _) = sys::mouse();
+        let (x, y, _) = self.sample_pointer();
         if self.cursor != Some((x, y)) {
             self.restore_cursor();
             self.draw_cursor(x, y);
         }
+    }
+
+    fn sample_pointer(&mut self) -> (i32, i32, u8) {
+        let sample = sys::mouse();
+        self.pointer_input.observe(sample);
+        sample
+    }
+
+    pub(super) fn next_pointer(&mut self) -> (i32, i32, u8) {
+        self.sample_pointer();
+        self.pointer_input.next()
     }
 
     pub(super) fn text(&mut self, x: i32, y: i32, s: &str, c: u32) {
@@ -233,53 +247,57 @@ impl Compositor {
         }
         true
     }
-    pub(super) fn window(&mut self, win: &Window, active: bool) {
+    pub(super) fn window(&mut self, win: &Window, active: bool, reuse_backdrop: bool) {
         let w = win.width as i32;
         let h = win.height as i32 + TITLE_H;
         let blur_width = (w + HALO * 2 + 3) as usize / 4;
         let blur_height = ((if win.native { h } else { TITLE_H }) + HALO * 2 + 3) as usize / 4;
         let title_color = Color::rgba(225, 239, 255, if active { 10 } else { 5 }).0;
-        // Capture only layers below this window, before its own shadow/material.
-        // SAFETY: Validated display dimensions bound clamped BACK reads. Accepted
-        // content bounds guarantee blur_width*blur_height <= BLUR_LEN. This WM is
-        // the sole owner of all three buffers; no references survive this block.
-        unsafe {
-            for y in 0..blur_height {
-                for x in 0..blur_width {
-                    let sx = (win.x - HALO + x as i32 * 4 + 2).clamp(0, self.info.width as i32 - 1)
-                        as usize;
-                    let sy = (win.y - HALO + y as i32 * 4 + 2).clamp(0, self.info.height as i32 - 1)
-                        as usize;
-                    BLUR_A[y * blur_width + x] = BACK[sy * (self.info.pitch / 4) + sx];
+        if !reuse_backdrop {
+            // Capture only layers below this window, before its own shadow/material.
+            // SAFETY: Validated display dimensions bound clamped BACK reads. Accepted
+            // content bounds guarantee blur_width*blur_height <= BLUR_LEN. This WM is
+            // the sole owner of all three buffers; no references survive this block.
+            unsafe {
+                for y in 0..blur_height {
+                    for x in 0..blur_width {
+                        let sx = (win.x - HALO + x as i32 * 4 + 2)
+                            .clamp(0, self.info.width as i32 - 1)
+                            as usize;
+                        let sy = (win.y - HALO + y as i32 * 4 + 2)
+                            .clamp(0, self.info.height as i32 - 1)
+                            as usize;
+                        BLUR_A[y * blur_width + x] = BACK[sy * (self.info.pitch / 4) + sx];
+                    }
+                }
+                glass::blur(
+                    &*core::ptr::addr_of!(BLUR_A),
+                    &mut *core::ptr::addr_of_mut!(BLUR_B),
+                    blur_width,
+                    blur_height,
+                    true,
+                );
+                glass::blur(
+                    &*core::ptr::addr_of!(BLUR_B),
+                    &mut *core::ptr::addr_of_mut!(BLUR_A),
+                    blur_width,
+                    blur_height,
+                    false,
+                );
+                // Tint at low resolution once, instead of blending the same material
+                // for every output pixel. Opaque legacy content needs only the title.
+                for pixel in
+                    (&mut *core::ptr::addr_of_mut!(BLUR_A))[..blur_width * blur_height].iter_mut()
+                {
+                    *pixel = if win.material == Material::Opaque {
+                        0xff101b2c
+                    } else {
+                        glass::shade(*pixel, win.material == Material::GlassClear)
+                    };
                 }
             }
-            glass::blur(
-                &*core::ptr::addr_of!(BLUR_A),
-                &mut *core::ptr::addr_of_mut!(BLUR_B),
-                blur_width,
-                blur_height,
-                true,
-            );
-            glass::blur(
-                &*core::ptr::addr_of!(BLUR_B),
-                &mut *core::ptr::addr_of_mut!(BLUR_A),
-                blur_width,
-                blur_height,
-                false,
-            );
-            // Tint at low resolution once, instead of blending the same material
-            // for every output pixel. Opaque legacy content needs only the title.
-            for pixel in
-                (&mut *core::ptr::addr_of_mut!(BLUR_A))[..blur_width * blur_height].iter_mut()
-            {
-                *pixel = if win.material == Material::Opaque {
-                    0xff101b2c
-                } else {
-                    glass::shade(*pixel, win.material == Material::GlassClear)
-                };
-            }
+            // A restrained shadow outside the rounded window's bounding box.
         }
-        // A restrained shadow outside the rounded window's bounding box.
         for y in -8..h + 16 {
             for x in -12..w + 12 {
                 if x >= 0 && y >= 0 && x < w && y < h {
@@ -302,29 +320,20 @@ impl Compositor {
                 }
                 let sx = (x + HALO) as usize;
                 let sy = (y + HALO) as usize;
-                let mut pixel = if y >= TITLE_H {
-                    // SAFETY: y-TITLE_H and x are bounded by accepted dimensions.
-                    let content = unsafe {
-                        CACHE[win.cache_slot][(y - TITLE_H) as usize * CONTENT_W + x as usize]
-                    };
-                    if content >> 24 == 255 {
-                        content
-                    } else {
-                        // SAFETY: Only native content has alpha; native windows
-                        // initialize the complete backdrop, including this index.
-                        over(content, unsafe {
-                            glass::sample(
-                                &*core::ptr::addr_of!(BLUR_A),
-                                blur_width,
-                                blur_height,
-                                sx,
-                                sy,
-                            )
-                        })
-                    }
+                let material_index = y as usize * CONTENT_W + x as usize;
+                let material = if !win.native && y >= TITLE_H {
+                    0
+                } else if reuse_backdrop {
+                    // SAFETY: Only the WM accesses this cache. A complete scene
+                    // paint initialized every covered pixel for this unique live
+                    // slot. The isolated-content plan excludes changes to geometry,
+                    // focus, background or any layer in the sampler's reach.
+                    unsafe { BACKDROP_CACHE[win.cache_slot][material_index] }
                 } else {
-                    // SAFETY: Every window initializes at least its title backdrop.
-                    over(title_color, unsafe {
+                    // SAFETY: Validated window geometry bounds the blur and
+                    // material indices. This compositor alone owns both buffers;
+                    // sample returns a value and no reference survives the write.
+                    let material = unsafe {
                         glass::sample(
                             &*core::ptr::addr_of!(BLUR_A),
                             blur_width,
@@ -332,7 +341,24 @@ impl Compositor {
                             sx,
                             sy,
                         )
-                    })
+                    };
+                    // SAFETY: Same unique slot and bounded index. Populate even
+                    // under opaque foreground pixels, which may become transparent
+                    // on a later content-only frame.
+                    unsafe {
+                        BACKDROP_CACHE[win.cache_slot][material_index] = material;
+                    }
+                    material
+                };
+                let mut pixel = if y >= TITLE_H {
+                    // SAFETY: Content coordinates and this live slot are bounded
+                    // by the accepted dimensions; this WM alone owns CACHE.
+                    let content = unsafe {
+                        CACHE[win.cache_slot][(y - TITLE_H) as usize * CONTENT_W + x as usize]
+                    };
+                    over(content, material)
+                } else {
+                    over(title_color, material)
                 };
                 let inner = coverage(x - 1, y - 1, w - 2, h - 2, 19);
                 let edge = mask.saturating_sub(inner);

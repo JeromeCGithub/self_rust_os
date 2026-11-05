@@ -120,7 +120,7 @@ pub fn now() -> Option<u64> {
     x86_64::instructions::interrupts::without_interrupts(|| {
         let _guard = CMOS.lock();
         let snapshot = stable(|reg| {
-            // SAFETY: Serialized single-CPU PC CMOS index/data access. Only the
+            // SAFETY: Kernel entry serializes PC CMOS index/data access. Only the
             // fixed time/status registers above are read; no RTC interrupt/status
             // acknowledgement registers are touched. QEMU's write-only index port
             // cannot preserve a selector by readback. Select with NMI enabled,

@@ -145,7 +145,7 @@ def main():
                         key = {' ':'spc', '.':'dot', '/':'slash', ':':'shift-semicolon', '-':'minus', '\n':'ret'}.get(char,char)
                         call('human-monitor-command', {'command-line':'sendkey '+key});time.sleep(.075)
                 call('qmp_capabilities')
-                wait('[desktop] ready: 7 applications')
+                wait('[desktop] ready: 8 applications')
                 # Before CURL is installed, Portal is third; afterwards fourth.
                 click(350 if (ROOT/'user_programs/curl/curl.bin').exists() else 250)
                 wait('self_rust_os forge v1.0')

@@ -34,6 +34,7 @@ pub(crate) fn run() {
         damage: Damage::new(),
         cursor: None,
         cursor_under: [0; 8 * 14],
+        pointer_input: crate::input::PointerInput::new(),
     };
     display.clear_background();
     let mut shell_pid = match sys::spawn("/BIN/DE.BIN") {
@@ -339,7 +340,7 @@ pub(crate) fn run() {
                 index += 1;
             }
         }
-        let (mx, my, buttons) = sys::mouse();
+        let (mx, my, buttons) = display.next_pointer();
         let down = buttons & 1 != 0;
         let click = down && previous & 1 == 0;
         if click {
@@ -411,11 +412,20 @@ pub(crate) fn run() {
             scene_dirty = true;
         }
         let mut compose = scene_dirty;
-        for window in windows[..used].iter_mut().flatten() {
-            compose |= display.update_surface(window);
-            // Frame/config acknowledgements have priority over coalesced motion.
+        let mut changed = 0u32;
+        for (index, slot) in windows[..used].iter_mut().enumerate() {
+            let Some(window) = slot else {
+                continue;
+            };
+            if display.update_surface(window) {
+                compose = true;
+                changed |= 1 << index;
+            }
+            // Configuration replies precede pointer events; frame release follows presentation.
             if let Some(reply) = window.reply {
-                if sys::send_message(window.pid, reply).is_ok() {
+                if reply & protocol::KIND != protocol::RELEASE
+                    && sys::send_message(window.pid, reply).is_ok()
+                {
                     window.reply = None;
                 }
             }
@@ -455,6 +465,7 @@ pub(crate) fn run() {
                 shell_release = None;
                 work = WorkArea { top: 0, bottom: 0 };
                 display.clear_background();
+                scene_dirty = true;
                 old_bounds = (0, 0, info.width, info.height);
                 compose = true;
                 println!("[compositor] desktop disconnected");
@@ -471,6 +482,7 @@ pub(crate) fn run() {
             } else {
                 if let Some(serial) = shell_commit.take() {
                     if display.snapshot_desktop(pid) {
+                        scene_dirty = true;
                         shell_release = Some(protocol::RELEASE | serial);
                         compose = true;
                         old_bounds = (0, 0, info.width, info.height);
@@ -512,7 +524,17 @@ pub(crate) fn run() {
         }
         if compose {
             let mut bounds = (info.width, info.height, 0, 0);
-            for window in windows[..used].iter().flatten() {
+            let mut paint_bounds = [(0, 0, 0, 0); MAX];
+            for (index, slot) in windows[..used].iter().enumerate() {
+                let Some(window) = slot else {
+                    continue;
+                };
+                paint_bounds[index] = (
+                    (window.x - 12).max(0) as usize,
+                    (window.y - 8).max(0) as usize,
+                    (window.x as usize + window.width + 12).min(info.width),
+                    (window.y as usize + window.height + TITLE_H as usize + 16).min(info.height),
+                );
                 bounds.0 = bounds.0.min((window.x - 12).max(0) as usize);
                 bounds.1 = bounds.1.min((window.y - 8).max(0) as usize);
                 bounds.2 = bounds
@@ -522,17 +544,34 @@ pub(crate) fn run() {
                     (window.y as usize + window.height + TITLE_H as usize + 16).min(info.height),
                 );
             }
-            // Restore and compose bottom-to-top on *any* content change. Glass
-            // depends on lower layers even if its own client's revision is stable.
-            // This also prevents repeatedly blurring the previous glass result.
-            display.restore_background((
-                old_bounds.0.min(bounds.0),
-                old_bounds.1.min(bounds.1),
-                old_bounds.2.max(bounds.2),
-                old_bounds.3.max(bounds.3),
-            ));
-            for window in windows[..used].iter().flatten() {
-                display.window(window, window.pid == focused);
+            let isolated = crate::damage::isolated_content(
+                &paint_bounds[..used],
+                changed,
+                scene_dirty
+                    || focused != announced_focus
+                    || windows[..used].iter().flatten().any(|window| {
+                        18 + crate::display::string(&window.title).len() * 8 > window.width
+                    }),
+            );
+            if let Some((index, region)) = isolated {
+                // Other windows neither paint nor overlap this restored region.
+                // Their cached scene remains valid; this window's backdrop comes
+                // from the shell and unchanged pixels outside its paint bounds.
+                display.restore_background(region);
+                let window = windows[index].as_ref().expect("isolated live window");
+                display.window(window, window.pid == focused, true);
+            } else {
+                // Movement/focus/background changes and overlapping glass keep
+                // complete bottom-to-top backdrop recomposition.
+                display.restore_background((
+                    old_bounds.0.min(bounds.0),
+                    old_bounds.1.min(bounds.1),
+                    old_bounds.2.max(bounds.2),
+                    old_bounds.3.max(bounds.3),
+                ));
+                for window in windows[..used].iter().flatten() {
+                    display.window(window, window.pid == focused, false);
+                }
             }
             old_bounds = bounds;
             scene_dirty = false;
@@ -545,8 +584,24 @@ pub(crate) fn run() {
             display.damage.mark(mx as usize, my as usize, 8, 14);
         }
         display.present(mx, my);
+        // The single-buffer client uses RELEASE as its frame pacing signal.
+        // Publish after presentation so its next draw samples current app state
+        // instead of queuing another stale frame while we compose this one.
+        // Snapshot ownership was already transferred; no user reference is held.
+        for window in windows[..used].iter_mut().flatten() {
+            if let Some(reply) = window.reply {
+                if reply & protocol::KIND == protocol::RELEASE
+                    && sys::send_message(window.pid, reply).is_ok()
+                {
+                    window.reply = None;
+                }
+            }
+        }
         old_mouse = Some((mx, my));
         previous = buttons;
-        sys::sleep_ticks(1).expect("desktop timed wait");
+        if !display.pointer_input.pending() {
+            sys::wait_events(sys::Events::MAILBOX | sys::Events::POINTER, 1)
+                .expect("desktop input/message/deadline wait");
+        }
     }
 }

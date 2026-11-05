@@ -1,6 +1,9 @@
 //! Memory management module for setting up paging and frame allocation.
 
 use bootloader::bootinfo::{MemoryMap, MemoryRegionType};
+/// Owned allocation transactions.
+pub mod owned;
+
 use x86_64::{
     registers::control::Cr3,
     structures::paging::{FrameAllocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB},
@@ -77,6 +80,7 @@ impl MemRegion {
 pub struct RegionFrameAllocator {
     regions: &'static [MemRegion],
     next: usize,
+    recycled: alloc::vec::Vec<PhysFrame>,
 }
 
 impl RegionFrameAllocator {
@@ -88,18 +92,51 @@ impl RegionFrameAllocator {
     /// the kernel is free to hand out.
     #[must_use]
     pub const unsafe fn new(regions: &'static [MemRegion]) -> Self {
-        Self { regions, next: 0 }
+        Self {
+            regions,
+            next: 0,
+            recycled: alloc::vec::Vec::new(),
+        }
+    }
+
+    /// Reserve return storage once the heap exists, so reclamation never allocates.
+    pub fn enable_recycling(&mut self) {
+        let count = self.regions.iter().map(|r| (r.len() / 4096) as usize).sum();
+        self.recycled.reserve_exact(count);
+    }
+
+    /// Return one uniquely owned frame after unmapping and remote TLB completion.
+    ///
+    /// # Safety
+    /// The caller must own this allocator's frame exclusively, with no active
+    /// mappings, DMA, page-table references or other live owners remaining.
+    pub unsafe fn recycle(&mut self, frame: PhysFrame) {
+        debug_assert!(
+            !self.recycled.contains(&frame),
+            "double free of physical frame"
+        );
+        self.recycled.push(frame);
+    }
+
+    /// Number of issued frames not returned to this allocator.
+    pub fn allocated(&self) -> usize {
+        self.next - self.recycled.len()
     }
 
     /// Reserve a fixed batch atomically, rolling back on insufficient memory.
     pub fn allocate_batch<const N: usize>(&mut self) -> Option<[PhysFrame; N]> {
         let checkpoint = self.next;
+        let free_checkpoint = self.recycled.len();
         let mut result = [PhysFrame::containing_address(PhysAddr::new(0)); N];
-        for slot in &mut result {
+        for index in 0..N {
             match self.allocate_frame() {
-                Some(frame) => *slot = frame,
+                Some(frame) => result[index] = frame,
                 None => {
                     self.next = checkpoint;
+                    let returned = free_checkpoint - self.recycled.len();
+                    for i in (0..returned).rev() {
+                        self.recycled.push(result[i]);
+                    }
                     return None;
                 }
             }
@@ -115,6 +152,9 @@ impl RegionFrameAllocator {
 /// Unsafe because the caller must guarantee that the regions are valid.
 unsafe impl FrameAllocator<Size4KiB> for RegionFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame> {
+        if let Some(frame) = self.recycled.pop() {
+            return Some(frame);
+        }
         // Skip whole regions arithmetically instead of walking all previous
         // frames on every allocation (desktop surfaces require thousands).
         let mut index = self.next as u64;

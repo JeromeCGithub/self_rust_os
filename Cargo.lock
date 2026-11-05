@@ -252,6 +252,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustos-exec-image"
+version = "0.1.0"
+
+[[package]]
 name = "rustos-net-abi"
 version = "0.1.0"
 
@@ -265,6 +269,10 @@ dependencies = [
 
 [[package]]
 name = "rustos-platform-abi"
+version = "0.1.0"
+
+[[package]]
+name = "rustos-thread-abi"
 version = "0.1.0"
 
 [[package]]
@@ -292,9 +300,11 @@ dependencies = [
  "linked_list_allocator",
  "pc-keyboard",
  "pic8259",
+ "rustos-exec-image",
  "rustos-net-abi",
  "rustos-net-stack",
  "rustos-platform-abi",
+ "rustos-thread-abi",
  "smoltcp",
  "spin 0.5.2",
  "uart_16550",

@@ -139,6 +139,11 @@ impl<D: BlockDevice> BlockDevice for OffsetDisk<D> {
             .read_sector(lba.wrapping_add(self.lba_offset), buf)
     }
 
+    fn read_sectors(&mut self, lba: u32, buf: &mut [[u8; SECTOR_SIZE]]) -> Result<usize, Self::Error> {
+        let Some(physical_lba) = lba.checked_add(self.lba_offset) else { return Ok(0); };
+        self.inner.read_sectors(physical_lba, buf)
+    }
+
     fn write_sector(&mut self, lba: u32, buf: &[u8; 512]) -> Result<(), Self::Error> {
         self.inner
             .write_sector(lba.wrapping_add(self.lba_offset), buf)

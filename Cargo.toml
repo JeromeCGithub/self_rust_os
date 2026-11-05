@@ -9,6 +9,8 @@ categories = ["operating-systems", "embedded", "rust-os", "os-dev", "bare-metal"
 keywords = ["OS", "x86_64", "os-development", "no-std", "kernel-development"]
 
 [dependencies]
+rustos-exec-image = { path = "crates/exec-image" }
+rustos-thread-abi = { path = "crates/thread-abi" }
 rustos-platform-abi = { path = "crates/platform-abi" }
 rustos-net-abi = { path = "crates/net-abi" }
 rustos-net-stack = { path = "crates/net-stack" }

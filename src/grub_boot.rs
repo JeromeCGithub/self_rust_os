@@ -211,7 +211,10 @@ pub extern "C" fn grub_entry_rust(magic: u64, info_ptr: u64) -> ! {
         self_rust_os::hlt_loop();
     }
     if fb.fb_type != 1 {
-        serial_println!("[grub] FATAL: framebuffer type={} (expected 1=RGB)", fb.fb_type);
+        serial_println!(
+            "[grub] FATAL: framebuffer type={} (expected 1=RGB)",
+            fb.fb_type
+        );
         self_rust_os::hlt_loop();
     }
 
@@ -269,10 +272,7 @@ pub extern "C" fn grub_entry_rust(magic: u64, info_ptr: u64) -> ! {
     // because it's MMIO above RAM top. It will be mapped explicitly below.
     // SAFETY: Identity mapping is active; tables live below 1 GiB.
     let mapped = unsafe {
-        boot::map_all_physical_memory(
-            &SAVED_REGIONS[..SAVED_REGION_COUNT],
-            &[(0, kernel_end)],
-        )
+        boot::map_all_physical_memory(&SAVED_REGIONS[..SAVED_REGION_COUNT], &[(0, kernel_end)])
     };
     serial_println!(
         "[grub] mapped {} MiB of physical memory at {:#x}",
@@ -286,8 +286,7 @@ pub extern "C" fn grub_entry_rust(magic: u64, info_ptr: u64) -> ! {
     let mut mapper = unsafe { memory::init(phys_mem_offset) };
 
     // SAFETY: SAVED_REGIONS describes usable RAM above the kernel image.
-    let regions: &'static [MemRegion] =
-        unsafe { &SAVED_REGIONS[..SAVED_REGION_COUNT] };
+    let regions: &'static [MemRegion] = unsafe { &SAVED_REGIONS[..SAVED_REGION_COUNT] };
     let mut frame_allocator = unsafe { memory::RegionFrameAllocator::new(regions) };
 
     // Explicitly map the linear framebuffer. It's at a high MMIO address
@@ -312,14 +311,11 @@ pub extern "C" fn grub_entry_rust(magic: u64, info_ptr: u64) -> ! {
     let fb_virt_addr = VirtAddr::new(FB_VIRT_BASE);
 
     {
-        use x86_64::structures::paging::{Page, PhysFrame, Mapper, Size4KiB, PageTableFlags};
+        use x86_64::structures::paging::{Mapper, Page, PageTableFlags, PhysFrame, Size4KiB};
         let mut page = Page::<Size4KiB>::containing_address(fb_virt_addr);
-        let mut frame = PhysFrame::<Size4KiB>::containing_address(
-            x86_64::PhysAddr::new(fb_info.addr)
-        );
-        let flags = PageTableFlags::PRESENT
-            | PageTableFlags::WRITABLE
-            | PageTableFlags::NO_CACHE;
+        let mut frame =
+            PhysFrame::<Size4KiB>::containing_address(x86_64::PhysAddr::new(fb_info.addr));
+        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_CACHE;
         for _ in 0..fb_pages {
             // SAFETY: Mapping MMIO framebuffer; not RAM, so no allocator needed.
             unsafe {
@@ -332,9 +328,14 @@ pub extern "C" fn grub_entry_rust(magic: u64, info_ptr: u64) -> ! {
             frame += 1;
         }
     }
-    serial_println!(
-        "[grub] framebuffer mapped at virt {:#x}",
-        FB_VIRT_BASE
+    serial_println!("[grub] framebuffer mapped at virt {:#x}", FB_VIRT_BASE);
+
+    // Discover CPUs while firmware tables remain accessible through the boot
+    // identity map. The reserved low-memory trampoline is outside allocator RAM.
+    self_rust_os::arch::x86_64::smp::prepare(
+        &mut mapper,
+        &mut frame_allocator,
+        boot_info.regions(),
     );
 
     // From here on, this is the same bring-up as the legacy boot path.

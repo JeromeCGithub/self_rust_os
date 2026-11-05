@@ -22,6 +22,7 @@ use core::panic::PanicInfo;
 use x86_64::instructions;
 
 pub mod allocator;
+pub mod arch;
 pub mod drivers;
 use drivers::video::framebuffer as gfx;
 #[cfg(any(feature = "grub", test))]
@@ -34,17 +35,23 @@ pub mod interrupts;
 pub mod mbr;
 pub mod memory;
 pub mod net;
+/// Process resources and thread ownership.
+pub mod process;
 pub mod scheduler;
+pub mod system;
 pub mod task;
 pub mod userspace;
-pub mod system;
 
 /// Initialization function for the kernel.
 ///
 /// Initializes the graphics framebuffer + text console first (so `println!`
 /// works), then the GDT, IDT, and PICs. Must be called once at boot with the
 /// physical memory offset from the bootloader and the framebuffer info.
-pub fn init(_phys_mem_offset: x86_64::VirtAddr, fb_info: gfx::FbInfo, fb_virt_addr: x86_64::VirtAddr) {
+pub fn init(
+    _phys_mem_offset: x86_64::VirtAddr,
+    fb_info: gfx::FbInfo,
+    fb_virt_addr: x86_64::VirtAddr,
+) {
     userspace::usercopy::init(_phys_mem_offset.as_u64());
     // SAFETY: fb_virt_addr must point to mapped framebuffer memory.
     unsafe {
@@ -103,7 +110,10 @@ fn test_kernel_main(boot_info: &'static BootInfo) -> ! {
     let mut mapper = unsafe { memory::init(phys_mem_offset) };
     // SAFETY: The bootloader guarantees the memory map is valid.
     let mut frame_allocator = unsafe { memory::BootInfoFrameAllocator::new(&boot_info.memory_map) };
-    #[expect(clippy::expect_used, reason = "Heap is required for unit tests using alloc")]
+    #[expect(
+        clippy::expect_used,
+        reason = "Heap is required for unit tests using alloc"
+    )]
     allocator::init_heap(&mut mapper, &mut frame_allocator).expect("heap init failed");
 
     // Initialize the keyboard scancode queue (needs heap).

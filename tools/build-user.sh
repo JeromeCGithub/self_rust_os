@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unified builder for self_rust_os user-space programs.
+# Unified builder for compact static ELF user-space programs.
 #
 # Replaces the per-program build.sh scripts (which were identical except for
 # the program name). Builds one or all user programs:
@@ -9,9 +9,9 @@
 #
 # For each program this:
 #   1. Compiles the Rust no_std binary for the custom x86_64 target.
-#   2. Converts the ELF to a flat binary with llvm-objcopy.
+#   2. Strips debug/symbol data, preserving ELF load segments and BSS sizes.
 #   3. Generates `<prog>_meta.rs` with layout metadata so the kernel can apply
-#      per-section page permissions (W^X).
+#      read-only page permissions. Executable-page protection is not W^X.
 #
 # Prerequisites:
 #   - Rust nightly toolchain (matching the kernel's rust-toolchain file)
@@ -25,7 +25,6 @@ USER_PROGRAMS="${ROOT}/user_programs"
 
 TARGET="x86_64-user-program"
 PROFILE="release"
-BASE_ADDR=0x400000  # USER_CODE_START, must match linker.ld
 
 build_one() {
     local prog="$1"
@@ -47,27 +46,22 @@ build_one() {
     echo "[user_programs/${prog}] Building ${prog} for ${TARGET}..."
     (cd "${dir}" && cargo build --release)
 
-    # Locate llvm-objcopy and llvm-readobj from the Rust toolchain.
+    # Locate llvm-objcopy from the pinned Rust toolchain.
     local rustc_sysroot
     rustc_sysroot="$(rustc --print sysroot)"
     local llvm_objcopy
     llvm_objcopy="$(find "${rustc_sysroot}" -name 'llvm-objcopy' -type f 2>/dev/null | head -1)"
-    local llvm_readobj
-    llvm_readobj="$(find "${rustc_sysroot}" -name 'llvm-readobj' -type f 2>/dev/null | head -1)"
 
     if [ -z "${llvm_objcopy}" ]; then
         echo "Error: llvm-objcopy not found in the Rust sysroot." >&2
         echo "Install it with: rustup component add llvm-tools-preview" >&2
         return 1
     fi
-    if [ -z "${llvm_readobj}" ]; then
-        echo "Error: llvm-readobj not found in the Rust sysroot." >&2
-        echo "Install it with: rustup component add llvm-tools-preview" >&2
-        return 1
-    fi
 
-    echo "[user_programs/${prog}] Converting ELF to flat binary..."
-    "${llvm_objcopy}" --set-section-flags .bss=alloc,load,contents -O binary "${elf_path}" "${output}"
+    echo "[user_programs/${prog}] Writing compact static ELF image..."
+    # Preserve PT_LOAD filesz/memsz so BSS/heap storage is zeroed by the kernel
+    # instead of serially reading megabytes of zero bytes from the boot disk.
+    "${llvm_objcopy}" --strip-all "${elf_path}" "${output}"
 
     local size
     size=$(wc -c < "${output}")
@@ -76,56 +70,15 @@ build_one() {
     # ------------------------------------------------------------------
     # Generate <prog>_meta.rs with the read-only boundary.
     #
-    # The linker script lays out sections in this order, each ALIGN(4K):
-    #   .text    (code, read-only + executable)
-    #   .rodata  (read-only data)
-    #   .data    (initialized mutable data)
-    #   .bss     (zero-initialized mutable data)
-    #
-    # We compute the read-only size as the offset (from the load base) of the
-    # first writable section (.data), rounded up to 4 KiB page alignment.
-    # If .data and .bss are both absent/empty, the entire binary is read-only.
+    # Derive permissions from PT_LOAD, including linker-generated writable
+    # sections such as GOT. A page shared with writable bytes cannot belong to
+    # the read-only prefix. The kernel ELF loader uses segment flags directly.
     # ------------------------------------------------------------------
 
     echo "[user_programs/${prog}] Generating ${prog}_meta.rs..."
 
-    get_section_vma() {
-        local section_name="$1"
-        "${llvm_readobj}" --section-headers "${elf_path}" 2>/dev/null \
-            | awk -v name="${section_name}" '
-                /Name:/ { current_name = $2 }
-                /Address:/ && current_name == name { print $2; exit }
-            '
-    }
-
-    get_section_size() {
-        local section_name="$1"
-        "${llvm_readobj}" --section-headers "${elf_path}" 2>/dev/null \
-            | awk -v name="${section_name}" '
-                /Name:/ { current_name = $2 }
-                /Size:/ && current_name == name { print $2; exit }
-            '
-    }
-
-    local data_vma data_size bss_vma bss_size
-    data_vma=$(get_section_vma ".data")
-    data_size=$(get_section_size ".data")
-    bss_vma=$(get_section_vma ".bss")
-    bss_size=$(get_section_size ".bss")
-
-    local first_writable_vma=""
-    if [ -n "${data_vma}" ] && [ "$(printf '%d' "${data_size}")" -gt 0 ]; then
-        first_writable_vma="${data_vma}"
-    elif [ -n "${bss_vma}" ] && [ "$(printf '%d' "${bss_size}")" -gt 0 ]; then
-        first_writable_vma="${bss_vma}"
-    fi
-
     local readonly_size
-    if [ -n "${first_writable_vma}" ]; then
-        readonly_size=$(printf '%d' $(( $(printf '%d' "${first_writable_vma}") - $(printf '%d' "${BASE_ADDR}") )))
-    else
-        readonly_size=$(( (size + 4095) / 4096 * 4096 ))
-    fi
+    readonly_size="$(python3 "${ROOT}/tools/executable_metadata.py" "${output}")"
 
     echo "[user_programs/${prog}] Read-only region: ${readonly_size} bytes ($(( readonly_size / 4096 )) pages)"
 
@@ -135,10 +88,10 @@ build_one() {
 // Contains compile-time metadata about the ${prog} user binary layout so the
 // kernel can apply read-only page permissions to the code and rodata pages.
 
-/// Number of bytes from the start of the flat binary that should be mapped
+/// Number of bytes from the linked image base that should be mapped
 /// as read-only (no \`WRITABLE\` flag). This value is always page-aligned.
 ///
-/// Pages beyond this offset (if any) contain mutable \`.data\`/\\\`.bss\` sections
+/// Pages beyond this offset (if any) contain mutable data, GOT or BSS sections
 /// and are mapped as writable.
 pub const READONLY_SIZE: usize = ${readonly_size};
 EOF

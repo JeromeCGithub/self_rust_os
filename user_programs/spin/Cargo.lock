@@ -24,6 +24,10 @@ name = "rustos-platform-abi"
 version = "0.1.0"
 
 [[package]]
+name = "rustos-thread-abi"
+version = "0.1.0"
+
+[[package]]
 name = "spin"
 version = "0.1.0"
 dependencies = [
@@ -38,4 +42,5 @@ dependencies = [
  "rustos-http",
  "rustos-net-abi",
  "rustos-platform-abi",
+ "rustos-thread-abi",
 ]

@@ -1,4 +1,4 @@
-//! Reclaimed private process heap for TLS allocations. No kernel heap pointers.
+//! Reclaimed process-private heap shared by native threads and HTTPS clients.
 use core::{
     alloc::{GlobalAlloc, Layout},
     cell::UnsafeCell,
@@ -6,7 +6,10 @@ use core::{
     ptr::NonNull,
 };
 use linked_list_allocator::Heap;
+#[cfg(feature = "tls")]
 const SIZE: usize = 16 * 1024 * 1024;
+#[cfg(not(feature = "tls"))]
+const SIZE: usize = 1024 * 1024;
 #[repr(align(16))]
 struct Storage(UnsafeCell<[MaybeUninit<u8>; SIZE]>);
 // SAFETY: Only the allocator initializes/partitions this permanently mapped BSS
@@ -43,11 +46,12 @@ unsafe impl GlobalAlloc for Allocator {
 }
 #[global_allocator]
 static ALLOCATOR: Allocator = Allocator(spin::Mutex::new(Heap::empty()));
+#[cfg(feature = "tls")]
 pub fn used() -> usize {
     ALLOCATOR.0.lock().used()
 }
 #[alloc_error_handler]
 fn exhausted(_layout: Layout) -> ! {
-    crate::sys::console_write(b"TLS userspace heap exhausted\n");
+    crate::sys::console_write(b"userspace heap exhausted\n");
     crate::sys::exit(12)
 }
