@@ -28,9 +28,76 @@ pub struct Device {
     pub driver: &'static str,
     pub details: Details,
 }
+impl Device {
+    /// Directory identity in the existing short-name ABI.
+    pub fn file_name(&self) -> Option<[u8; 11]> {
+        let mut digits = [0u8; 3];
+        let count = if self.instance >= 100 {
+            3
+        } else if self.instance >= 10 {
+            2
+        } else {
+            1
+        };
+        let mut value = self.instance;
+        for index in (0..count).rev() {
+            digits[index] = b'0' + value % 10;
+            value /= 10;
+        }
+        if self.name.is_empty()
+            || self.name.len() + count > 8
+            || !self
+                .name
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_')
+        {
+            return None;
+        }
+        let mut result = [b' '; 11];
+        for (index, byte) in self.name.bytes().enumerate() {
+            result[index] = byte.to_ascii_uppercase();
+        }
+        result[self.name.len()..self.name.len() + count].copy_from_slice(&digits[..count]);
+        Some(result)
+    }
+    /// One immutable public driver/CPU description, shared by directory aliases.
+    pub fn write_info(&self, out: &mut impl Write) -> fmt::Result {
+        write!(out, "{}{} driver={}", self.name, self.instance, self.driver)?;
+        match self.details {
+            Details::None => {}
+            Details::Cpu { apic_id, bsp } => write!(
+                out,
+                " apic={} role={}",
+                apic_id,
+                if bsp { "bsp" } else { "ap" }
+            )?,
+            Details::Framebuffer { width, height } => write!(out, " pixels={}x{}", width, height)?,
+            Details::Block {
+                partition_lba,
+                sectors,
+            } => write!(out, " partition_lba={} sectors={}", partition_lba, sectors)?,
+            Details::Ethernet { mac } => write!(
+                out,
+                " mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+            )?,
+        }
+        out.write_char('\n')?;
+        Ok(())
+    }
+}
+
+/// Directory metadata copied out under the inventory lock, without allocation.
+#[derive(Clone, Copy)]
+pub struct Entry {
+    pub name: [u8; 11],
+    pub cpu: Option<u8>,
+}
+
 /// Registration is boot-only, bounded, and rejects ambiguous identities.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
+    InvalidName,
     Duplicate,
     Full,
 }
@@ -47,10 +114,13 @@ impl Registry {
         }
     }
     pub fn register(&mut self, device: Device) -> Result<(), Error> {
+        if device.file_name().is_none() {
+            return Err(Error::InvalidName);
+        }
         if self.records[..self.len]
             .iter()
             .flatten()
-            .any(|d| d.name == device.name && d.instance == device.instance)
+            .any(|d| d.file_name() == device.file_name())
         {
             return Err(Error::Duplicate);
         }
@@ -60,6 +130,37 @@ impl Registry {
         self.records[self.len] = Some(device);
         self.len += 1;
         Ok(())
+    }
+    pub fn entries(&self) -> [Option<Entry>; CAPACITY] {
+        let mut entries = [None; CAPACITY];
+        for (slot, device) in entries
+            .iter_mut()
+            .zip(self.records[..self.len].iter().flatten())
+        {
+            *slot = Some(Entry {
+                name: device.file_name().expect("validated registered name"),
+                cpu: if matches!(device.details, Details::Cpu { .. }) {
+                    Some(device.instance)
+                } else {
+                    None
+                },
+            });
+        }
+        entries
+    }
+    pub fn find(&self, name: &[u8; 11]) -> Option<Device> {
+        self.records[..self.len]
+            .iter()
+            .flatten()
+            .find(|d| d.file_name().as_ref() == Some(name))
+            .copied()
+    }
+    pub fn cpu(&self, index: u8) -> Option<Device> {
+        self.records[..self.len]
+            .iter()
+            .flatten()
+            .find(|d| d.instance == index && matches!(d.details, Details::Cpu { .. }))
+            .copied()
     }
     pub fn render(&self, out: &mut impl Write) -> fmt::Result {
         for (bus, name) in [
@@ -74,33 +175,8 @@ impl Registry {
                 .flatten()
                 .filter(|d| d.bus == bus)
             {
-                write!(
-                    out,
-                    "  {}{} driver={}",
-                    device.name, device.instance, device.driver
-                )?;
-                match device.details {
-                    Details::None => {}
-                    Details::Cpu { apic_id, bsp } => write!(
-                        out,
-                        " apic={} role={}",
-                        apic_id,
-                        if bsp { "bsp" } else { "ap" }
-                    )?,
-                    Details::Framebuffer { width, height } => {
-                        write!(out, " pixels={}x{}", width, height)?
-                    }
-                    Details::Block {
-                        partition_lba,
-                        sectors,
-                    } => write!(out, " partition_lba={} sectors={}", partition_lba, sectors)?,
-                    Details::Ethernet { mac } => write!(
-                        out,
-                        " mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-                    )?,
-                }
-                out.write_char('\n')?;
+                out.write_str("  ")?;
+                device.write_info(out)?;
             }
         }
         Ok(())
@@ -168,5 +244,23 @@ mod tests {
         assert!(out.contains("acpi/\n  cpu0"));
         assert!(out.contains("pci/\n  eth0 driver=e1000 mac=02:00:00:00:00:01"));
         assert!(!out.contains("disk0"));
+    }
+    #[cfg_attr(target_os = "none", test_case)]
+    #[cfg_attr(not(target_os = "none"), test)]
+    fn device_filenames_are_valid_unique_short_names() {
+        let mut registry = Registry::new();
+        for name in ["", "keyboard", "a/b", "a.b", "bad name"] {
+            let mut device = cpu(0);
+            device.name = name;
+            assert_eq!(registry.register(device), Err(Error::InvalidName));
+        }
+        registry.register(cpu(0)).unwrap();
+        let mut alias = cpu(0);
+        alias.name = "CPU";
+        assert_eq!(registry.register(alias), Err(Error::Duplicate));
+        registry.register(cpu(10)).unwrap();
+        let mut collision = cpu(0);
+        collision.name = "cpu1";
+        assert_eq!(registry.register(collision), Err(Error::Duplicate));
     }
 }

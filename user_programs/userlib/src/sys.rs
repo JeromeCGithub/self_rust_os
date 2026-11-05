@@ -157,7 +157,9 @@ pub fn ls(path: &str, buf: &mut [u8], max_entries: usize) -> Option<usize> {
 /// Reads a whole FAT file, or a bounded device read, into `buf`.
 /// `/dev/null` returns EOF; `/dev/zero` fills the buffer; `/dev/random` returns
 /// at most 256 bytes or an error if hardware entropy is unavailable. Reading
-/// `/dev/devices` returns the inventory prefix that fits. No offset is retained.
+/// `/dev/devices/info` returns the inventory prefix that fits. Individual CPU
+/// information is available at `/dev/cpu/N/info`; use `ls` for directories.
+/// No offset is retained.
 /// Returns bytes read, or `None` on error.
 pub fn read_file(path: &str, buf: &mut [u8]) -> Option<usize> {
     let path_buf = path_buf(path)?;

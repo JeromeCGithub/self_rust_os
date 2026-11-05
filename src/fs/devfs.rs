@@ -17,6 +17,12 @@ pub(crate) enum Node {
     Zero,
     Random,
     Inventory,
+    Devices,
+    Cpus,
+    CpuDirectory(u8),
+    CpuInfo(u8),
+    DeviceDirectory([u8; 11]),
+    DeviceInfo([u8; 11]),
 }
 
 /// Bounded canonical absolute path; relative paths retain the existing root base.
@@ -66,13 +72,70 @@ impl Path {
     }
 }
 
+fn device_name(component: &str) -> Result<[u8; 11], Error> {
+    if component.is_empty()
+        || component.len() > 8
+        || !component
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        return Err(Error::NotFound);
+    }
+    let mut name = [b' '; 11];
+    for (index, byte) in component.bytes().enumerate() {
+        name[index] = byte.to_ascii_uppercase();
+    }
+    Ok(name)
+}
+
 pub(crate) fn lookup(path: &str) -> Result<Node, Error> {
-    match path {
+    let mut components = path.split('/');
+    let first = components.next().unwrap_or("");
+    let second = components.next();
+    let third = components.next();
+    if components.next().is_some() {
+        return Err(Error::NotFound);
+    }
+    if first.eq_ignore_ascii_case("devices") {
+        return match (second, third) {
+            (None, None) => Ok(Node::Devices),
+            (Some(name), None) if name.eq_ignore_ascii_case("info") => Ok(Node::Inventory),
+            (Some(name), None) => Ok(Node::DeviceDirectory(device_name(name)?)),
+            (Some(name), Some(info)) if info.eq_ignore_ascii_case("info") => {
+                Ok(Node::DeviceInfo(device_name(name)?))
+            }
+            _ => Err(Error::NotFound),
+        };
+    }
+    if first.eq_ignore_ascii_case("cpu") {
+        if second.is_none() {
+            return Ok(Node::Cpus);
+        }
+        let number = second.ok_or(Error::NotFound)?;
+        if number.is_empty()
+            || !number.bytes().all(|b| b.is_ascii_digit())
+            || (number.len() > 1 && number.starts_with('0'))
+        {
+            return Err(Error::NotFound);
+        }
+        let index = number.parse::<u8>().map_err(|_| Error::NotFound)?;
+        if usize::from(index) >= crate::arch::x86_64::acpi::MAX_CPUS {
+            return Err(Error::NotFound);
+        }
+        return match third {
+            None => Ok(Node::CpuDirectory(index)),
+            Some(info) if info.eq_ignore_ascii_case("info") => Ok(Node::CpuInfo(index)),
+            _ => Err(Error::NotFound),
+        };
+    }
+    if second.is_some() {
+        return Err(Error::NotFound);
+    }
+    match first {
         "" => Ok(Node::Directory),
         p if p.eq_ignore_ascii_case("null") => Ok(Node::Null),
         p if p.eq_ignore_ascii_case("zero") => Ok(Node::Zero),
         p if p.eq_ignore_ascii_case("random") => Ok(Node::Random),
-        p if p.eq_ignore_ascii_case("devices") => Ok(Node::Inventory),
         _ => Err(Error::NotFound),
     }
 }
@@ -97,13 +160,17 @@ pub(crate) fn read(
     random: impl FnOnce(&mut [u8]) -> bool,
 ) -> Result<usize, Error> {
     match node {
-        Node::Directory => Err(Error::IsDirectory),
+        Node::Directory
+        | Node::Devices
+        | Node::Cpus
+        | Node::CpuDirectory(_)
+        | Node::DeviceDirectory(_) => Err(Error::IsDirectory),
         Node::Null => Ok(0),
         Node::Zero => {
             out.fill(0);
             Ok(out.len())
         }
-        Node::Inventory => {
+        Node::Inventory | Node::CpuInfo(_) | Node::DeviceInfo(_) => {
             let mut prefix = Prefix {
                 bytes: out,
                 written: 0,
@@ -124,7 +191,11 @@ pub(crate) fn read(
 pub(crate) fn write(node: Node, bytes: &[u8]) -> Result<usize, Error> {
     match node {
         Node::Null | Node::Zero => Ok(bytes.len()),
-        Node::Directory => Err(Error::IsDirectory),
+        Node::Directory
+        | Node::Devices
+        | Node::Cpus
+        | Node::CpuDirectory(_)
+        | Node::DeviceDirectory(_) => Err(Error::IsDirectory),
         _ => Err(Error::ReadOnly),
     }
 }
@@ -234,5 +305,39 @@ mod tests {
             ),
             Ok(0)
         );
+    }
+    #[test_case]
+    fn directory_routes_distinguish_cpu_and_device_information() {
+        assert_eq!(lookup("devices"), Ok(Node::Devices));
+        assert_eq!(lookup("devices/INFO"), Ok(Node::Inventory));
+        assert_eq!(lookup("cpu"), Ok(Node::Cpus));
+        assert_eq!(lookup("CPU/0/INFO"), Ok(Node::CpuInfo(0)));
+        assert_eq!(lookup("cpu/31"), Ok(Node::CpuDirectory(31)));
+        assert_eq!(
+            lookup("devices/cpu31/info"),
+            Ok(Node::DeviceInfo(*b"CPU31      "))
+        );
+        for path in [
+            "cpu/32",
+            "cpu/256/info",
+            "cpu/00/info",
+            "cpu/-1",
+            "devices/cpu0/info/extra",
+            "devices/a.b/info",
+        ] {
+            assert_eq!(lookup(path), Err(Error::NotFound));
+        }
+        for node in [
+            Node::Devices,
+            Node::Cpus,
+            Node::CpuDirectory(0),
+            Node::DeviceDirectory(*b"CPU0       "),
+        ] {
+            assert_eq!(
+                read(node, &mut [], |_| Ok(()), |_| true),
+                Err(Error::IsDirectory)
+            );
+            assert!(write(node, b"no").is_err());
+        }
     }
 }

@@ -15,7 +15,7 @@ usable `/dev` endpoints. It does not replace the scheduler or remove the entry g
 | Timers and IPIs | AP acknowledgement now follows local timer setup, with IRQs still disabled. Calibrated LAPIC timers schedule APs; BSP PIT maintains public time. Targeted fixed IPIs wake work/gate waiters and NMI shootdowns enforce TLB quiescence. |
 | SMP execution | Pinned native workers invoke kernel syscalls on each CPU. Two workers sharing the last CPU rendezvous without a syscall or voluntary yield in their spin loop, proving timer preemption. Existing lifecycle/fault/exhaustion checks remain. |
 | Idle and kernel work | Idle APs mask scheduling ticks and halt until work arrives. Kernel syscalls execute on their calling CPU; filesystem services can run outside the entry gate. Most ordinary kernel entry still serializes. |
-| Devices | Drivers publish bounded inventory records after initialization. The virtual `/dev` mount routes usable null/zero/random operations and read-only inventory without granting raw hardware access. |
+| Devices | Drivers publish bounded inventory records after initialization. The virtual `/dev` mount routes usable null/zero/random operations, browsable device/CPU directories and read-only metadata without granting raw hardware access. |
 
 The local Linux reference at `6628e7d4c` was inspected read-only:
 `drivers/acpi/osl.c:acpi_os_get_root_pointer` prefers a supplied root before legacy
@@ -35,8 +35,26 @@ trampoline parameters and wakeup. No Linux implementation was copied.
 - The FAT alias test failed: `/DEV./ZERO.` escaped the virtual mount classification.
 - Repeated keyboard publication failed with `Duplicate` before one-time publication.
 
-Logs from these runs are under `target/smp-boot-audit/`. No existing timeout,
+Initial boot/device red logs are under `target/smp-boot-audit/`; the directory
+and shell-boundary regressions are under `target/dev-tree-directory/`. No existing timeout,
 allocation count, expected error or assertion was relaxed.
+
+The user also requested that the inventory be traversable and each CPU visible:
+
+- The new Ring 3 directory regression failed on the first version with
+  `device inventory must be browsable`: `/dev/devices` was an inventory file.
+- Short-name tests exposed invalid device names and a collision between `cpu10`
+  and prefix `cpu1` plus instance `0`; registration now validates canonical names.
+- `/dev/devices` is now a directory. The aggregate text moved to its `info` file;
+  `/dev/cpu/N/info` and `/dev/devices/cpuN/info` identify the same registered CPU.
+- Directory tests require every expected CPU entry and flag, ordinary-process
+  access, out-of-range rejection, matching aliases and read-only metadata.
+
+- The 32-CPU desktop check then failed because Forge's 32-entry `ls` stopped at
+  CPU 24. Its 1 KiB `cat` also truncated the aggregate inventory before the
+  framebuffer record. Both failures were reproduced before raising the bounded
+  userspace capacities to 128 entries and 8 KiB. No kernel listing assertion or
+  timeout was weakened; the UI check now requires the last CPU and directory flags.
 
 ## Executed checks
 
@@ -46,9 +64,9 @@ Checks run on this stacked implementation (not inherited parent results):
   `cargo test --no-run` passed as build evidence. `tools/build-grub-disk.sh`
   rebuilt all applications and the disposable image. `e2e/build_profile.sh`
   verified the release kernel in its generated disk.
-- `cargo test --lib`: **94 cases** passed, including ACPI/root/tag validation,
+- `cargo test --lib`: **96 cases** passed, including ACPI/root/tag validation,
   registry duplicate/capacity handling, devfs boundaries/aliases and idempotent
-  driver publication. Standalone host runs passed **4 ACPI** and **2 registry**
+  driver publication. Standalone host runs passed **4 ACPI** and **3 registry**
   cases; these are also included in the kernel count.
 - Nine selected kernel integration executables passed **16 cases**: `basic_boot`,
   `display_mapping`, `gfx`, `keyboard_timer`, `should_panic`, `stack_overflow`,
@@ -60,11 +78,14 @@ Checks run on this stacked implementation (not inherited parent results):
   lifecycle, faults, exhaustion and allocation/frame recovery. The real `/dev`
   probe passed from PID 0 and an ordinary child, including FAT backing-file
   shadowing, aliases, immutable nodes, buffer guards and unrelated-file I/O.
-- Complete **16-CPU desktop and glass suites** passed commands/file results,
+- Complete **16- and 32-CPU desktop suites** and the **16-CPU glass suite** passed commands/file results,
   focus/drag/close, shell reaping, overlapping/background damage and DE isolation.
-  Forge ran `ls /dev` and `cat /dev/devices`; the
-  [screenshot](screenshots/desktop-device-tree.png) shows AP identities and
-  initialized framebuffer, serial, keyboard, mouse, root disk and Ethernet drivers.
+  Forge ran `ls /dev`, `ls /dev/devices`, `ls /dev/cpu`, individual CPU info
+  and aggregate inventory reads. The 32-CPU run required CPU 31 in both listings.
+  The [16-CPU directory screenshot](screenshots/desktop-cpu-tree.png) shows the
+  numbered CPU directories and CPU 0's BSP info; the
+  [inventory screenshot](screenshots/desktop-device-tree.png) shows AP identities
+  and initialized framebuffer, serial, keyboard, mouse, root disk and Ethernet drivers.
   It supplements the automated assertions.
 - Two-terminal latency passed on **1/8/16/32 CPUs**. Desktop CPU/input-under-load
   budgets passed on **1 and 16 CPUs**. Measurements below are isolated QEMU/TCG
@@ -78,19 +99,16 @@ Checks run on this stacked implementation (not inherited parent results):
 
 | CPUs | First / second launch (ms) | Worst pointer (ms) | Worst Enter response (ms) |
 | --- | --- | --- | --- |
-| 1 | 323.5 / 323.5 | 18.6 | 26.0 |
-| 8 | 335.6 / 347.4 | 19.6 | 5.9 |
-| 16 | 348.4 / 337.2 | 29.8 | 5.8 |
-| 32 | 328.4 / 327.4 | 30.8 | 5.7 |
+| 1 | 322.9 / 357.5 | 19.2 | 15.8 |
+| 8 | 323.5 / 323.9 | 17.7 | 5.7 |
+| 16 | 336.7 / 350.4 | 20.5 | 5.6 |
+| 32 | 326.2 / 337.9 | 31.1 | 5.6 |
 
 Launch includes the 300 ms click sequence. Both independent responses also met
 the final-glyph framebuffer assertion within 300 ms. Per-CPU data remains under
-`target/desktop-parallel/`; all follow-up logs are under `target/smp-boot-audit/`.
-After the final `cfg(test)` boundary additions, all five loadable kernel segment
-headers/payloads and its ELF entry/type/machine matched the final rebuilt kernel;
-only nonloaded ELF metadata differed. The complete Ring 3 probe bytes matched
-the disk too (`artifact-match.log`).
-The tested disk SHA-256 is `431c308dcca3364c16f6115eb7a5804ad409a660d93edd1967a8b4a81898a031`.
+`target/desktop-parallel/`; all follow-up logs are under `target/dev-tree-directory/`.
+The installed kernel ELF and complete Forge/ZTHREADS binaries exactly matched
+the final rebuilt files (`artifact-match.log`). The tested disk SHA-256 is `eee01b67369e5baa30f78e98d4bb0aad0e78f802724b69d118be87da682b6d45`.
 
 The unchanged debug `cargo test --test heap_allocation` was rerun and timed out
 at 60 seconds in the 67,108,864-allocation case, after the first four cases passed.

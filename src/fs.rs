@@ -126,38 +126,82 @@ pub(crate) fn is_device_path(path: &str) -> Result<bool, Error> {
     Ok(devfs::Path::new(path)?.device().is_some())
 }
 
-/// List the virtual mount or merge its single mount point into the FAT root.
+fn device_record(node: devfs::Node) -> Result<Option<crate::devices::Device>, Error> {
+    match node {
+        devfs::Node::CpuDirectory(cpu) | devfs::Node::CpuInfo(cpu) => crate::devices::cpu(cpu)
+            .map(Some)
+            .ok_or(devfs::Error::NotFound.into()),
+        devfs::Node::DeviceDirectory(name) | devfs::Node::DeviceInfo(name) => {
+            crate::devices::device(&name)
+                .map(Some)
+                .ok_or(devfs::Error::NotFound.into())
+        }
+        _ => Ok(None),
+    }
+}
+fn directory_entry(name: [u8; 11], directory: bool) -> crate::fat32::DirEntry {
+    crate::fat32::DirEntry {
+        name,
+        attr: if directory { 0x10 } else { 0x20 },
+        size: 0,
+    }
+}
+/// List the virtual mount, initialized devices, CPU identities or a node's info.
 pub(crate) fn list_dir(path: &str) -> Result<alloc::vec::Vec<crate::fat32::DirEntry>, Error> {
-    use crate::fat32::DirEntry;
+    use devfs::Node;
     let path = devfs::Path::new(path)?;
     if let Some(device) = path.device() {
-        if devfs::lookup(device)? != devfs::Node::Directory {
-            return Err(devfs::Error::NotDirectory.into());
-        }
-        return Ok([
-            *b"NULL       ",
-            *b"ZERO       ",
-            *b"RANDOM     ",
-            *b"DEVICES    ",
-        ]
-        .into_iter()
-        .map(|name| DirEntry {
-            name,
-            attr: 0x20,
-            size: 0,
-        })
-        .collect());
+        let node = devfs::lookup(device)?;
+        device_record(node)?;
+        return match node {
+            Node::Directory => Ok(alloc::vec![
+                directory_entry(*b"NULL       ", false),
+                directory_entry(*b"ZERO       ", false),
+                directory_entry(*b"RANDOM     ", false),
+                directory_entry(*b"DEVICES    ", true),
+                directory_entry(*b"CPU        ", true)
+            ]),
+            Node::Devices => {
+                let entries = crate::devices::entries();
+                let mut list = alloc::vec![directory_entry(*b"INFO       ", false)];
+                list.extend(
+                    entries
+                        .into_iter()
+                        .flatten()
+                        .map(|e| directory_entry(e.name, true)),
+                );
+                Ok(list)
+            }
+            Node::Cpus => {
+                let entries = crate::devices::entries();
+                Ok(entries
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|e| e.cpu)
+                    .map(|cpu| {
+                        let mut name = [b' '; 11];
+                        if cpu >= 10 {
+                            name[0] = b'0' + cpu / 10;
+                            name[1] = b'0' + cpu % 10;
+                        } else {
+                            name[0] = b'0' + cpu;
+                        }
+                        directory_entry(name, true)
+                    })
+                    .collect())
+            }
+            Node::CpuDirectory(_) | Node::DeviceDirectory(_) => {
+                Ok(alloc::vec![directory_entry(*b"INFO       ", false)])
+            }
+            _ => Err(devfs::Error::NotDirectory.into()),
+        };
     }
     let mut entries = with_fs(|fs| fs.list_dir(Some(path.as_str())))
         .ok_or(Error::Unmounted)?
         .map_err(Error::Disk)?;
     if path.as_str() == "/" {
-        entries.retain(|entry| entry.name != *b"DEV        ");
-        entries.push(DirEntry {
-            name: *b"DEV        ",
-            attr: 0x10,
-            size: 0,
-        });
+        entries.retain(|e| e.name != *b"DEV        ");
+        entries.push(directory_entry(*b"DEV        ", true));
     }
     Ok(entries)
 }
@@ -177,10 +221,18 @@ pub(crate) fn create_dir(path: &str) -> Result<(), Error> {
 pub(crate) fn read_file(path: &str, out: &mut [u8]) -> Result<usize, Error> {
     let path = devfs::Path::new(path)?;
     if let Some(device) = path.device() {
+        let node = devfs::lookup(device)?;
+        let record = device_record(node)?;
         return devfs::read(
-            devfs::lookup(device)?,
+            node,
             out,
-            |out| crate::devices::render(out),
+            |out| {
+                if let Some(record) = record {
+                    record.write_info(out)
+                } else {
+                    crate::devices::render(out)
+                }
+            },
             |bytes| crate::drivers::char::random::fill(bytes).is_ok(),
         )
         .map_err(Error::Device);
@@ -194,7 +246,9 @@ pub(crate) fn read_file(path: &str, out: &mut [u8]) -> Result<usize, Error> {
 pub(crate) fn write_file(path: &str, bytes: &[u8]) -> Result<usize, Error> {
     let path = devfs::Path::new(path)?;
     if let Some(device) = path.device() {
-        return devfs::write(devfs::lookup(device)?, bytes).map_err(Error::Device);
+        let node = devfs::lookup(device)?;
+        device_record(node)?;
+        return devfs::write(node, bytes).map_err(Error::Device);
     }
     with_fs(|fs| {
         let _ = fs.create_file(path.as_str());

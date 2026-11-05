@@ -242,10 +242,13 @@ and send at most one idle-CPU doorbell; ordinary kernel entry performs wakeups.
 ## Virtual device paths
 
 Existing path calls 5/6/7/12 also handle the kernel-owned `/dev` mount.
-`ls /dev` lists `null`, `zero`, `random`, `devices` in the existing 12-byte/8.3
+`ls /dev` lists `null`, `zero`, `random`, `devices/` and `cpu/` in the existing 12-byte/8.3
 record format. Null reads return EOF; zero reads fill the buffer; both discard
 writes. Random reads return at most 256 bytes and fail when entropy is unavailable.
-Inventory reads return the prefix fitting the buffer; each call starts at zero.
+Read `/dev/devices/info` for the inventory prefix fitting the buffer; each call
+starts at zero. `/dev/devices` is a directory of registered nodes. `/dev/cpu/N/info`
+and `/dev/devices/cpuN/info` return the same read-only CPU record. Node directories
+contain `INFO`; listing `/dev/cpu` returns one directory per online logical CPU.
 Inventory/random writes and node creation fail. Unknown device paths never fall
 through to FAT creation, and device nodes cannot be spawned. Full user mapping
 validation remains required even for discarded writes. See [devices](devices.md).

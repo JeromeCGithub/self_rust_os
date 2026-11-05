@@ -233,5 +233,5 @@ preemption and virtual device-file behavior. `cargo test --lib` includes bounded
 registry, malformed ACPI/tag, path-alias, entropy-failure and repeated-publication
 cases. The SMP probe runs device I/O from PID 0 and an ordinary child, plants a
 conflicting FAT `/DEV/NULL` in its private image and verifies backing bytes remain
-unchanged. `e2e/desktop.py` also runs `ls /dev` and `cat /dev/devices`; its
+unchanged. `e2e/desktop.py` also runs `ls /dev` and `ls /dev/cpu` and `cat /dev/devices/info`; its
 `desktop-device-tree.png` must come from the tested build.

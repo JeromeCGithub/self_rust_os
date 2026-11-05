@@ -20,3 +20,14 @@ pub(crate) fn render(out: &mut impl core::fmt::Write) -> core::fmt::Result {
     // initialization releases its own resource locks before publishing a record.
     REGISTRY.lock().render(out)
 }
+
+/// Copy only listing metadata; allocation and formatting happen after unlocking.
+pub(crate) fn entries() -> [Option<registry::Entry>; registry::CAPACITY] {
+    REGISTRY.lock().entries()
+}
+pub(crate) fn device(name: &[u8; 11]) -> Option<Device> {
+    REGISTRY.lock().find(name)
+}
+pub(crate) fn cpu(index: u8) -> Option<Device> {
+    REGISTRY.lock().cpu(index)
+}

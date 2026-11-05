@@ -96,7 +96,7 @@ pub fn init_scancode_queue() {
 fn publish_device() {
     static PUBLISHED: conquer_once::spin::OnceCell<()> = conquer_once::spin::OnceCell::uninit();
     let _ = PUBLISHED.try_init_once(|| {
-        crate::devices::register(crate::devices::Device { name:"keyboard",instance:0,
+        crate::devices::register(crate::devices::Device { name:"kbd",instance:0,
             bus:crate::devices::Bus::Legacy,driver:"i8042",details:crate::devices::Details::None });
     });
 }

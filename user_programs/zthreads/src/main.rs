@@ -1,3 +1,4 @@
+extern crate alloc;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use rustos_thread_abi as abi;
 use userlib::{
@@ -436,12 +437,34 @@ fn device_files_probe(cpus: usize) {
     assert_eq!(sys::read_file("/dev/missing", &mut guarded), None);
     assert_eq!(sys::write_file("/dev/missing", b"no"), None);
     assert_eq!(sys::write_file("/DEV./MISSING.", b"no"), None);
-    assert_eq!(sys::write_file("/dev/devices", b"no"), None);
+    assert_eq!(sys::write_file("/dev/devices/info", b"no"), None);
     assert_eq!(sys::mkdir("/dev/new"), Err(()));
     assert_eq!(sys::mkdir("/DEV."), Err(()));
     assert_eq!(sys::spawn("/DEV./DEVICES."), Err(()));
     assert_eq!(sys::read_file("/dev/../readme.txt", &mut guarded), None);
-    let mut entries = [0u8; 12*32];
+    let mut entries = [0u8; 12*64];
+    let listed = sys::ls("/dev/devices", &mut entries, 64).expect("device inventory must be browsable");
+    assert!(listed > cpus);
+    let device_entries=entries;
+    let n = sys::ls("/dev/cpu", &mut entries, 64).expect("per-CPU directory");
+    assert_eq!(n, cpus);
+    for cpu in 0..cpus {
+        assert!(listed_directory(&entries[..n*12],&alloc::format!("{}",cpu)));
+        assert!(listed_directory(&device_entries[..listed*12],&alloc::format!("CPU{}",cpu)));
+        let path=alloc::format!("/dev/cpu/{}/info",cpu);
+        let mut info=[0u8;256];
+        let n=sys::read_file(&path,&mut info).expect("individual CPU information");
+        let text=core::str::from_utf8(&info[..n]).unwrap();
+        assert!(text.contains(&alloc::format!("cpu{} driver=x86-64",cpu)));
+        assert!(text.contains(if cpu==0 {"role=bsp"}else{"role=ap"}));
+        let path=alloc::format!("/dev/devices/cpu{}/info",cpu);
+        let mut alias=[0u8;256];
+        assert_eq!(sys::read_file(&path,&mut alias),Some(n));
+        assert_eq!(alias,info);
+    }
+    assert_eq!(sys::read_file(&alloc::format!("/dev/cpu/{}/info",cpus), &mut guarded),None);
+    assert_eq!(sys::write_file("/dev/cpu/0/info",b"no"),None);
+    assert_eq!(sys::mkdir("/dev/cpu/32"),Err(()));
     let n = sys::ls("/dev", &mut entries, 32).expect("virtual /dev directory");
     for name in [b"NULL       ", b"ZERO       ", b"RANDOM     ", b"DEVICES    "] {
         assert!(entries[..n*12].chunks_exact(12).any(|e| &e[..11]==name));
@@ -449,14 +472,14 @@ fn device_files_probe(cpus: usize) {
     let n = sys::ls("/", &mut entries, 32).expect("root mount listing");
     assert_eq!(entries[..n*12].chunks_exact(12).filter(|e| &e[..11]==b"DEV        " && e[11]&0x10!=0).count(), 1);
     let mut inventory = [0u8; 8192];
-    let n = sys::read_file("/dev/devices", &mut inventory).expect("detected device inventory");
+    let n = sys::read_file("/dev/devices/info", &mut inventory).expect("detected device inventory");
     let text = core::str::from_utf8(&inventory[..n]).unwrap();
     assert_eq!(text.lines().filter(|line| line.contains("driver=x86-64")).count(), cpus);
     assert!(text.contains("role=bsp") && text.contains("driver=ata"));
     assert_eq!(text.lines().filter(|line| line.contains("role=ap")).count(), cpus-1);
     assert!(!text.contains("0xffff"), "inventory must not expose kernel virtual addresses");
     let mut prefix = [0u8; 7];
-    assert_eq!(sys::read_file("/dev/devices", &mut prefix), Some(7));
+    assert_eq!(sys::read_file("/dev/devices/info", &mut prefix), Some(7));
     assert_eq!(&prefix, &inventory[..7]);
     let mut random = [0u8; 32];
     assert_eq!(sys::read_file("/dev/random", &mut random), Some(32));
@@ -466,6 +489,12 @@ fn device_files_probe(cpus: usize) {
     assert_eq!(sys::read_file("/DEVIL.TXT", &mut guarded), Some(13));
     assert_eq!(&guarded[..13], b"ordinary file");
     println!("[devices] usable files, inventory and namespace isolation PASS");
+}
+
+fn listed_directory(records:&[u8], name:&str)->bool {
+    name.len()<=11 && records.chunks_exact(12).any(|entry| {
+        &entry[..name.len()]==name.as_bytes() && entry[name.len()..11].iter().all(|byte|*byte==b' ') && entry[11]&0x10!=0
+    })
 }
 
 fn timer_preemption_probe(cpu: usize) {
