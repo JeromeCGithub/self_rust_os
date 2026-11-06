@@ -1,0 +1,31 @@
+   Compiling libm v0.2.16
+   Compiling rustos-quickjs v0.1.0 (/home/jay/personal/os/jbrowse/crates/quickjs)
+   Compiling rustos-script v0.1.0 (/home/jay/personal/os/jbrowse/crates/script)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.00s
+     Running unittests src/lib.rs (rustos-p0-host-libc/x86_64-unknown-linux-gnu/debug/deps/rustos_quickjs-46ea807b7d2949db)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_lifecycle.rs (rustos-p0-host-libc/x86_64-unknown-linux-gnu/debug/deps/native_lifecycle-9855dbd412c7cc20)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime.rs (rustos-p0-host-libc/x86_64-unknown-linux-gnu/debug/deps/runtime-6f0a940a58dc638a)
+
+running 4 tests
+test budgets_invalid_inputs_and_ambient_capabilities_are_explicit ... ok
+test real_language_objects_closures_regex_typed_arrays_and_unicode ... ok
+test repeated_runtime_lifecycle_preserves_independent_globals ... ok
+test exceptions_and_interruption_leave_a_usable_realm ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustos_quickjs
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

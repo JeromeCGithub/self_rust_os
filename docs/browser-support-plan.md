@@ -1,6 +1,7 @@
 # jbrowse roadmap: everyday browsing and modern websites
 
-Status: proposed implementation plan, 2026-11-05. Baseline: browser commit
+Status: implementation started with [P0 native engine feasibility](browser-engine-p0.md),
+2026-11-05; later phases remain planned. Baseline: browser commit
 `b44a83a`. This is a plan for missing capabilities, not a claim of new support.
 See the [browser guide](jbrowse.md), [Google status](jbrowse-google.md), and
 [JavaScript prototype](jbrowse-javascript.md) for current behavior and evidence.
@@ -129,6 +130,11 @@ Facebook and media can proceed independently after their prerequisites. Each
 milestone contains multiple reviewable changes with red tests before behavior.
 
 ### P0 — Freeze the baseline and select the engine
+
+Implementation: see the [engine decision](browser-engine-p0.md) and
+[executed validation](browser-p0-validation.md). QuickJS runs in a normal Ring 3
+child; a full web-engine port remains unproven. Review the revised route and
+observability gaps before treating this as broad browser compatibility.
 
 Preserve the Google-results failure. Capture missing language/API calls, failed
 resource requests, layout/decode errors and peak memory using local representative
@@ -304,7 +310,7 @@ needs; none is automatically required by every ordinary page.
 
 ## Test and delivery contract
 
-Everything above is planned unless identified as baseline evidence. Follow the
+Everything above remains planned unless identified as baseline or P0 evidence. Follow the
 [repository TDD/testing contract](testing.md): failing observable behavior,
 small implementation, green checks, then refactor. Never loosen site assertions
 because the server returned a challenge, error or placeholder.
@@ -359,7 +365,6 @@ Sources checked on 2026-11-05:
   authenticated workflow was verified. Its tasks above are proposed engineering
   acceptance criteria, to validate with an authorized user.
 
-No new engine port, account action, media playback or runtime change was performed
-to write this plan. Earlier browser execution is inherited baseline evidence.
-This documentation change needs documentation checks, not invented runtime passes
-or a reused screenshot presented as evidence of new site support.
+The original plan was documentation-only. New P0 runtime work and its executed
+checks are recorded separately in the linked engine decision and validation.
+Account actions, media playback and later website milestones remain unverified.
