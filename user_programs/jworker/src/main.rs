@@ -52,7 +52,7 @@ fn main() {
             Some(value) => value,
             None => sys::exit(64),
         };
-        if header.kind != Kind::Eval || header.generation != sequence {
+        if !matches!(header.kind, Kind::Eval | Kind::Document) || header.generation != sequence {
             sys::exit(64)
         }
         let mut source = Vec::new();
@@ -62,7 +62,11 @@ fn main() {
         source.resize(header.length, 0);
         read_exact(&mut source);
         let result = match core::str::from_utf8(&source) {
-            Ok(source) => runtime.eval(source),
+            Ok(source) if header.kind == Kind::Eval => {
+                runtime.eval(source).map(|text| text.into_bytes())
+            }
+            Ok(html) => rustos_browser_dom::run(html)
+                .and_then(|changes| changes.encode().map_err(|_| Error::OutputLimit)),
             Err(_) => Err(Error::InvalidInput),
         };
         match result {
@@ -73,7 +77,7 @@ fn main() {
                     length: result.len(),
                     status: 0,
                 });
-                write(result.as_bytes());
+                write(&result);
             }
             Err(error) => {
                 let status = match error {

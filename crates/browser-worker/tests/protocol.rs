@@ -110,3 +110,23 @@ fn missing_worker_response_is_bounded_and_freed() {
     assert_eq!(drops.get(), 1);
     assert_eq!(HEADER, 24);
 }
+
+#[test]
+fn document_requests_have_a_distinct_kind_and_preserve_binary_effect_records() {
+    let request = header(Kind::Document, 1, 7, 0);
+    assert_eq!(Header::parse(request.bytes().unwrap()), Ok(request));
+    assert!(header(Kind::Document, 0, 7, 0).bytes().is_err());
+    assert!(header(Kind::Document, 1, MAX_SOURCE + 1, 0)
+        .bytes()
+        .is_err());
+    let drops = Rc::new(Cell::new(0));
+    let body = b"JDM1\0\xff\x80";
+    let mut session = Session::connect(
+        fake(header(Kind::Result, 1, body.len(), 0), body, drops.clone()),
+        || false,
+    )
+    .unwrap();
+    assert_eq!(session.render_document("<html>", || false).unwrap(), body);
+    assert_eq!(session.render_document("x", || true), Err(Error::Cancelled));
+    assert_eq!(drops.get(), 1);
+}

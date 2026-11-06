@@ -68,8 +68,30 @@ pub fn load(
     if cancel.is_cancelled() {
         return Err("request cancelled".to_string());
     }
-    let scripts = doc.run_scripts();
-    let script_errors = scripts.failures.len();
+    // Page scripts execute only in a restricted child. Reply data is validated
+    // and committed atomically; no JS engine or native binding lives in this app.
+    let script_errors = if doc.nodes.iter().any(|node| node.tag == "script") {
+        let result = rustos_browser_worker::native::Native::start(|| cancel.is_cancelled())
+            .and_then(|mut worker| worker.render_document(&html, || cancel.is_cancelled()));
+        match result {
+            Ok(bytes) => match rustos_browser::dom::Changes::decode(&bytes) {
+                Ok(changes) if doc.apply_changes(&changes).is_ok() => changes.failures as usize,
+                _ => {
+                    userlib::println!("[jbrowse] native DOM reply rejected");
+                    1
+                }
+            },
+            Err(error) => {
+                userlib::println!("[jbrowse] native worker failure: {:?}", error);
+                1
+            }
+        }
+    } else {
+        0
+    };
+    if cancel.is_cancelled() {
+        return Err("request cancelled".to_string());
+    }
     if script_errors > 0 {
         userlib::println!("[jbrowse] script errors: {}", script_errors);
     }
@@ -106,7 +128,7 @@ pub fn load(
     let mut page = doc.layout_with(640, fonts);
     if script_errors > 0 && page.is_empty() {
         userlib::println!("[jbrowse] unsupported script page");
-        page=Document::parse("<h1>Page needs more JavaScript support</h1><p>The request succeeded, but this browser cannot display this page yet.</p><p>The current scripting prototype does not run full web applications.</p><p>You can edit the address to visit another page.</p>").map_err(|_|"Could not create error page".to_string())?.layout_with(640,fonts);
+        page=Document::parse("<h1>Page needs more JavaScript support</h1><p>The request succeeded, but this browser cannot display this page yet.</p><p>The current native DOM bindings do not run full web applications.</p><p>You can edit the address to visit another page.</p>").map_err(|_|"Could not create error page".to_string())?.layout_with(640,fonts);
     }
     Ok(Loaded {
         url,

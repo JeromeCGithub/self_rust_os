@@ -1,7 +1,7 @@
 use crate::*;
 use alloc::string::ToString;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Rule {
     selector: String,
     declarations: Vec<(String, String)>,

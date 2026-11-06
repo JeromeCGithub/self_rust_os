@@ -412,6 +412,7 @@ name = "jbrowse"
 version = "0.1.0"
 dependencies = [
  "rustos-browser",
+ "rustos-browser-worker",
  "userlib",
 ]
 
@@ -790,9 +791,15 @@ dependencies = [
 name = "rustos-browser"
 version = "0.1.0"
 dependencies = [
- "rustos-script",
  "rustos-text",
  "rustos-web-image",
+]
+
+[[package]]
+name = "rustos-browser-worker"
+version = "0.1.0"
+dependencies = [
+ "userlib",
 ]
 
 [[package]]
@@ -812,10 +819,6 @@ version = "0.1.0"
 
 [[package]]
 name = "rustos-process-abi"
-version = "0.1.0"
-
-[[package]]
-name = "rustos-script"
 version = "0.1.0"
 
 [[package]]

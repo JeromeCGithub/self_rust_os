@@ -66,6 +66,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             '/typography': "<title>Typography fixture</title><style>body{font-family:sans-serif;font-size:16px;background:#f9f9f9}</style><h1>Readable text</h1><p><span style='color:#0000ff'>WWW</span> <span style='color:#ff0000'>iii</span> café Ω Ж</p><p style='font-family:serif'>A proportional serif paragraph.</p><pre>Monospace code: 0123456789</pre>".encode(),
             '/form': b"<title>Search fixture</title><form action='/find'><input type=hidden name=hl value=en><input name=q title='Search'><input type=submit name=btnG value=Search></form>",
             '/script': b"<title>Before script</title><p id='result'>Waiting</p><script>const n=6*7; document.getElementById('result').textContent='Answer: '+n; document.getElementById('result').style.color='#123456'; document.body.style.backgroundColor='#e8dcff'; document.title='Script ready';</script>",
+            '/native-script': b"<title>Before native</title><p id='result'>Waiting</p><script>class Counter {#n=40;next(){return ++this.#n}} const c=new Counter(); const p=document.getElementById('result'); if(p!==document.getElementById('result') || typeof os!=='undefined' || typeof __rustosHost!=='undefined')throw Error('boundary'); p.style.color='#0c5a42'; Promise.resolve([c.next(),c.next()].map(x=>x*2)).then(xs=>{p.textContent='Native functions: '+xs.join(',');document.body.style.backgroundColor='#c9eaff';document.title='Native engine ready';}); ({toString(){throw Error('unused completion')}});</script>",
+            '/native-queue': b"<title>Native queue bounded</title><style>body {background:#fff0dd}</style><p>Still readable after a microtask loop</p><script>function again(){Promise.resolve().then(again)};again()</script>",
             '/blank-script': b"<title>Blank script</title><script>while(true) {}</script>",
             '/bad-script': b"<title>Unsupported script</title><style>body {background:#fce8e6}</style><script>while(true) {}</script><p>Still readable</p>",
         }
@@ -221,6 +223,15 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
             click(ox+120,oy+42)
             type_text(f'http://10.0.2.2:{server.server_port}{path}')
             key('ret')
+        if os.environ.get('RUSTOS_JBROWSE_NATIVE_SCRIPTS') == '1':
+            navigate('/native-script');wait('[jbrowse] loaded: Native engine ready')
+            image=pixel((ox+500,oy+200),(201,234,255),'native-script')
+            colors=image.crop((ox,oy+64,ox+500,oy+150)).getcolors(500*86)
+            assert sum(count for count,color in colors if color==(12,90,66))>40, 'native DOM text mutation was not painted'
+            navigate('/native-queue');wait('[jbrowse] loaded: Native queue bounded')
+            pixel((ox+500,oy+200),(255,240,221),'native-queue')
+            assert '[jbrowse] script errors: 1' in output()[last_navigation:], 'unbounded microtask queue was not rejected'
+            print('PASS: native restricted QuickJS, classes/functions/promises, DOM pixels and bounded microtask recovery')
         navigate('/start')
         wait('[jbrowse] loaded: Browser fixture')
         assert '/dir/theme.css' in requests, requests

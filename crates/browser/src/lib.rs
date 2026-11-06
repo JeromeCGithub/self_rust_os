@@ -33,7 +33,7 @@ pub enum Error {
 }
 
 /// Flat arena: indices own relationships, never references into movable storage.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Node {
     pub tag: String,
     pub text: String,
@@ -55,7 +55,7 @@ pub(crate) enum Sheet {
     Inline(String),
     External(String),
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Document {
     pub title: String,
     pub nodes: Vec<Node>,
@@ -158,3 +158,4 @@ impl Document {
 mod script;
 #[cfg(feature = "javascript")]
 pub use script::{ScriptError, ScriptReport};
+pub mod dom;

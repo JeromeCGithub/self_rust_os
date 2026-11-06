@@ -39,7 +39,13 @@ fn ready(s: &Scheduler, pid: Pid, mask: u64) -> u64 {
         }
         if closed
             || target
-                .map(|p| p.io_inbox.len() < super::STDIO_QUEUE_CAPACITY)
+                .map(|p| {
+                    if p.io_nested_peer == Some(pid) {
+                        p.io_nested_inbox.len() < super::STDIO_QUEUE_CAPACITY
+                    } else {
+                        p.io_inbox.len() < super::STDIO_QUEUE_CAPACITY
+                    }
+                })
                 .unwrap_or(false)
         {
             result |= abi::EVENT_STDIO_WRITE;

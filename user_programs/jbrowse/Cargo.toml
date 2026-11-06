@@ -12,7 +12,8 @@ opt-level = "z"
 lto = true
 [dependencies]
 userlib = { path = "../userlib", features = ["tls", "threads", "fonts"] }
-rustos-browser = { path = "../../crates/browser", features = ["javascript"] }
+rustos-browser = { path = "../../crates/browser" }
+rustos-browser-worker = { path = "../../crates/browser-worker" }
 [[bin]]
 name = "jbrowse"
 path = "../userlib/src/application.rs"
