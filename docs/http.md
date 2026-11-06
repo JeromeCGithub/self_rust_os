@@ -62,6 +62,11 @@ content type and Content-Length are generated internally. `request_cancellable`
 adds an owned cancellation token when `alloc` is enabled; existing GET APIs retain
 their signatures. See [P5 form/POST policy and evidence](browser-sessions-p5.md).
 
+`Request::GetRange(ByteRange {first, last})` adds a bounded single inclusive byte
+range. A seek succeeds only for matching206 Content-Range metadata and exactly
+the expected decoded bytes.200/416 are typed range failures, not seek data.
+See [range subset, limits and native evidence](browser-youtube-p7.md).
+
 The standalone protocol crate accepts a `Transport` implementation. Host tests
 supply sockets with short writes, fragmented receives and controlled time; guest
 applications use the SDK adapter. Large parser phases explicitly remain separate

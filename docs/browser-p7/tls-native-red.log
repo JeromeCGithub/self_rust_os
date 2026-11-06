@@ -1,0 +1,9 @@
+qemu-system-x86_64: terminating on signal 15 from pid 443788 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/tls.py", line 157, in <module>
+    if __name__=='__main__':main()
+                            ~~~~^^
+  File "/home/jay/personal/os/jbrowse/e2e/tls.py", line 139, in main
+    assert sum(request.startswith(b'GET /range ') for _,request in received)==2, 'verified TLS byte-range requests missing'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: verified TLS byte-range requests missing

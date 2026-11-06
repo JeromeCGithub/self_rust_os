@@ -1,0 +1,9 @@
+qemu-system-x86_64: terminating on signal 15 from pid 443749 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/http.py", line 196, in <module>
+    if __name__ == '__main__': main()
+                               ~~~~^^
+  File "/home/jay/personal/os/jbrowse/e2e/http.py", line 184, in main
+    assert sum(request.startswith(b'GET /range ') for request in requests)==3, 'native byte-range requests missing'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: native byte-range requests missing

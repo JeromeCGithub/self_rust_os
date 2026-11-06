@@ -52,7 +52,10 @@ def main():
          assert body==b'user=guest&password=testpass'
          request=header+b'\r\n\r\n'+body
         received.append((kind,request));assert kind in ('valid','rsa'), 'rejected certificate received application data'
-        if path==b'/large':data=b'HTTP/1.1 200 OK\r\nContent-Length: 65536\r\n\r\n'+b'x'*65536
+        if path==b'/range':
+         assert b'\r\nRange: bytes=4-7\r\n' in request
+         data=b'HTTP/1.1 206 Partial\r\nContent-Range: bytes 4-7/12\r\nContent-Length: 4\r\n\r\nefgh'
+        elif path==b'/large':data=b'HTTP/1.1 200 OK\r\nContent-Length: 65536\r\n\r\n'+b'x'*65536
         elif path==b'/expanded':data=b'HTTP/1.1 200 OK\r\nContent-Length: 17825792\r\n\r\n'+b'x'*17825792
         elif path==b'/headers':data=b'HTTP/1.1 200 OK\r\nContent-Security-Policy: '+b'a'*20000+b'\r\n'+(b'X-Padding: '+b'b'*800+b'\r\n')*200+b'Content-Length: 14\r\n\r\ntls-fixture-ok'
         elif path==b'/overline':data=b'HTTP/1.1 200 OK\r\nX-Large: '+b'a'*33000+b'\r\nContent-Length: 0\r\n\r\n'
@@ -133,6 +136,7 @@ def main():
     if not args.no_rng and not args.bad_clock:
      assert len(received)>=10,received
      assert sum(request.startswith(b'POST /post ') for _,request in received)==2, 'verified TLS POST requests missing'
+     assert sum(request.startswith(b'GET /range ') for _,request in received)==2, 'verified TLS byte-range requests missing'
     else:assert not received,'missing entropy/time must never send HTTP plaintext'
     print('PASS: '+expected,flush=True)
    finally:

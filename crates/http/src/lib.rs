@@ -15,6 +15,8 @@ pub enum Error {
     InsecureRedirect,
     /// A method-preserving redirect would forward a POST body to another origin.
     CrossOriginRedirect,
+    RangeIgnored,
+    RangeUnsatisfiable,
     Truncated,
     TooLarge,
     Dns,
@@ -95,6 +97,22 @@ pub struct Response {
     pub charset: Option<Charset>,
     /// Number of decoded bytes delivered to the callback.
     pub bytes: usize,
+    /// Parsed single byte Content-Range. GetRange additionally validates it
+    /// against requested coordinates and the decoded response body length.
+    pub range: Option<ContentRange>,
+}
+
+/// Closed inclusive byte range. Validated against body budgets before I/O.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ByteRange {
+    pub first: u64,
+    pub last: u64,
+}
+/// Single byte Content-Range with a known representation length.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentRange {
+    Satisfied { first: u64, last: u64, total: u64 },
+    Unsatisfied { total: u64 },
 }
 
 /// Bounded request body owned by the caller for the duration of the exchange.
@@ -102,6 +120,7 @@ pub struct Response {
 #[derive(Clone, Copy)]
 pub enum Request<'a> {
     Get,
+    GetRange(ByteRange),
     FormPost(&'a [u8]),
 }
 enum Outcome {
@@ -158,6 +177,16 @@ pub fn request_with_url(
     }
     if matches!(request,Request::FormPost(data) if data.len()>limits::REQUEST_BODY) {
         return Err(Error::TooLarge);
+    }
+    if let Request::GetRange(range) = request {
+        if range
+            .last
+            .checked_sub(range.first)
+            .and_then(|n| n.checked_add(1))
+            .is_none_or(|n| n > options.max_body as u64)
+        {
+            return Err(Error::TooLarge);
+        }
     }
     let mut url = url::Url::parse(url)?;
     for redirect in 0..=options.redirects {
@@ -259,11 +288,40 @@ fn exchange(
     if [301, 302, 303, 307, 308].contains(&head.status) && !location.as_str().is_empty() {
         return Ok(Outcome::Redirect(head.status));
     }
+    let expected = if let Request::GetRange(requested) = request {
+        if head.status == 200 {
+            return Err(Error::RangeIgnored);
+        }
+        if head.status == 416 {
+            return Err(Error::RangeUnsatisfiable);
+        }
+        if head.status != 206 {
+            return Err(Error::Protocol);
+        }
+        let Some(ContentRange::Satisfied { first, last, total }) = head.range else {
+            return Err(Error::Protocol);
+        };
+        if first != requested.first || last != requested.last.min(total - 1) {
+            return Err(Error::Protocol);
+        }
+        let length = usize::try_from(last - first + 1).map_err(|_| Error::TooLarge)?;
+        if head.length.is_some_and(|n| n != length) {
+            return Err(Error::Protocol);
+        }
+        reader.options.max_body = length;
+        Some(length)
+    } else {
+        None
+    };
     let bytes = wire::body(&mut reader, &head, body)?;
+    if expected.is_some_and(|length| length != bytes) {
+        return Err(Error::Truncated);
+    }
     Ok(Outcome::Response(Response {
         status: head.status,
         charset: head.charset,
         bytes,
+        range: head.range,
     }))
 }
 
@@ -279,15 +337,23 @@ fn send_request(
     use core::fmt::Write;
     let mut request = url::Text::<{ limits::REQUEST }>::new();
     request.push(match method {
-        Request::Get => "GET ",
+        Request::Get | Request::GetRange(_) => "GET ",
         Request::FormPost(_) => "POST ",
     })?;
     request.push(url.target.as_str())?;
     request.push(" HTTP/1.1\r\nHost: ")?;
     url.authority(&mut request)?;
     request.push("\r\nUser-Agent: RustOS-curl/1\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n")?;
+    if let Request::GetRange(range) = method {
+        write!(
+            &mut request,
+            "Range: bytes={}-{}\r\n",
+            range.first, range.last
+        )
+        .map_err(|_| Error::TooLarge)?;
+    }
     let data = match method {
-        Request::Get => &[][..],
+        Request::Get | Request::GetRange(_) => &[][..],
         Request::FormPost(data) => {
             write!(
                 &mut request,

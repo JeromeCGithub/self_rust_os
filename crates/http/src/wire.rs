@@ -97,6 +97,31 @@ pub(crate) struct Head {
     pub length: Option<usize>,
     pub chunked: bool,
     pub charset: Option<crate::Charset>,
+    pub range: Option<crate::ContentRange>,
+}
+fn content_range(value: &[u8]) -> Result<crate::ContentRange, Error> {
+    let text = core::str::from_utf8(value).map_err(|_| Error::Protocol)?;
+    let (unit, value) = text.split_once(' ').ok_or(Error::Protocol)?;
+    if !unit.eq_ignore_ascii_case("bytes") {
+        return Err(Error::Protocol);
+    }
+    let (positions, total) = value.split_once('/').ok_or(Error::Protocol)?;
+    let decimal = |value: &str| -> Result<u64, Error> {
+        if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(Error::Protocol);
+        }
+        value.parse().map_err(|_| Error::Protocol)
+    };
+    let total = decimal(total)?;
+    if positions == "*" {
+        return Ok(crate::ContentRange::Unsatisfied { total });
+    }
+    let (first, last) = positions.split_once('-').ok_or(Error::Protocol)?;
+    let (first, last) = (decimal(first)?, decimal(last)?);
+    if first > last || last >= total {
+        return Err(Error::Protocol);
+    }
+    Ok(crate::ContentRange::Satisfied { first, last, total })
 }
 fn number(bytes: &[u8], radix: u32) -> Result<usize, Error> {
     if bytes.is_empty() {
@@ -157,6 +182,7 @@ pub(crate) fn headers(
             length: None,
             chunked: false,
             charset: None,
+            range: None,
         };
         loop {
             let n = r.line(&mut line)?;
@@ -168,6 +194,12 @@ pub(crate) fn headers(
                 break;
             }
             let (k, v) = field(&line[..n])?;
+            if k.eq_ignore_ascii_case(b"content-range") {
+                if head.range.is_some() {
+                    return Err(Error::Protocol);
+                }
+                head.range = Some(content_range(v)?);
+            }
             if k.eq_ignore_ascii_case(b"content-type") {
                 for parameter in v.split(|b| *b == b';').skip(1) {
                     if let Some(at) = parameter.iter().position(|b| *b == b'=') {

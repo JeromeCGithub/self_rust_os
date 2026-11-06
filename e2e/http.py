@@ -58,7 +58,10 @@ def main():
                     path = raw.split(b' ')[1]
                     assert raw.startswith(b'GET ') and b' HTTP/1.1\r\nHost: ' in raw
                     assert b'Accept-Encoding: identity\r\n' in raw
-                    if path == b'/redirect':
+                    if path == b'/range':
+                        assert b'\r\nRange: bytes=4-7\r\n' in raw
+                        data=b'HTTP/1.1 206 Partial\r\nContent-Range: bytes 4-7/12\r\nContent-Length: 4\r\n\r\nefgh'
+                    elif path == b'/redirect':
                         data = b'HTTP/1.1 302 Found\r\nLocation: /chunked\r\nContent-Length: 0\r\n\r\n'
                     elif path == b'/chunked':
                         data = b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7;v=1\r\nhttp-fi\r\n8\r\nxture-ok\r\n0\r\nX-End: yes\r\n\r\n'
@@ -178,6 +181,7 @@ def main():
                     wait('[portal] output: curl: HTTP ',mark)
                 assert not errors, errors
                 assert any(b'Host: fixture.test:' in request for request in requests), requests
+                assert sum(request.startswith(b'GET /range ') for request in requests)==3, 'native byte-range requests missing'
                 print('PASS: Portal curl, standalone CURL, Ring 3 DNS/HTTP library and cleanup')
             finally:
                 if qmp is not None: qmp.close()
