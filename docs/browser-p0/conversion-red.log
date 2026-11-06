@@ -1,0 +1,27 @@
+   Compiling rustos-quickjs v0.1.0 (/home/jay/personal/os/jbrowse/crates/quickjs)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/runtime.rs (rustos-p0-host-clean/x86_64-unknown-linux-gnu/debug/deps/runtime-4ad61cac51e4aaed)
+
+running 4 tests
+test budgets_invalid_inputs_and_ambient_capabilities_are_explicit ... ok
+test real_language_objects_closures_regex_typed_arrays_and_unicode ... ok
+test repeated_runtime_lifecycle_preserves_independent_globals ... ok
+test exceptions_and_interruption_leave_a_usable_realm ... FAILED
+
+failures:
+
+---- exceptions_and_interruption_leave_a_usable_realm stdout ----
+
+thread 'exceptions_and_interruption_leave_a_usable_realm' panicked at tests/runtime.rs:24:5:
+assertion `left == right` failed
+  left: Err(Exception)
+ right: Err(Interrupted)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    exceptions_and_interruption_leave_a_usable_realm
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test runtime`

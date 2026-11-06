@@ -1,0 +1,14 @@
+E
+======================================================================
+ERROR: test_every_vm_gets_a_fresh_serial_log (test_browser_p0.ProbeEvidence.test_every_vm_gets_a_fresh_serial_log)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/tools/tests/test_browser_p0.py", line 19, in test_every_vm_gets_a_fresh_serial_log
+    first = PROBE.reserve_log(directory)
+            ^^^^^^^^^^^^^^^^^
+AttributeError: module 'browser_p0' has no attribute 'reserve_log'
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+FAILED (errors=1)

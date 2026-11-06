@@ -1,0 +1,43 @@
+rustc 1.86.0-nightly (ae5de6c75 2025-01-29)
+gcc (GCC) 16.2.1 20260810
+QEMU emulator version 11.1.2
+60fc6c8af7bc4ddba6f7829464b7e2a0f6c740c95524537f93d6fdc5064ef543  user_programs/zjsprobe/zjsprobe.bin (874240 bytes)
+df525c40e18b1691e8088f438dc5802df7a104d03878b329eac2a0e7a3dad90c  user_programs/zjsprobe/zjsprobe_meta.rs (529 bytes)
+cbb15ad34782c41d799ed019bea63d29ca062854ebbc4f9945d8d2a702248a0e  user_programs/zjsprobe/x86_64-user-program.json (577 bytes)
+
+$ readelf -l user_programs/zjsprobe/target/x86_64-user-program/release/zjsprobe
+
+Elf file type is EXEC (Executable file)
+Entry point 0x400000
+There are 5 program headers, starting at offset 64
+
+Program Headers:
+  Type           Offset             VirtAddr           PhysAddr
+                 FileSiz            MemSiz              Flags  Align
+  LOAD           0x0000000000001000 0x0000000000400000 0x0000000000400000
+                 0x00000000000b64e1 0x00000000000b64e1  R E    0x1000
+  LOAD           0x00000000000b8000 0x00000000004b7000 0x00000000004b7000
+                 0x0000000000016d44 0x0000000000016d44  R      0x1000
+  LOAD           0x00000000000cf000 0x00000000004ce000 0x00000000004ce000
+                 0x0000000000006480 0x0000000000007081  RW     0x1000
+  GNU_RELRO      0x00000000000ced48 0x00000000004cdd48 0x00000000004cdd48
+                 0x0000000000000000 0x0000000000000000  R      0x1
+  GNU_STACK      0x0000000000000000 0x0000000000000000 0x0000000000000000
+                 0x0000000000000000 0x0000000000000000  RW     0x0
+
+ Section to Segment mapping:
+  Segment Sections...
+   00     .text
+   01     .rodata .eh_frame_hdr
+   02     .data .got.plt .bss
+   03     .got
+   04
+exit=0
+
+$ readelf -d user_programs/zjsprobe/target/x86_64-user-program/release/zjsprobe
+
+There is no dynamic section in this file.
+exit=0
+
+$ nm -u user_programs/zjsprobe/target/x86_64-user-program/release/zjsprobe
+exit=0
