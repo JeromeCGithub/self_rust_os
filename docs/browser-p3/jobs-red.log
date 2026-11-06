@@ -1,0 +1,35 @@
+   Compiling libm v0.2.16
+   Compiling rustos-quickjs v0.1.0 (/home/jay/personal/os/jbrowse/crates/quickjs)
+   Compiling rustos-script v0.1.0 (/home/jay/personal/os/jbrowse/crates/script)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.77s
+     Running tests/runtime.rs (/home/jay/personal/os/jbrowse/crates/quickjs/target/x86_64-unknown-linux-gnu/debug/deps/runtime-6f0a940a58dc638a)
+
+running 6 tests
+test classic_execution_does_not_coerce_unused_results_and_jobs_are_explicit ... FAILED
+test promise_checkpoints_bound_both_job_count_and_cpu_work ... FAILED
+test budgets_invalid_inputs_and_ambient_capabilities_are_explicit ... ok
+test real_language_objects_closures_regex_typed_arrays_and_unicode ... ok
+test repeated_runtime_lifecycle_preserves_independent_globals ... ok
+test exceptions_and_interruption_leave_a_usable_realm ... ok
+
+failures:
+
+---- classic_execution_does_not_coerce_unused_results_and_jobs_are_explicit stdout ----
+
+thread 'classic_execution_does_not_coerce_unused_results_and_jobs_are_explicit' panicked at tests/runtime.rs:86:92:
+called `Result::unwrap()` on an `Err` value: Unavailable
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- promise_checkpoints_bound_both_job_count_and_cpu_work stdout ----
+
+thread 'promise_checkpoints_bound_both_job_count_and_cpu_work' panicked at tests/runtime.rs:98:81:
+called `Result::unwrap()` on an `Err` value: Unavailable
+
+
+failures:
+    classic_execution_does_not_coerce_unused_results_and_jobs_are_explicit
+    promise_checkpoints_bound_both_job_count_and_cpu_work
+
+test result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test runtime`

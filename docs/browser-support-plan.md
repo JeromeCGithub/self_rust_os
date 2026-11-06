@@ -2,7 +2,8 @@
 
 Status: implementation started with [P0 native engine feasibility](browser-engine-p0.md),
 2026-11-05; [P1 runtime](browser-runtime-p1.md) is implemented and
-[P2 presentation](browser-rendering-p2.md) is in progress. Later gates remain open. Baseline: browser commit
+[P2 presentation](browser-rendering-p2.md) and
+[P3 native JavaScript](browser-javascript-p3.md) are in progress. Later gates remain open. Baseline: browser commit
 `b44a83a`. This is a plan for missing capabilities, not a claim of new support.
 See the [browser guide](jbrowse.md), [Google status](jbrowse-google.md), and
 [JavaScript prototype](jbrowse-javascript.md) for current behavior and evidence.
@@ -16,10 +17,10 @@ Receiving HTTP 200 or displaying a site's title does not establish support.
 
 | Target | User-visible acceptance | Current baseline |
 | --- | --- | --- |
-| Classic browsing | Styled pages, images/fonts, working forms/links, back/forward, reload, selection, copy/paste and scrolling | Small HTML/CSS subset, GET forms, links, bitmap text; many features absent |
-| Google Search | Default homepage, query entry, readable result titles/snippets, follow a result, Back and refine the query | Homepage/submission work; usable results fail on unsupported JavaScript |
+| Classic browsing | Styled pages, images/fonts, working forms/links, back/forward, reload, selection, copy/paste and scrolling | Small HTML/CSS subset, GET forms/links, native proportional fonts/static PNG, bounded history/Stop; full P2 gate open |
+| Google Search | Default homepage, query entry, readable result titles/snippets, follow a result, Back and refine the query | Homepage/submission work; usable results still fail after initial native QuickJS/DOM integration |
 | YouTube video | Real watch page; play a public unencrypted video with synchronized sound; pause/seek/volume/quality/fullscreen | No browser media pipeline or audio driver in the current driver tree |
-| Facebook | Normal user login/verification, readable feed, scrolling/profile navigation, session persistence and logout | No verified support; full JS/DOM, sessions and storage are missing |
+| Facebook | Normal user login/verification, readable feed, scrolling/profile navigation, session persistence and logout | No verified support; complete DOM/events, sessions and storage are missing |
 | Most ordinary websites | Pass a published representative corpus of tasks across documentation, news, forms, commerce and dynamic sites | No measured broad compatibility claim |
 
 “Complete” means a maintained compatibility profile, not every API and website
@@ -195,6 +196,10 @@ Compare layout, pixels and hit-testing with a reference browser, including input
 under load and failure recovery.
 
 ### P3 — Real JavaScript and browser APIs
+
+Implementation in progress: [restricted native DOM and promise checkpoints](browser-javascript-p3.md).
+The application now uses QuickJS; the complete API/session/origin/event-loop gate
+below remains open.
 
 - Port a real ECMAScript parser/VM with objects/prototypes, functions/closures,
   exceptions, arrays/typed arrays, JSON, RegExp, promises, modules and GC. Track

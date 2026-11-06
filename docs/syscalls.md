@@ -46,7 +46,7 @@ Unused arguments are zero in SDK wrappers. `ptr` means a user virtual address.
 | 20 | `send_message` | target PID (`u32`), payload (`u32`), zero | Zero on enqueue, one when full, error for forbidden/missing/dead target or invalid integer arguments |
 | 21 | `receive_message` | zero, zero, zero | Zero if empty, otherwise `((sender + 1) << 32) \| payload`; error without a current process or with nonzero arguments |
 
-| 22 | connected standard I/O (SDK `process` module) | operation (0 metadata, 1 send, 2 receive), scalar payload for send, zero | See connected-child contract below; no pointers |
+| 22 | connected standard I/O (SDK `process` module) | operation (0 metadata, 1 send, 2 receive), scalar payload for send, endpoint selector | See connected-child contract below; no pointers |
 | 23 | `open` | path ptr, flags, zero | Lowest free regular-file descriptor, 3–1026; see file contract below |
 | 24 | `close` | fd, zero, zero | Zero on success; closed/invalid descriptors fail |
 | 25 | `write` | fd, input ptr, byte length | Regular file: possibly short count, advances offset; fd 1/2: console output |
@@ -318,7 +318,18 @@ connection before the child can run. Unknown flags, nonzero reserved arguments
 and an occupied endpoint fail before loading a child. This is generic process I/O;
 the kernel does not know whether the executable is a shell.
 
-Syscall 22 operates only on the caller's endpoint:
+Syscall 22 operates only on the caller's existing endpoints. RDX=0 preserves the
+original standard stream; RDX=`owned_child_pid + 1` explicitly selects the one
+child connection owned by this caller. A connected child may itself own one
+connected descendant, with a separate FIFO. Foreign PIDs, a parent PID and stale
+selectors do not confer authority. Metadata (operation0) still requires RDX=0.
+The SDK's `Child` always uses the explicit selector; stdin/stdout use zero.
+Zero-selector stdio retains its original stream. Older SDK `Child` wrappers
+cannot address a nested endpoint: rebuild them with the selected-endpoint SDK
+before using this new topology. All repository applications were rebuilt together.
+Existing ordinary host/child zero-selector traffic remains covered by regression tests.
+
+
 
 - Operation 0: metadata, zero if unconnected, otherwise
   `((peer_pid + 1) << 1) | child_side`. A closed endpoint keeps metadata until reaped.
@@ -338,11 +349,20 @@ No new kernel pointer dereference or retained user reference is introduced by
 operation 22. Spawn copies and validates the complete NUL-terminated path
 before loading the executable through the filesystem service.
 
-The host owns the child lifetime. Host exit/kill stops its connected child;
-reaping the host also removes that child's PCB. Reaping a child releases its host
+The host owns the child lifetime. Host exit/kill stops its owned connected descendants;
+reaping the host also removes those stopped PCBs. Traversals use constant stack
+space and are bounded by128 live process slots. Waiters are woken from leaf to
+root; an already-exited descendant keeps its original exit status. Reaping a child releases its host
 endpoint and drops queued packets. Killing a host from its own child schedules away
 from the stopped child. Frames/stacks are reclaimed after deferred execution/TLB quiescence; existing
 process-control permission limitations still apply. See [terminal architecture](terminal-shell.md).
+
+A selected Child is nonblocking; the browser transport uses its existing bounded
+sleep/retry/deadline loop for progress. Readiness syscall109's stdio bits continue
+to monitor the original zero-selector stream. A child's stdout backpressure checks
+the correct incoming FIFO in its parent, including a parent's descendant queue.
+No new user pointer or syscall number is introduced. See
+[P3 native JavaScript integration](browser-javascript-p3.md) for executed evidence.
 
 ## Native threads and CPU information
 
@@ -379,7 +399,7 @@ and send at most one idle-CPU doorbell; ordinary kernel entry performs wakeups.
 Syscall 34 takes profile `1`, a page-aligned heap budget from 64 KiB through
 64 MiB, and a zero reserved word. It returns zero or `SYSCALL_ERROR`. Only a
 single-threaded non-PID-0 process with the **child** side of an existing connected
-stdio endpoint may enter it. A repeat transition, invalid budget/profile/flags,
+stdio endpoint and no owned descendant may enter it. A repeat transition, invalid budget/profile/flags,
 or a budget below the current break fails without changing state. The budget is
 relative to `HEAP_BASE`; it bounds complete brk pages, including rejected growth
 rollback. Initial image/stack/surface/table allocations are separate.

@@ -1,0 +1,7 @@
+PASS: Stop cancels the first navigation before any page commits
+PASS: native restricted QuickJS, classes/functions/promises, DOM pixels and bounded microtask recovery
+PASS: native PNG pixels, alpha/scaling, image link hits and failure fallback
+PASS: native proportional antialiased fonts, CSS families and Unicode fixture
+PASS: stalled HTTP/TLS cancellation, fresh destinations and framebuffer commits
+PASS: HTML/CSS pixels, links, editable GET forms, Enter/button search submission, scrolling, failure recovery, terminal survival and relaunch
+qemu-system-x86_64: terminating on signal 15 from pid 317018 (python3)

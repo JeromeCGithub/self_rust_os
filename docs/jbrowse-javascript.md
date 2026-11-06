@@ -1,5 +1,8 @@
 # jbrowse inline JavaScript prototype
 
+Historical prototype profile: the application now uses [native QuickJS/DOM](browser-javascript-p3.md).
+This document describes the optional old library feature and its original evidence.
+
 This branch extends [the HTML/CSS browser](jbrowse.md) with a small bounded
 straight-line JavaScript subset. It is **not** an ECMAScript engine or support for
 modern JavaScript applications. Use the HTML/CSS branch independently if scripting

@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+     Running tests/native_lifecycle.rs (/home/jay/personal/os/jbrowse/crates/quickjs/target/x86_64-unknown-linux-gnu/debug/deps/native_lifecycle-c8d03b5df3745e9b)
+
+running 2 tests
+test native_allocator_formatting_and_runtime_cleanup_are_observable ... FAILED
+test native_host_and_pending_jobs_release_all_engine_allocations ... ok
+
+failures:
+
+---- native_allocator_formatting_and_runtime_cleanup_are_observable stdout ----
+
+thread 'native_allocator_formatting_and_runtime_cleanup_are_observable' panicked at tests/native_lifecycle.rs:14:5:
+assertion `left == right` failed
+  left: Some(1)
+ right: Some(0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    native_allocator_formatting_and_runtime_cleanup_are_observable
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test native_lifecycle`
