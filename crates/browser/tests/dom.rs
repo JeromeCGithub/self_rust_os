@@ -17,6 +17,16 @@ fn bounded_pointer_free_changes_round_trip_and_reject_malformed_input() {
                 property: "color".into(),
                 value: "#123456".into(),
             },
+            Change::Attribute {
+                node: 2,
+                name: "href".into(),
+                value: Some("/result".into()),
+            },
+            Change::Attribute {
+                node: 2,
+                name: "style".into(),
+                value: None,
+            },
         ],
     };
     let bytes = changes.encode().unwrap();
@@ -42,6 +52,72 @@ fn bounded_pointer_free_changes_round_trip_and_reject_malformed_input() {
     }
     .encode()
     .is_err());
+}
+
+#[test]
+fn invalid_attributes_and_form_limits_rollback_the_whole_batch() {
+    let mut doc =
+        Document::parse("<title>Before</title><form id=f><input id=x name=q value=old></form>")
+            .unwrap();
+    let node = doc
+        .nodes
+        .iter()
+        .position(|n| n.attr("id") == Some("x"))
+        .unwrap() as u32;
+    for (name, value) in [
+        ("bad name", Some("x".into())),
+        ("value", Some("x".repeat(2049))),
+        ("title", Some("x".repeat(8193))),
+    ] {
+        let changes = Changes {
+            failures: 0,
+            changes: vec![
+                Change::Title("Wrong".into()),
+                Change::Attribute {
+                    node,
+                    name: name.into(),
+                    value,
+                },
+            ],
+        };
+        assert!(doc.apply_changes(&changes).is_err());
+        assert_eq!(doc.title, "Before");
+        assert_eq!(doc.forms[0].fields[0].value, "old");
+    }
+    for i in 0..61 {
+        doc.apply_change(&Change::Attribute {
+            node,
+            name: format!("data-{i}"),
+            value: Some("x".into()),
+        })
+        .unwrap();
+    }
+    assert!(doc
+        .apply_change(&Change::Attribute {
+            node,
+            name: "extra".into(),
+            value: Some("x".into())
+        })
+        .is_err());
+    doc.apply_change(&Change::Attribute {
+        node,
+        name: "value".into(),
+        value: Some("updated".into()),
+    })
+    .unwrap();
+    assert_eq!(doc.forms[0].fields[0].value, "updated");
+    doc.apply_change(&Change::Attribute {
+        node,
+        name: "data-0".into(),
+        value: None,
+    })
+    .unwrap();
+    doc.apply_change(&Change::Attribute {
+        node,
+        name: "extra".into(),
+        value: Some("x".into()),
+    })
+    .unwrap();
 }
 #[test]
 fn text_is_literal_and_invalid_worker_effects_cannot_partially_commit() {

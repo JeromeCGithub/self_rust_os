@@ -74,6 +74,26 @@ impl Host for Dom {
                 property: first.to_string(),
                 value: second.to_string(),
             }),
+            8 => {
+                let node = self
+                    .document
+                    .nodes
+                    .get(node as usize)
+                    .ok_or(Error::InvalidInput)?;
+                Ok(node
+                    .attr(first)
+                    .map(|v| Reply::Text(v.to_string()))
+                    .unwrap_or(Reply::Null))
+            }
+            9 | 10 => self.record(Change::Attribute {
+                node,
+                name: first.to_string(),
+                value: if operation == 9 {
+                    Some(second.to_string())
+                } else {
+                    None
+                },
+            }),
             _ => Err(Error::InvalidInput),
         }
     }

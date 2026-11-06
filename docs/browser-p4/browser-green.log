@@ -1,0 +1,61 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running unittests src/lib.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/rustos_browser-2d050e2417fd7e1c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/browser.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/browser-e623ea5d05507d56)
+
+running 12 tests
+test address_and_link_resolution_reject_privileged_schemes ... ok
+test flow_wraps_long_words_preserves_pre_and_bounds_geometry ... ok
+test css_cascade_inheritance_background_and_hidden_content ... ok
+test decoded_images_have_aspect_geometry_link_hits_and_a_visible_page ... ok
+test html_entities_raw_text_and_external_sheets ... ok
+test omitted_body_still_receives_document_css ... ok
+test image_limits_reject_invalid_buffers_and_keep_previous_resource_on_failure ... ok
+test linked_and_inline_author_sheets_follow_document_order_and_importance ... ok
+test proportional_metrics_drive_wrap_geometry_and_link_hits ... ok
+test optional_list_end_tags_do_not_accumulate_indentation ... ok
+test text_after_image_keeps_its_own_metrics_and_image_geometry ... ok
+test malformed_html_recovers_and_limits_are_explicit ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dom.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/dom-3b05a15ba13ae843)
+
+running 3 tests
+test text_is_literal_and_invalid_worker_effects_cannot_partially_commit ... ok
+test bounded_pointer_free_changes_round_trip_and_reject_malformed_input ... ok
+test invalid_attributes_and_form_limits_rollback_the_whole_batch ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/forms.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/forms-ace412805b41c38f)
+
+running 5 tests
+test html_decoding_handles_google_latin1_utf8_and_invalid_declared_utf8 ... ok
+test form_controls_are_visible_editable_clipped_and_hidden_controls_do_not_paint ... ok
+test google_short_hex_colors_and_script_only_pages_have_correct_visual_state ... ok
+test get_forms_encode_successful_controls_and_only_activated_submitter ... ok
+test form_submission_rejects_unsupported_methods_active_urls_and_oversized_queries ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/scripts.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/scripts-34a48c4b412cec59)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustos_browser
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
