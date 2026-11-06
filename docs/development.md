@@ -6,9 +6,10 @@ Run commands from the repository root. The pinned [toolchain](../rust-toolchain.
 is `nightly-2025-01-30`, with `rust-src` and `llvm-tools-preview`. Keep it pinned:
 new compiler releases can change naked assembly, target JSON, and `build-std` behavior.
 Active desktop/E2E launchers use the shared QEMU platform profile with 1 GiB RAM;
-bootimage tests also request 1 GiB. Private user stacks are 4 MiB, TLS-enabled
-userspace heaps 16 MiB, and the kernel heap 64 MiB. These are fixed, eagerly
-mapped capacities; rebuilding all apps and the disk is required after changes.
+bootimage tests also request 1 GiB. Initial user stacks are 4 MiB and the kernel heap is 64 MiB. The SDK heap grows
+with `brk` instead of reserving fixed BSS storage; physical pages are mapped eagerly.
+User targets enable SSE2 and local-exec compiler TLS, with per-thread kernel state
+preservation. Rebuilding all apps and the disk is required after ABI/layout changes.
 The root [.cargo config](../.cargo/config.toml) selects the custom bare-metal target
 and builds `core`, `compiler_builtins`, and `alloc`; host `cargo test` semantics do not apply.
 
@@ -121,8 +122,12 @@ Keep application code in `src/main.rs`. The shared root includes that file,
 supplies the target's `no_std`/`no_main` attributes, and bridges `main` to the
 existing runtime. Returning from `main` exits with status zero; use
 `userlib::sys::exit(code)` for an explicit status. Panics report through userlib
-and exit with status one. The supported entry signature is `fn main()`, with no
-arguments or return value. Use regular comments in the included application root;
+and exit with status one. Supported signatures are `fn main()` and
+`fn main(argc: usize, argv: &[&str])`, both returning `()`. The latter receives
+argv[0] followed by the supplied arguments. Any program can also use
+`userlib::args()` or raw `userlib::argc()` / `userlib::argv()` access. See
+[program arguments](syscalls.md#program-arguments-and-entry).
+Use regular comments in the included application root;
 crate-level attributes and inner documentation belong in the shared root.
 
 This is a Cargo convention for the current custom target, not a port of Rust's

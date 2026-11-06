@@ -30,6 +30,11 @@ mod heap;
 #[cfg(feature = "tls")]
 pub mod tls;
 
+pub mod args;
+pub use args::{argc, args, argv};
+#[cfg(feature = "alloc")]
+pub mod env;
+pub mod fs;
 pub mod http;
 pub mod io;
 pub mod net;

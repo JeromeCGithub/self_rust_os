@@ -278,6 +278,7 @@ pub fn start() {
 
 #[cfg(feature = "grub")]
 extern "C" fn ap_main() -> ! {
+    super::extended::init_cpu();
     crate::gdt::init();
     crate::interrupts::init_idt();
     apic::init(false);

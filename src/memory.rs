@@ -286,3 +286,6 @@ mod boot_frame_tests {
         assert!(frames.allocate_frame().is_none());
     }
 }
+
+/// Private user page-table construction helpers.
+pub(crate) mod user;

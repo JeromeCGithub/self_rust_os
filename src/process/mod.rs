@@ -71,11 +71,16 @@ pub struct Process {
     pub(crate) io_peer: Option<(Pid, bool)>,
     pub(crate) io_inbox: VecDeque<u32>,
     pub(crate) pointer_seen: u64,
+    pub(crate) files: crate::fs::handles::Files,
+    pub(crate) heap_break: u64,
+    pub(crate) tls: Option<TlsImage>,
 }
 pub(crate) struct UserStack {
     pub(crate) slot: usize,
     pub(crate) user_base: u64,
     pub(crate) frames: Vec<PhysFrame>,
+    pub(crate) tls_base: u64,
+    pub(crate) tls_frames: Vec<PhysFrame>,
 }
 pub(crate) struct Thread {
     pub(crate) tid: Tid,
@@ -88,6 +93,8 @@ pub(crate) struct Thread {
     pub(crate) affinity: u64,
     pub(crate) detached: bool,
     pub(crate) joiner: Option<Tid>,
+    pub(crate) extended: crate::arch::x86_64::extended::State,
+    pub(crate) fs_base: u64,
 }
 impl Thread {
     pub(crate) fn kernel_stack_top(&self) -> u64 {
@@ -142,4 +149,11 @@ impl core::ops::IndexMut<usize> for ProcessTable {
     fn index_mut(&mut self, pid: usize) -> &mut Self::Output {
         self.get_mut(pid).expect("live process identity")
     }
+}
+
+/// Immutable static TLS prototype; threads receive their own initialized frames.
+pub(crate) struct TlsImage {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) memory_size: usize,
+    pub(crate) alignment: usize,
 }

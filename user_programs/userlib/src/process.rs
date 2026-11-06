@@ -47,16 +47,22 @@ pub struct Child {
 impl Child {
     /// Spawn an executable and connect its standard I/O before it first runs.
     pub fn spawn(path: &str) -> Result<Self, ()> {
-        let path = sys::path_buf(path).ok_or(())?;
-        // SAFETY: The synchronous call reads this NUL-terminated stack buffer;
-        // it is valid for its complete length and no reference is retained.
-        let pid = unsafe { sys::syscall(sys::SYS_SPAWN, path.as_ptr() as u64, 1, 0) };
-        if pid == SYSCALL_ERROR {
-            Err(())
-        } else {
-            Ok(Self { pid: pid as u32 })
-        }
+        sys::spawn_arguments(path, &[], true).map(|pid| Self { pid })
     }
+    /// Spawn with extra arguments and inherited environment over connected I/O.
+    pub fn spawn_with_args(path: &str, arguments: &[&str]) -> Result<Self, ()> {
+        sys::spawn_arguments(path, arguments, true).map(|pid| Self { pid })
+    }
+    /// Spawn with an explicit environment and connected standard I/O.
+    #[cfg(feature = "alloc")]
+    pub fn spawn_with_env(
+        path: &str,
+        arguments: &[&str],
+        environment: &[&str],
+    ) -> Result<Self, ()> {
+        sys::spawn_environment(path, arguments, environment, true).map(|pid| Self { pid })
+    }
+
     pub fn pid(&self) -> u32 {
         self.pid
     }
@@ -97,7 +103,9 @@ pub(crate) fn write(bytes: &[u8]) -> usize {
             match send(word) {
                 Ok(()) => break,
                 Err(MessageError::Full) => {
-                    if sys::wait_events(sys::Events::STDIO_WRITE, 0).is_err() { return written; }
+                    if sys::wait_events(sys::Events::STDIO_WRITE, 0).is_err() {
+                        return written;
+                    }
                 }
                 Err(_) => return written,
             }
@@ -118,7 +126,9 @@ pub(crate) fn read(bytes: &mut [u8], blocking: bool) -> usize {
             }
             Ok(Some(_)) => return 0,
             Ok(None) if blocking => {
-                if sys::wait_events(sys::Events::STDIO_READ, 0).is_err() { sys::exit(0); }
+                if sys::wait_events(sys::Events::STDIO_READ, 0).is_err() {
+                    sys::exit(0);
+                }
             }
             Ok(None) => return 0,
             Err(_) => sys::exit(0),

@@ -43,14 +43,22 @@ pub const VERSION: u32 = 1;
 pub const DEFAULT_STACK: u64 = 256 * 1024;
 /// Maximum worker stack.
 pub const MAX_STACK: u64 = DEFAULT_STACK;
-/// First worker-stack arena address. Existing main stack/surface stay unchanged.
-pub const STACK_ARENA: u64 = 0x4000000;
+/// First worker-stack arena address, above the main stack and surface.
+pub const STACK_ARENA: u64 = 0x4_2000_0000;
+/// Exclusive upper bound for loaded code/data/BSS (4 GiB).
+pub const IMAGE_END: u64 = 0x1_0000_0000;
+/// Process heap begins after the executable arena.
+pub const HEAP_BASE: u64 = IMAGE_END;
+/// Main stack ends at 16 GiB, above the growable heap arena.
+pub const MAIN_STACK_TOP: u64 = 0x4_0000_0000;
+/// Private or display-owner surface address, separated from image and heap.
+pub const FRAMEBUFFER: u64 = 0x4_1000_0000;
 /// Per-stack reservation includes a permanently unmapped guard.
 pub const STACK_STRIDE: u64 = MAX_STACK + 4096;
 /// Worker stack slots per process (plus one initial thread).
 pub const STACK_SLOTS: usize = 63;
 /// End of the private user region, including the worker-stack arena.
-pub const USER_END: u64 = 0x6000000;
+pub const USER_END: u64 = 1 << 39;
 /// Creation request; no padding, references or kernel addresses.
 #[repr(C)]
 #[derive(Clone, Copy)]

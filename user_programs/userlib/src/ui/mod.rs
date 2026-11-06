@@ -122,7 +122,7 @@ impl Window {
             .ok_or(Error::InvalidGeometry)?;
         if sys::FRAMEBUFFER_ADDR
             .checked_add(bytes)
-            .filter(|end| *end <= 0x4000000)
+            .filter(|end| *end <= rustos_thread_abi::STACK_ARENA as usize)
             .is_none()
         {
             return Err(Error::InvalidGeometry);

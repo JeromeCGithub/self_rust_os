@@ -102,6 +102,9 @@ extern "C" fn dispatch(saved_rsp: u64, source: u64) -> u64 {
         }
     }
     enter();
+    if from_user {
+        scheduler::save_extended_state();
+    }
     scheduler::wake_timers();
     if source == 0 {
         if !scheduler::current_is_live() {
@@ -469,3 +472,25 @@ pub extern "C" fn general_protection_entry() {
         );
     }
 }
+
+macro_rules! user_exception_entry {
+    ($name:ident,$vector:literal)=>{
+        /// Normalize a no-error-code user CPU exception and stop only its process.
+        #[naked]
+        pub extern "C" fn $name(){
+            // SAFETY: No hardware error word; pushing all 15 GPRs produces the
+            // canonical frame. fault_dispatch kills user faults or panics on
+            // supervisor faults; the stopped frame is never resumed.
+            unsafe{core::arch::naked_asm!(
+                "push rax","push rbx","push rcx","push rdx","push rsi","push rdi","push rbp",
+                "push r8","push r9","push r10","push r11","push r12","push r13","push r14","push r15",
+                "cld","mov rdi,rsp","xor esi,esi","mov edx,{vector}","and rsp,-16","call {dispatch}",
+                "test rax,rax","jz 2f","mov rdi,rax","jmp {restore}","2:","jmp {idle}",
+                vector=const $vector,dispatch=sym fault_dispatch,restore=sym restore,idle=sym switch_idle,
+            );}
+        }
+    };
+}
+user_exception_entry!(invalid_opcode_entry, 6);
+user_exception_entry!(floating_point_entry, 16);
+user_exception_entry!(simd_exception_entry, 19);

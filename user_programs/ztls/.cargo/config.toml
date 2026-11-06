@@ -1,0 +1,7 @@
+[build]
+rustflags = ["-Ztls-model=local-exec"]
+target = "x86_64-user-program.json"
+
+[unstable]
+build-std = ["core", "compiler_builtins", "alloc"]
+build-std-features = ["compiler-builtins-mem"]

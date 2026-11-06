@@ -20,6 +20,9 @@ SECTIONS
         *(.data .data.*)
     }
 
+    .tdata : ALIGN(16) { *(.tdata .tdata.*) }
+    .tbss : ALIGN(16) { *(.tbss .tbss.*) }
+
     .bss : ALIGN(4K)
     {
         *(.bss .bss.*)

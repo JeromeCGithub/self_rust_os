@@ -236,16 +236,19 @@ the wake-before-park race. No user pointer is dereferenced while the waiter slee
   threads per process, including its initial thread. Live and unreaped completion
   records consume quotas. Creating a thread can fail; join or detach handles.
 - Initial user stacks remain 4 MiB. Workers request 16–256 KiB, page-rounded,
-  plus an unmapped 4 KiB guard. Their 63 fixed reservations start at `0x4000000`
-  with `0x41000` spacing inside the private region ending at `0x6000000`.
-  Existing binaries/stacks/surfaces keep their addresses; surfaces stop at
-  `0x4000000`. Kernel thread stacks are 16 KiB; CPU idle stacks are 64 KiB.
-- The `threads` feature enables a reclaimed, mutex-protected 1 MiB process heap.
-  Combining it with the existing HTTPS `tls` feature retains that feature's
-  16 MiB heap. Heap exhaustion and panics abort the process.
-- Targets retain software floating point and disabled MMX/SSE. Hardware FPU/SIMD
-  context switching, compiler-generated thread-local storage/destructors, scoped
-  threads, a general kernel-worker API and a Rust `std` port remain future work.
+  plus an unmapped 4 KiB guard. Their 63 reservations start at `0x420000000`
+  with `0x41000` spacing. Surfaces start at `0x410000000`. Kernel thread stacks
+  are 16 KiB; CPU idle stacks are 64 KiB. See [layout](architecture.md).
+- The SDK uses a mutex-protected growable `brk` heap by default, independent of
+  whether HTTPS or threads are enabled. Allocation is bounded by available RAM
+  and the virtual heap arena; heap exhaustion and panics abort the process.
+- x87/MMX/SSE2 state and FS base are saved/restored eagerly for each thread.
+  PT_TLS initializes independent local-exec compiler TLS, including zeroed TBSS,
+  for the initial thread and every worker. Worker TLS pages are unmapped and
+  reclaimed with its stack after join/detach and remote TLB acknowledgement.
+  Templates allow up to 1 MiB and alignment up to 4096. AVX/XSAVE, dynamic TLS
+  modules/destructors, scoped threads, a general kernel-worker API and a Rust
+  `std` port remain future work. See [capability validation](capabilities-validation.md).
 - Kernel entry and network/device services retain coarse locks; CPU-intensive
   application work can scale while serialized services remain throughput limits.
   Applications must partition work explicitly; eight CPUs do not automatically

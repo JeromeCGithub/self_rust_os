@@ -126,7 +126,7 @@ fn make_thread(
     stack: Box<[u128]>,
     rip: u64,
     rsp: u64,
-    arg: u64,
+    args: (u64, u64, u64),
     affinity: u64,
 ) -> Thread {
     let top = stack.as_ptr() as u64 + (stack.len() * 16) as u64;
@@ -146,9 +146,9 @@ fn make_thread(
                 r9: 0,
                 r8: 0,
                 rbp: 0,
-                rdi: arg,
-                rsi: 0,
-                rdx: 0,
+                rdi: args.0,
+                rsi: args.1,
+                rdx: args.2,
                 rcx: 0,
                 rbx: 0,
                 rax: 0,
@@ -171,12 +171,36 @@ fn make_thread(
         affinity,
         detached: false,
         joiner: None,
+        extended: crate::arch::x86_64::extended::State::new(),
+        fs_base: 0,
     }
 }
 /// Create an isolated static ELF/legacy flat process and its initial native thread.
 pub fn spawn_process(binary: &[u8], readonly_size: usize) -> Result<Pid, &'static str> {
+    spawn_process_with_environment(binary, readonly_size, &[], &[])
+}
+/// Compatibility loader for the fixed-size syscall-29 argument record.
+pub fn spawn_process_with_args(
+    binary: &[u8],
+    readonly_size: usize,
+    arguments: &rustos_process_abi::Arguments,
+) -> Result<Pid, &'static str> {
+    let mut argv = [""; rustos_process_abi::MAX_ARGS];
+    for (index, slot) in argv.iter_mut().take(arguments.len()).enumerate() {
+        *slot = arguments.get(index).ok_or("invalid arguments")?;
+    }
+    spawn_process_with_environment(binary, readonly_size, &argv[..arguments.len()], &[])
+}
+/// Create a private process with kernel-owned, bounded argv and environment.
+pub fn spawn_process_with_environment(
+    binary: &[u8],
+    readonly_size: usize,
+    argv: &[&str],
+    envp: &[&str],
+) -> Result<Pid, &'static str> {
+    rustos_process_abi::startup_size(argv, envp).map_err(|_| "invalid startup vectors")?;
     x86_64::instructions::interrupts::without_interrupts(|| {
-        spawn_process_inner(binary, readonly_size)
+        spawn_process_inner(binary, readonly_size, argv, envp)
     })
 }
 /// Deep-copies the page-table subtree under `new_p3[0]` (the first GB).
@@ -227,24 +251,7 @@ fn deep_copy_p3_subtree(
         let is_user_p2 = (user_start..user_end).contains(&j);
 
         if is_user_p2 {
-            // Allocate a fresh empty P1 table for user regions.
-            let new_p1_frame = allocator
-                .allocate_frame()
-                .ok_or("failed to allocate P1 for user")?;
-            // SAFETY: Fresh owned frame, writable through the RAM direct map.
-            // Recycled allocator frames are not zeroed; clear all entries before use.
-            let new_p1 = unsafe {
-                &mut *((phys_offset + new_p1_frame.start_address().as_u64()).as_mut_ptr()
-                    as *mut PageTable)
-            };
-            // Ensure it's empty (clear all entries).
-            for k in 0..512 {
-                new_p1[k] = x86_64::structures::paging::page_table::PageTableEntry::new();
-            }
-            let p2_flags = PageTableFlags::PRESENT
-                | PageTableFlags::WRITABLE
-                | PageTableFlags::USER_ACCESSIBLE;
-            new_p2[j].set_frame(new_p1_frame, p2_flags);
+            new_p2[j].set_unused();
             continue;
         }
 
@@ -278,12 +285,35 @@ fn deep_copy_p3_subtree(
     Ok(())
 }
 
-fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'static str> {
-    if binary.len() as u64 > userspace::USER_STACK_BOTTOM - userspace::USER_CODE_START {
+fn spawn_process_inner(
+    binary: &[u8],
+    readonly_size: usize,
+    argv: &[&str],
+    envp: &[&str],
+) -> Result<Pid, &'static str> {
+    if binary.len() as u64 > rustos_thread_abi::IMAGE_END - userspace::USER_CODE_START {
         return Err("user binary overlaps stack");
     }
-    let image = rustos_exec_image::Image::parse(binary, userspace::USER_CODE_START, userspace::USER_STACK_BOTTOM)
-        .map_err(|_| "invalid or unsupported executable image")?;
+    let image = rustos_exec_image::Image::parse(
+        binary,
+        userspace::USER_CODE_START,
+        rustos_thread_abi::IMAGE_END,
+    )
+    .map_err(|_| "invalid or unsupported executable image")?;
+    let tls_image = if let Some(template) = image.tls() {
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(template.bytes.len())
+            .map_err(|_| "TLS prototype allocation failed")?;
+        bytes.extend_from_slice(template.bytes);
+        Some(crate::process::TlsImage {
+            bytes,
+            memory_size: template.memory_size as usize,
+            alignment: template.alignment as usize,
+        })
+    } else {
+        None
+    };
     let mut sched = SCHEDULER.lock();
     if sched.processes.iter().flatten().count() + sched.retired.len() >= 128
         || sched.next_pid == u32::MAX
@@ -333,8 +363,9 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
         let new_p3_frame = allocator.allocate_frame().ok_or("failed to allocate P3")?;
         let new_p3_virt = phys_offset + new_p3_frame.start_address().as_u64();
         let new_p3 = unsafe { &mut *(new_p3_virt.as_mut_ptr() as *mut PageTable) };
-        for i in 0..512 {
-            new_p3[i] = cur_p3[i].clone();
+        new_p3[0] = cur_p3[0].clone();
+        for i in 1..512 {
+            new_p3[i].set_unused();
         }
         // Deep-copy P3[0]'s subtree (first GB, home of all user mappings).
         // The entry copy above is shallow: new P3[0] still points at the
@@ -369,6 +400,62 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
         .map_err(|_| "failed to map user binary")?;
         crate::userspace::process::map_user_stack_via_phys(&mut new_mapper, allocator, phys_offset)
             .map_err(|_| "failed to map user stack")?;
+        // Worker stacks are later mapped into this live address space. Reserve
+        // their private parent tables now so partial worker rollback never
+        // leaves parent links pointing at transaction-recycled frames.
+        let mut parents = Vec::new();
+        for slot in 0..rustos_thread_abi::STACK_SLOTS {
+            let address =
+                rustos_thread_abi::STACK_ARENA + slot as u64 * rustos_thread_abi::STACK_STRIDE;
+            for boundary in [address, address + rustos_thread_abi::STACK_STRIDE - 1] {
+                // SAFETY: Unpublished private root; all newly allocated parent
+                // tables belong to this construction transaction. No CPU sees
+                // the tree, and failure discards it before recycling all frames.
+                unsafe {
+                    crate::memory::user::ensure_tables(
+                        new_mapper.level_4_table(),
+                        boundary,
+                        allocator,
+                        phys_offset,
+                        &mut parents,
+                    )
+                }
+                .map_err(|_| "worker stack parent allocation failed")?;
+            }
+        }
+        let mut fs_base = 0;
+        if let Some(template) = tls_image.as_ref() {
+            for slot in 0..=rustos_thread_abi::STACK_SLOTS {
+                let (base, _, pages, _) = crate::userspace::tls::region(template, slot);
+                for boundary in [base, base + pages as u64 * 4096 - 1] {
+                    // SAFETY: Unpublished private child; every parent allocation
+                    // belongs to the enclosing frame transaction and rollback.
+                    unsafe {
+                        crate::memory::user::ensure_tables(
+                            new_mapper.level_4_table(),
+                            boundary,
+                            allocator,
+                            phys_offset,
+                            &mut parents,
+                        )
+                    }
+                    .map_err(|_| "TLS parent allocation failed")?;
+                }
+            }
+            let mut mapped = 0;
+            fs_base = crate::userspace::tls::map(
+                template,
+                0,
+                &mut new_mapper,
+                allocator,
+                phys_offset,
+                &mut mapped,
+            )
+            .map_err(|_| "initial TLS mapping failed")?
+            .0;
+        }
+        let startup =
+            crate::userspace::process::prepare_arguments(&new_mapper, phys_offset, argv, envp)?;
         let surface = crate::userspace::process::map_user_framebuffer(
             &mut new_mapper,
             allocator,
@@ -376,12 +463,18 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
             phys_offset,
         )
         .map_err(|_| "failed to map framebuffer")?;
-        Ok::<Vec<PhysFrame>, &'static str>(surface)
+        Ok::<_, &'static str>((surface, startup, fs_base))
     })();
-    let surface = map_result?;
+    let (surface, startup, fs_base) = map_result?;
 
     let owned_frames = transaction.commit();
     let pid = sched.next_pid;
+    let cwd = sched
+        .current_pid()
+        .and_then(|parent| sched.processes.get(parent as usize))
+        .and_then(Option::as_ref)
+        .map(|p| p.files.cwd.clone())
+        .unwrap_or_else(|| alloc::string::String::from("/"));
     let process = Process {
         pid,
         state: ProcessState::Live,
@@ -399,16 +492,20 @@ fn spawn_process_inner(binary: &[u8], readonly_size: usize) -> Result<Pid, &'sta
         io_peer: None,
         io_inbox: VecDeque::new(),
         pointer_seen: crate::drivers::input::mouse::revision(),
+        files: crate::fs::handles::Files::new(cwd),
+        heap_break: rustos_thread_abi::HEAP_BASE,
+        tls: tls_image,
     };
-    let thread = make_thread(
+    let mut thread = make_thread(
         tid,
         pid,
         kernel_stack,
         image.entry(),
-        userspace::USER_STACK_TOP,
-        0,
+        startup.stack_pointer,
+        (startup.argc, startup.argv_pointer, startup.env_pointer),
         u64::MAX,
     );
+    thread.fs_base = fs_base;
     sched.processes.insert(process);
     sched.insert(thread);
     sched.next_pid += 1;
@@ -462,6 +559,13 @@ fn pick_next_locked(s: &mut Scheduler) -> Option<u64> {
         let t = s.thread_mut(tid)?;
         t.state = ThreadState::Running;
         let (top, rsp) = (t.kernel_stack_top(), t.saved_kernel_rsp);
+        // SAFETY: This CPU was initialized for x87/SSE2, this incoming thread
+        // exclusively owns a valid aligned snapshot, and kernel code uses no
+        // FP/SIMD or FS-relative TLS between here and final user restoration.
+        unsafe {
+            t.extended.restore();
+            crate::arch::x86_64::extended::set_fs(t.fs_base);
+        }
         s.current[cpu] = Some(tid);
         if Cr3::read().0 != root {
             // SAFETY: The selected process owns root. Kernel mappings/stacks
@@ -603,6 +707,7 @@ fn stop_process_locked(s: &mut Scheduler, pid: Pid, code: u64) {
         return;
     };
     p.state = ProcessState::Zombie;
+    p.files.clear();
     p.exit_code = code;
     stop_threads_locked(s, pid);
     smp::reschedule_all();
@@ -794,7 +899,7 @@ pub fn load_program_from_disk(path: &str) -> Result<Vec<u8>, &'static str> {
         if size == 0 {
             return Err("program file is empty");
         }
-        if size as u64 > userspace::USER_STACK_BOTTOM - userspace::USER_CODE_START {
+        if size as u64 > rustos_thread_abi::IMAGE_END - userspace::USER_CODE_START {
             return Err("user binary overlaps stack");
         }
         let mut binary = Vec::new();
@@ -1151,6 +1256,7 @@ fn stop_owned_child_locked(sched: &mut Scheduler, parent: Pid) {
         {
             if p.state != ProcessState::Zombie {
                 p.state = ProcessState::Zombie;
+                p.files.clear();
                 p.exit_code = 9;
             }
         }
@@ -1224,11 +1330,14 @@ pub fn idle_targets() -> u32 {
     let idle = s.current.iter().enumerate().fold(0u32, |mask, (i, t)| {
         mask | if t.is_none() { 1u32 << i } else { 0 }
     });
-    placement::wake_targets(idle & !(1 << smp::current_cpu()), s.ready_queue
-        .iter()
-        .filter_map(|tid| s.thread(*tid))
-        .filter(|t| t.state == ThreadState::Ready)
-        .map(|t| t.affinity as u32))
+    placement::wake_targets(
+        idle & !(1 << smp::current_cpu()),
+        s.ready_queue
+            .iter()
+            .filter_map(|tid| s.thread(*tid))
+            .filter(|t| t.state == ThreadState::Ready)
+            .map(|t| t.affinity as u32),
+    )
 }
 
 /// Whether a user entry still belongs to a live, running execution context.
@@ -1271,6 +1380,38 @@ mod reclaim;
 pub mod threads;
 pub use reclaim::reap_retired;
 pub use threads::{
-    create_thread, detach_thread, exit_thread, frame_count, join_thread, thread_pages, wait_word,
-    wake_word, yield_current,
+    create_thread, detach_thread, exit_thread, frame_count, join_thread, thread_pages,
+    thread_pointer, wait_word, wake_word, yield_current,
 };
+
+/// Access only short process-local filesystem metadata under the scheduler
+/// lock. The closure must not take service locks or perform I/O.
+pub(crate) fn with_files<R>(f: impl FnOnce(&mut crate::fs::handles::Files) -> R) -> Option<R> {
+    let mut scheduler = SCHEDULER.lock();
+    let pid = scheduler.current_pid()?;
+    let process = scheduler.processes.get_mut(pid as usize)?.as_mut()?;
+    if process.state != ProcessState::Live {
+        return None;
+    }
+    Some(f(&mut process.files))
+}
+
+/// Process-private program-break memory service.
+mod heap;
+pub use heap::program_break;
+
+/// Snapshot the current CPU's user extended state exactly once on kernel entry.
+/// Entry gate and scheduler lock prevent migration until this context is saved.
+pub(crate) fn save_extended_state() {
+    let mut scheduler = SCHEDULER.lock();
+    if let Some(tid) = scheduler.current_tid() {
+        if let Some(thread) = scheduler.thread_mut(tid) {
+            // SAFETY: User entry owns this outgoing CPU state; the thread cannot
+            // run elsewhere while marked current. Storage is aligned and private.
+            unsafe {
+                thread.extended.save();
+                thread.fs_base = crate::arch::x86_64::extended::fs();
+            }
+        }
+    }
+}

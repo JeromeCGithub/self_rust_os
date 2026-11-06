@@ -38,10 +38,16 @@ class ExecutableImages(unittest.TestCase):
                 readonly = int(re.search(r'READONLY_SIZE: usize = (\d+)', metadata)[1])
                 self.assertEqual(readonly, (writable & ~4095) - 0x400000)
 
-    def test_forge_heap_is_not_materialized_on_disk(self):
+    def test_forge_no_longer_reserves_a_fixed_bss_heap(self):
         binary, loads = self.segments('forge')
         zero_fill = sum(memory - stored for _, _, stored, memory in loads)
-        self.assertGreaterEqual(zero_fill, 16 * 1024 * 1024)
+        self.assertLess(zero_fill, 1024 * 1024)
+        self.assertLess(len(binary), 1024 * 1024)
+
+    def test_large_bss_is_not_materialized_on_disk(self):
+        binary, loads = self.segments('zlarge')
+        zero_fill = sum(memory - stored for _, _, stored, memory in loads)
+        self.assertGreaterEqual(zero_fill, 64 * 1024 * 1024)
         self.assertLess(len(binary), 1024 * 1024)
 
     def test_metadata_rejects_malformed_tables_and_segment_bounds(self):
@@ -58,6 +64,15 @@ class ExecutableImages(unittest.TestCase):
                     metadata_tool.readonly_size(changed)
 
     def test_metadata_rounds_shared_got_page_down(self):
-        binary, loads = self.segments('spin')
+        # A controlled ELF keeps the permission-boundary regression independent
+        # of application code size or SDK allocator changes. Adjacent byte
+        # ranges share the final read-only page, as linker GOT output can do.
+        binary = bytearray(256)
+        binary[:7] = b'\x7fELF\x02\x01\x01'
+        struct.pack_into('<Q', binary, 32, 64)
+        struct.pack_into('<HH', binary, 54, 56, 2)
+        struct.pack_into('<IIQQQQQQ', binary, 64,
+                         1, 4, 176, 0x400000, 0, 16, 0x1348, 1)
+        struct.pack_into('<IIQQQQQQ', binary, 120,
+                         1, 6, 240, 0x401348, 0, 8, 32, 1)
         self.assertEqual(metadata_tool.readonly_size(binary), 4096)
-        self.assertTrue(any(address % 4096 for address, flags, _, _ in loads if flags & 2))

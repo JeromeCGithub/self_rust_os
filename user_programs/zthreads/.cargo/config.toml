@@ -1,4 +1,5 @@
 [build]
+rustflags = ["-Ztls-model=local-exec"]
 target = "x86_64-user-program.json"
 
 [unstable]

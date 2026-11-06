@@ -25,7 +25,7 @@ Unused arguments are zero in SDK wrappers. `ptr` means a user virtual address.
 | --- | --- | --- | --- |
 | 0 | `exit` | exit code | Terminates current process; no return |
 | 1 | `console_write` | byte ptr, byte length | Bytes written; text renders to private surface unless client drawing enabled; also serial diagnostics |
-| 2 | `read` | fd, buffer ptr, byte capacity | Keyboard read; only fd 0 supported; focused process only; after blocking/wakeup, zero means retry (the wake itself does not fill the buffer) |
+| 2 | `read` | fd, buffer ptr, byte capacity | fd 0: focused keyboard input (zero after wake means retry); fd 3–1026: regular-file read at current offset, short count or zero at EOF |
 | 3 | `ticks` | none | Monotonic PIT tick count, not milliseconds/wall time |
 | 4 | `read_nb` | fd, buffer ptr, byte capacity | Nonblocking keyboard read; zero when no input or unfocused |
 | 5 | `ls` | path ptr, output ptr, max entries | Entry count; each entry is 11 raw 8.3 filename bytes plus one attribute byte; directory bit `0x10` |
@@ -47,6 +47,18 @@ Unused arguments are zero in SDK wrappers. `ptr` means a user virtual address.
 | 21 | `receive_message` | zero, zero, zero | Zero if empty, otherwise `((sender + 1) << 32) \| payload`; error without a current process or with nonzero arguments |
 
 | 22 | connected standard I/O (SDK `process` module) | operation (0 metadata, 1 send, 2 receive), scalar payload for send, zero | See connected-child contract below; no pointers |
+| 23 | `open` | path ptr, flags, zero | Lowest free regular-file descriptor, 3–1026; see file contract below |
+| 24 | `close` | fd, zero, zero | Zero on success; closed/invalid descriptors fail |
+| 25 | `write` | fd, input ptr, byte length | Regular file: possibly short count, advances offset; fd 1/2: console output |
+| 26 | `lseek` | fd, signed byte offset bits, origin | New byte offset; origin 0/1/2 = SET/CUR/END |
+| 27 | `chdir` | path ptr, zero, zero | Zero on success; failure preserves process cwd |
+| 28 | `getcwd` | output ptr, capacity in bytes, zero | Copies canonical absolute cwd plus NUL; returns bytes including NUL |
+| 29 | legacy fixed-block argument spawn | path ptr, 2048-byte argument record ptr, spawn flags (0 ordinary, 1 connected I/O) | New PID; copies validated argv into private child stack before publication |
+
+| 30 | `spawn_with_args` / `spawn_with_env` / connected `Child` equivalents | path ptr, request ptr, exact request size (48) | New PID; general argv/environment record below |
+| 31 | `brk` (unsafe SDK primitive) | requested break, zero, zero | Zero request queries; success returns requested break, failure returns old break |
+| 32 | `arch_prctl` / `fs_base`, `set_fs_base` | operation, address/output ptr, zero | Linux operation values `0x1002` SET_FS and `0x1003` GET_FS; zero on success |
+| 33 | `fs::read_dir` | path ptr, output ptr, capacity bytes | Capacity zero queries required bytes; otherwise complete full-name records or error |
 
 Operations 14–16 currently appear as numeric dispatcher arms and numeric SDK calls.
 Do not assume the named `SYS_*` constants above operation 13 are a complete ABI inventory.
@@ -54,14 +66,20 @@ Unknown numbers return `SYSCALL_ERROR`.
 
 ## Buffers, paths and geometry
 
-The SDK builds a zero-padded 256-byte, NUL-terminated UTF-8 path buffer and rejects
-path strings of 255 bytes or more. Kernel helpers currently inspect a full 256-byte
-user range for paths. Names use FAT32 8.3 conventions; `/` and an empty directory path
-select the root. There is no current working-directory syscall, open/close syscall,
-POSIX file descriptor model, or old ramfs API here. `STDIN_FD = 0` is keyboard input.
+The SDK builds a NUL-terminated UTF-8 path and rejects embedded NULs and strings
+of 4096 bytes or more. The kernel copies through the terminator page by page,
+validating only the bytes needed. VFAT components allow up to 255 UTF-16 code
+units with compatible unique 8.3 aliases; illegal FAT characters, trailing spaces
+and trailing dots are rejected. `/` selects root; an empty `ls` path selects cwd.
+Other empty paths fail. Absolute paths start at root; relative paths use a snapshot
+of process cwd. Repeated slashes and `.`/`..` are supported, clamped at root.
+Intermediate directories must exist, including before `..`; recursive mkdir can
+create missing parents. Canonical cwd preserves long names and uppercases short
+names. Initial cwd is `/`; spawn inherits cwd and starts with no regular descriptors.
+`STDIN_FD = 0` retains its keyboard/connected-input meaning.
 
-For `ls`, callers must reserve **at least `12 * max_entries` bytes**; the current SDK
-wrapper does not establish that relationship itself. For `fb_info`, ensure alignment
+For `ls`, callers must reserve **at least `12 * max_entries` bytes**; the SDK
+checks this relationship before entering the kernel. For `fb_info`, ensure alignment
 as well as length; the SDK uses `[u64; 4]`. For snapshots, the destination can be a
 nonempty prefix of the surface, including row padding. Full snapshots remain
 supported. Kernel paths validate full mappings and effective permissions. Requests
@@ -73,17 +91,16 @@ after copying. Paths are copied before filesystem locks are acquired.
 Mouse packing is x in bits 0–15, y in bits 16–31, buttons above bit 31. Button bits
 0/1/2 mean left/right/middle. Coordinates are clamped to current display dimensions,
 not historical 320×200 values found in some source comments. Query `fb_info`; honor
-pitch, bounds and 32-bit XRGB format. Mapping at `0x3100000` is physical display memory
+pitch, bounds and 32-bit XRGB format. Mapping at `0x410000000` is physical display memory
 only for the compositor; other processes see private surface frames.
 
-The 1080p layout moves the stack top from `0x800000` to `0x3000000` and the drawing
-surface from `0x900000` to `0x3100000`, making room for compositor buffers below the
-stack. Apps use `userlib::sys::FRAMEBUFFER_ADDR`; rebuild all apps with
-`tools/build-user.sh` when migrating from the old layout. Syscall numbers and
-`fb_info`/`snapshot` formats are unchanged. Surfaces cover `pitch * height`, including
-padding and the final partial page. User mappings occupy private page tables below
-`0x6000000`; unused gaps are unmapped. The surface region still ends at
-`0x4000000`, where the separate guarded worker-stack arena begins. The kernel heap is 64 MiB to stage executables and service concurrent allocations.
+The current layout reserves image addresses below 4 GiB, a growable heap starting
+at 4 GiB, the 4 MiB initial stack ending at 16 GiB, surface at `0x410000000`,
+worker stacks at `0x420000000`, and static compiler TLS at `0x440000000`.
+Use `userlib::sys::FRAMEBUFFER_ADDR`; rebuild all apps after this migration.
+User mappings stay below `0x8000000000` (512 GiB); unused gaps are unmapped.
+Surfaces cover `pitch * height`, including padding and the final partial page.
+The kernel heap remains 64 MiB. See [address layout](architecture.md).
 
 Graphical apps must call `present_surface()` after each rendering update. The WM
 queries `surface_status()` and retains cached window pixels until the revision or
@@ -96,6 +113,123 @@ the original full surface. Rebuild graphical apps with the SDK when migrating.
 the kernel idles; the scheduler uses `sti; hlt` when nothing can run. The PIT rate
 remains approximately 18.2 Hz (~55 ms/tick), preserving game and cursor blink timing.
 This reduces idle CPU but does not introduce a 60 Hz display/input loop.
+
+## Program arguments and entry
+
+Syscall 30 is the default SDK launch path. The shared
+[process ABI](../crates/process-abi/src/lib.rs) defines a padding-free 48-byte
+request: six little-endian u64 values `version=1, flags, argv, argc, envp, envc`.
+Flags 0/1 select ordinary/connected standard I/O. Each vector points to
+`StringRef { pointer: u64, length: u64 }` records containing UTF-8 without NULs.
+Counts may independently reach 4096; combined string bytes plus one NUL per string
+must fit 128 KiB. Empty vectors and strings are valid. Unknown flags/version,
+invalid UTF-8, overflow, invalid mappings, embedded NULs or excessive sizes fail
+before child publication. All records/strings are copied into owned kernel storage
+before filesystem work or scheduling; no parent pointer survives into the child.
+
+`sys::spawn_with_args(path, &["alpha", "two words", ""])` prepends path as argv[0]
+and inherits a snapshot of `userlib::env`. `spawn_with_env(path, args, environment)`
+uses explicit `KEY=value` strings. `Child` offers corresponding connected variants.
+`env::var`, `set_var`, `remove_var` and `vars` manage a process-local environment;
+parent/child mutations are independent. Raw callers choose argv[0] and environment
+contents. SDK key mutation rejects empty keys, `=` in keys and NULs.
+
+Legacy syscall 29 remains exactly a 2048-byte record: u64 version=1 and count,
+then 2032 concatenated NUL-terminated UTF-8 bytes, at most 32 arguments. Its spawn
+flags remain in RDX. The no-alloc SDK fallback uses this form without environment.
+Legacy syscall 8 supplies the resolved path as its single argument. Direct kernel
+boot spawning retains argc zero. There is no exec/fork or Linux binary compatibility.
+
+The loader copies argc, terminated argv/envp pointer tables and NUL strings into
+as many private final stack pages as required. RSP is eight bytes below that area
+(8 modulo 16), RDI holds argc, RSI points to argv and RDX points to envp. This is
+the native extern-C `_start` contract; there is no Linux auxiliary vector. Worker
+entry still receives its single closure argument in RDI, with RSI zero.
+
+The SDK captures these registers once before calling application code. Both
+`fn main()` and `fn main(argc: usize, argv: &[&str])` work through the shared Cargo
+root. `userlib::args()` iterates immutable string views without allocation;
+`userlib::args::arg(index)` selects one argument. `userlib::argc()` and
+`userlib::argv()` expose the count and raw `*const *const u8` table for C-style
+access. Raw-pointer callers must not mutate the table/strings while shared string
+views exist. Initial stack frames remain process-owned even if its first thread
+exits; argument views remain valid while the process lives.
+
+Arguments are copied into owned kernel storage before filesystem work can release
+the entry gate. Child stack setup uses owned unpublished frames through the RAM
+direct map, under the existing allocation transaction. No parent pointers survive
+into the child. Allocation or later loader failures roll back private frames;
+ordinary exit/kill/reap releases the process. Rebuild all applications when changing
+this startup ABI. See [argument validation](arguments-validation.md).
+
+## Regular files and working directories
+
+The names, flags, byte offsets, short reads/writes and EOF behavior follow the
+Linux [open](https://man7.org/linux/man-pages/man2/open.2.html),
+[read](https://man7.org/linux/man-pages/man2/read.2.html) and
+[lseek](https://man7.org/linux/man-pages/man2/lseek.2.html) interfaces where supported.
+Existing syscall numbers and the generic native error value are preserved; this
+is not Linux binary compatibility or negative `errno`. `getcwd` returns a byte
+count as the Linux kernel syscall does, while the SDK returns a borrowed `&str`.
+There is no mode/permission argument: open's third register must be zero.
+
+Supported open flags use Linux values: `O_RDONLY=0`, `O_WRONLY=1`, `O_RDWR=2`,
+`O_CREAT=0o100`, `O_TRUNC=0o1000`. Other bits, access mode 3 and read-only truncation
+fail. Directories cannot be opened as regular files. Missing parents fail. A full
+descriptor table fails before creation/truncation. Each open has an independent
+cursor; threads in the same process share the table and each open's cursor.
+Close/exit/kill release owned descriptors; an operation already holding an owned
+reference may finish after concurrent close. Spawn inherits cwd, **not** descriptors.
+No dup, fork, rename/unlink, descriptor inheritance, permissions or pipes are added.
+
+Read/write validate complete advertised user buffers and use owned kernel data.
+Each transfer is at most 64 KiB and may return a short count. Reading at or beyond
+EOF returns zero. Read-only writes and write-only reads fail. Zero-length valid
+file I/O returns zero without changing offsets. Seeking accepts a signed offset,
+rejects negative results/overflow/unknown origins, and permits positions through
+`u32::MAX`. Writing beyond EOF zero-fills the gap. Descriptor writes operate on
+affected clusters without staging or rewriting the complete file; file sizes can
+reach FAT32's `u32::MAX`, subject to disk space and allocation resources. Tables
+grow to 1024 regular descriptors (3–1026) per process; no configurable rlimit exists.
+
+Offset writes reserve any extension chain before modifying existing data. Disk-full
+allocation failure preserves old bytes and frees the partial extension. Hardware
+I/O failure can leave a partial in-place write; there is no journaling/fsync or
+power-loss guarantee. Path-based whole-file writes still allocate a replacement
+chain before publishing, requiring temporary space for both copies. Editor saves
+use that replacement path so a failed allocation does not first truncate the old file.
+
+Use `userlib::fs::File` for owned close-on-drop descriptors, `read`, `write_all`
+and `seek`; low-level typed wrappers live in `userlib::sys`. `sys::write(1/2, ...)`
+uses the existing SDK output redirection. The connected standard-I/O transport
+remains separate from the regular-file table.
+
+`cd` is parsed and executed by Forge. The kernel only validates and stores cwd;
+Portal remains a terminal with no command parser. See
+[commands and medit](terminal-shell.md#filesystem-commands-and-medit) and
+[executed validation](file-commands-validation.md).
+
+## Heap, thread pointer and full-name listing
+
+`brk` owns zero-filled private user pages between 4 GiB and one guard page below
+the main stack. Failed growth rolls back partial leaves/parent tables before
+recycling frames after remote TLB invalidation. Shrink unmaps/recycles complete
+pages; the containing partial page stays mapped. The SDK allocator serializes
+break ownership and reuses freed blocks; mixing direct brk with live allocations
+is unsafe. Physical RAM bounds allocations; there is no demand paging or swap.
+
+`arch_prctl` saves FS base per native thread. SET_FS accepts zero or an address
+with a mapped user-readable eight-byte range, and rejects noncanonical values.
+GET_FS writes one u64 to fully validated writable user storage. SDK mutation is
+unsafe because the caller must preserve live compiler TLS/TCB layout and lifetimes.
+The loader initializes local-exec PT_TLS using x86-64 variant II, with initialized
+TDATA, zeroed TBSS and a self pointer at FS:0. See [thread limits](threading.md#limits).
+
+Full-name syscall 33 returns 8-byte-aligned records: u16 record bytes, u16 UTF-8
+name bytes, u8 attributes, three zero reserved bytes, u64 file size, then UTF-8
+name, NUL and zero padding. It returns total bytes; insufficient capacity fails
+without copying a prefix. Legacy syscall 5 still returns 8.3 aliases. The SDK
+queries size and retries boundedly if the directory grows (16 MiB listing budget).
 
 ## Display-owner message channel
 
@@ -159,7 +293,7 @@ Both require a current process and reject nonzero reserved arguments. Zero-byte
 random requests return zero without inspecting the pointer or accessing hardware.
 Nonempty output must have effective present/user/writable permission at every
 paging level and across every page, with checked address arithmetic and bounds
-`0x400000..0x6000000`. The kernel fills a bounded local record first and copies
+`0x400000..0x8000000000`. The kernel fills a bounded local record first and copies
 only after complete entropy success. A failed syscall never partially writes its
 output. A multi-call SDK request can have completed earlier chunks before a later
 chunk fails; callers must not use it after an error.
@@ -200,7 +334,7 @@ SDK byte framing uses count bits 24–31 and up to three low bytes in little-end
 order. Host-to-child packets have count one. Standard console wrappers redirect
 on the child side; the host uses `process::Child` and keeps ordinary keyboard I/O.
 No new kernel pointer dereference or retained user reference is introduced by
-operation 22. Spawn copies and validates the complete fixed-size path buffer
+operation 22. Spawn copies and validates the complete NUL-terminated path
 before loading the executable through the filesystem service.
 
 The host owns the child lifetime. Host exit/kill stops its connected child;

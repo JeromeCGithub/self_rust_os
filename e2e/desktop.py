@@ -3,7 +3,7 @@
 Build first: ./tools/build-grub-disk.sh
 Run: python3 e2e/desktop.py
 """
-import json, pathlib, re, socket, subprocess, tempfile, time, sys
+import json, os, pathlib, re, socket, subprocess, tempfile, time, sys
 from PIL import Image
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
@@ -16,6 +16,10 @@ OUT=ROOT/'docs/screenshots'
 OUT.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
     disk=copy_disk(disk_image(ROOT),pathlib.Path(tmp))
+    # Disposable read fixture exercises cat beyond its former 1024-byte cap.
+    long_file=pathlib.Path(tmp)/'long.txt'
+    long_file.write_bytes(b'A'*1500+b'\ncat-stream-tail\n')
+    subprocess.run(['mcopy','-o','-i',f'{disk}@@1048576',str(long_file),'::/LONG.TXT'],check=True)
     monpath=f'{tmp}/monitor'; qmppath=f'{tmp}/qmp'; log=pathlib.Path(tmp)/'serial.log'
     qemu=subprocess.Popen(['qemu-system-x86_64','-drive',f'format=raw,file={disk}','-machine','pc,i8042=on,vmport=on','-vga','std','-serial',f'file:{log}','-display','none','-no-reboot','-monitor',f'unix:{monpath},server,nowait','-qmp',f'unix:{qmppath},server,nowait'] + platform_arguments() + network_arguments())
     try:
@@ -72,9 +76,33 @@ with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
         def click(x,y):
             move(x,y);cmd('mouse_button 1',.25);cmd('mouse_button 0',.25)
         def type_command(text):
-            keys={' ':'spc','/':'slash','.':'dot','-':'minus'}
-            for c in text:cmd('sendkey '+keys.get(c,c),.08)
+            keys={' ':'spc','/':'slash','.':'dot','-':'minus',chr(34):'shift-apostrophe',chr(39):'apostrophe','=':'equal','_':'shift-minus'}
+            for c in text:cmd('sendkey '+keys.get(c,('shift-'+c.lower()) if c.isupper() else c),.08)
             cmd('sendkey ret',.3)
+        def check_arguments():
+            start=log.stat().st_size
+            type_command('export TEST_ENV="hello world"')
+            wait_for('[portal] output: exported TEST_ENV',after=start)
+            type_command("./hello 'unfinished")
+            wait_for('[portal] output: parse error: unterminated quote or escape',after=start)
+            type_command('./hello alpha "two words" ""')
+            for expected in ['[hello] TEST_ENV=hello world','[hello] argc=4','[hello] argv[0]=/bin/HELLO.BIN','[hello] argv[1]=alpha','[hello] argv[2]=two words','[hello] argv[3]=\n']:
+                wait_for(expected,after=start)
+            wait_for('[hello-ui] ready: 640x400 glass',after=start)
+            # Show the typed command and its running child side by side.
+            move(150,140);cmd('mouse_button 1');move(900,220);cmd('mouse_button 0')
+            shot('desktop-capabilities' if os.environ.get('RUSTOS_DESKTOP_CASE') == 'capabilities' else 'desktop-arguments')
+            click(92+640-18+750,136+14+80);time.sleep(.4)
+            click(100,180)
+            start=log.stat().st_size
+            type_command('echo argv-shell-alive');wait_for('[portal] output: argv-shell-alive',after=start)
+            type_command('unset TEST_ENV');wait_for('[portal] output: unset TEST_ENV',after=start)
+            for command,expected in [('mkdir "/tmp/directory with spaces"','created /tmp/directory with spaces'),
+                                     ('cd "/tmp/directory with spaces"','cwd: /TMP/directory with spaces'),
+                                     ('write long-filename.txt saved','wrote 5 bytes'),
+                                     ('ls','long-filename.txt'),('cat long-filename.txt','saved'),('cd /','cwd: /')]:
+                mark=log.stat().st_size;type_command(command);wait_for('[portal] output: '+expected+'\n',after=mark)
+
         wait_for('[mouse] absolute pointer enabled');wait_for('[desktop] ready: ');time.sleep(1)
         wait_for("sys_spawn: '/BIN/DE.BIN'")
         wait_for('[compositor] desktop surface committed')
@@ -92,8 +120,41 @@ with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
             move(x,y);time.sleep(.5)
             assert shot(None).getpixel((x,y))==(8,19,33),f'pointer did not reach {(x,y)}'
         click(350,65);wait_for('[portal] shell pid=');wait_for('self_rust_os forge v1.0');time.sleep(1)
+        if os.environ.get('RUSTOS_DESKTOP_CASE') in ('arguments','capabilities'):
+            check_arguments()
+            print('PASS: Forge quoting/errors, argument delivery to main(argc, argv), Hello UI and shell survival')
+            sys.exit(0)
         for command,expected in [('help','Commands:'),('echo desktop-ok','desktop-ok'),('pwd','/'),('ls /bin','PORTAL.BIN'),('write /test.txt saved','wrote 5 bytes'),('cat /test.txt','saved'),('mkdir /demo','created /demo'),('time','ticks:')]:
             type_command(command);wait_for("[portal] output: "+expected+"\n" if command not in ("time",) else "ticks:")
+        # Working directory belongs to Forge, and failed changes preserve it.
+        for command,expected in [('cd /demo','cwd: /DEMO'),('pwd','/DEMO'),
+                                 ('mkdir sub','created sub'),('cd sub','cwd: /DEMO/SUB'),
+                                 ('write note.txt relative-data','wrote 13 bytes'),
+                                 ('cat ./note.txt','relative-data'),('cd note.txt','cd failed'),
+                                 ('cd /missing','cd failed'),('pwd','/DEMO/SUB'),
+                                 ('cd ..','cwd: /DEMO'),('cd /','cwd: /')]:
+            start=log.stat().st_size
+            type_command(command);wait_for('[portal] output: '+expected+'\n',after=start)
+        # A modal editor must save and reopen real disk contents, not command echoes.
+        start=log.stat().st_size
+        type_command('medit /demo/edit.txt');wait_for('medit: /demo/edit.txt',after=start)
+        for c in 'iedited':cmd('sendkey '+c,.08)
+        cmd('sendkey esc');shot('desktop-medit');cmd('sendkey shift-semicolon')
+        type_command('wq');wait_for('medit: saved 6 bytes',after=start)
+        start=log.stat().st_size
+        type_command('cat /demo/edit.txt');wait_for('[portal] output: edited\n',after=start)
+        shot('desktop-medit-saved')
+        start=log.stat().st_size
+        type_command('medit /demo/edit.txt');wait_for('medit: /demo/edit.txt',after=start)
+        for c in 'ix':cmd('sendkey '+c,.08)
+        cmd('sendkey esc');cmd('sendkey shift-semicolon');type_command('q')
+        wait_for('unsaved changes; use :w or :q!',after=start)
+        cmd('sendkey shift-semicolon');cmd('sendkey q');cmd('sendkey shift-1');cmd('sendkey ret')
+        wait_for('medit: closed',after=start)
+        start=log.stat().st_size
+        type_command('cat /demo/edit.txt');wait_for('[portal] output: edited\n',after=start)
+        start=log.stat().st_size
+        type_command('cat /long.txt');wait_for('cat-stream-tail\n',after=start)
         # Forge-only commands must execute in the hosted process, not Portal.
         type_command('kill x');wait_for('[portal] output: invalid pid')
         type_command('cat /missing.txt');wait_for('[portal] output: cat failed')
@@ -135,6 +196,10 @@ with tempfile.TemporaryDirectory(prefix='rustos-desktop-') as tmp:
             click(x,65);wait_for(expected);time.sleep(.7)
             width=640 if name=='HELLO' else 488
             click(80+width-18,126+14);time.sleep(.4)
+        start=log.stat().st_size
+        click(350,65);wait_for('[portal] shell pid=',after=start)
+        check_arguments()
+        click(80+488-18,126+14);time.sleep(.4)
         # The shell can die without taking the compositor or other apps down.
         shell_pid=re.search(r"sys_spawn: '/BIN/DE.BIN' -> pid (\d+)",log.read_text()).group(1)
         start=log.stat().st_size

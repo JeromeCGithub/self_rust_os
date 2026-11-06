@@ -71,3 +71,6 @@ where
         f(&mut filesystem)
     }))
 }
+
+/// Process filesystem resources and regular-file syscall mechanisms.
+pub(crate) mod handles;
