@@ -226,3 +226,18 @@ Input received while waiting for frame RELEASE is buffered in a bounded FIFO and
 returned by `poll_event` in order. Pointer press/release and focus transitions
 are preserved. Capacity is 64 events; overflow returns `Error::Unavailable`
 rather than silently dropping a transition.
+
+## Optional proportional text and image painting
+
+Enable the SDK `fonts` feature for `ui::font::{FontSet, Painter, Style, Family}`.
+Load trusted font bytes once, share immutable metrics with layout and keep each
+Painter/cache on its painting thread. The coverage cache is bounded to512 glyphs
+and1 MiB. Embedded browser faces and known limits are documented in
+[P2 presentation](browser-rendering-p2.md). Other apps keep the bitmap path.
+
+`Canvas::alpha_mask` blends a complete grayscale mask; `rgba_image` paints a
+complete RGBA buffer into a destination rectangle with nearest-neighbor scaling.
+Both validate checked buffer geometry before drawing, return false on malformed
+input, clip to the current viewport and preserve row padding. They allocate no
+buffers and interpret no URLs/codecs. Zero destination extent is a successful
+no-op for an otherwise valid image. The caller owns decoding/resource budgets.

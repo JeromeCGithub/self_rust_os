@@ -1,0 +1,6 @@
+qemu-system-x86_64: terminating on signal 15 from pid 243079 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 273, in <module>
+    assert len(colors)>20, 'page text has no antialiased coverage'
+           ^^^^^^^^^^^^^^
+AssertionError: page text has no antialiased coverage

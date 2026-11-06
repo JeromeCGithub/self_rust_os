@@ -1,7 +1,8 @@
 # jbrowse roadmap: everyday browsing and modern websites
 
 Status: implementation started with [P0 native engine feasibility](browser-engine-p0.md),
-2026-11-05; later phases remain planned. Baseline: browser commit
+2026-11-05; [P1 runtime](browser-runtime-p1.md) is implemented and
+[P2 presentation](browser-rendering-p2.md) is in progress. Later gates remain open. Baseline: browser commit
 `b44a83a`. This is a plan for missing capabilities, not a claim of new support.
 See the [browser guide](jbrowse.md), [Google status](jbrowse-google.md), and
 [JavaScript prototype](jbrowse-javascript.md) for current behavior and evidence.
@@ -169,6 +170,9 @@ take down the desktop. Repeated open/navigate/close and worker failures demonstr
 resource reuse/reclamation, not just successful first launch.
 
 ### P2 — Classic browsing
+
+Implementation in progress: [native fonts, PNG, cascade and navigation](browser-rendering-p2.md).
+The full exit gate below remains open; implemented subsets are documented separately.
 
 - Standards-based HTML tree construction, encoding detection, entities, URL/base
   handling and malformed-input recovery.

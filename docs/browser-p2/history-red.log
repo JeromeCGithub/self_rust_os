@@ -1,0 +1,22 @@
+
+running 4 tests
+test navigation::tests::a_late_redirect_cannot_replace_the_selected_or_partially_typed_address ... ok
+test navigation::history_tests::success_commits_history_but_failures_and_reload_preserve_forward_navigation ... FAILED
+test text_input::tests::invalid_and_oversized_set_preserves_the_previous_value ... ok
+test text_input::tests::edits_selection_backspace_cursor_and_bounded_input ... ok
+
+failures:
+
+---- navigation::history_tests::success_commits_history_but_failures_and_reload_preserve_forward_navigation stdout ----
+
+thread 'navigation::history_tests::success_commits_history_but_failures_and_reload_preserve_forward_navigation' panicked at user_programs/jbrowse/src/navigation.rs:55:3:
+assertion `left == right` failed
+  left: None
+ right: Some("a")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    navigation::history_tests::success_commits_history_but_failures_and_reload_preserve_forward_navigation
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
