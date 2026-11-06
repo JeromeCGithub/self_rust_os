@@ -320,6 +320,10 @@ of ordinary unencrypted playback.
 
 ### P8 — Measure broad compatibility and maintain it
 
+Initial implementation: [pinned native task corpus and displayed-page probes](browser-compatibility-p8.md).
+The initial assessment fails; Google, YouTube, Facebook and broad compatibility
+remain open. Loading placeholders and HTTP200 responses are not task passes.
+
 Publish a versioned corpus before claiming “most”: proposed initial scope is 30
 sites/tasks spanning static documentation, encyclopedia/news, responsive images,
 commerce/forms and JS applications. Google, YouTube and Facebook are independent

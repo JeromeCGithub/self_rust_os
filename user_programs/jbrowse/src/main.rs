@@ -432,13 +432,22 @@ fn main(_argc: usize, argv: &[&str]) {
         }
     };
     let mut browser = Browser::new(fonts);
-    browser.navigate(&shared, argv.get(1).copied().unwrap_or(HOME_PAGE));
+    browser.navigate(
+        &shared,
+        argv.iter()
+            .skip(1)
+            .copied()
+            .find(|arg| *arg != "--diagnostics")
+            .unwrap_or(HOME_PAGE),
+    );
     window
         .draw(|canvas| browser.paint(canvas))
         .expect("browser first frame");
     println!("[jbrowse] ready");
     loop {
         let mut dirty = false;
+        let mut diagnostic = None;
+        let mut diagnostic_error = false;
         for _ in 0..32 {
             match window.poll_event().expect("browser events") {
                 Some(Event::CloseRequested) => {
@@ -546,19 +555,42 @@ fn main(_argc: usize, argv: &[&str]) {
                             ));
                         }
                         println!("[jbrowse] loaded: {}", browser.title);
+                        if argv.contains(&"--diagnostics") {
+                            diagnostic =
+                                Some((browser.page.summary(), loaded.status, loaded.script_errors));
+                        }
                     }
                     Err(message) => {
                         println!("[jbrowse] error: {}", message);
                         browser.status = message;
+                        diagnostic_error = argv.contains(&"--diagnostics");
                     }
                 }
                 dirty = true;
             }
         }
+        let mut digest = None;
         if dirty {
             window
-                .draw(|canvas| browser.paint(canvas))
+                .draw(|canvas| {
+                    browser.paint(canvas);
+                    if diagnostic.is_some() || diagnostic_error {
+                        digest = canvas.region_digest(Rect::new(
+                            1,
+                            64,
+                            canvas.width().saturating_sub(2),
+                            canvas.height().saturating_sub(92),
+                        ));
+                    }
+                })
                 .expect("browser frame");
+        }
+        if let Some(digest) = digest {
+            if let Some((summary, status, errors)) = diagnostic {
+                println!("[jbrowse] counters http_status={} items={} links={} controls={} images={} truncated={} script_errors={} digest={}",status,summary.items,summary.links,summary.controls,summary.images,u8::from(summary.truncated),errors,digest);
+            } else if diagnostic_error {
+                println!("[jbrowse] error_frame digest={}", digest);
+            }
         }
         sys::wait_events(sys::Events::KEYBOARD | sys::Events::MAILBOX, 1).expect("browser idle");
     }

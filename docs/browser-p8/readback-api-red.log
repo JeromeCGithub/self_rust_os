@@ -1,0 +1,57 @@
+error[E0599]: no method named `region_digest` found for struct `raster::Canvas` in the current scope
+   --> user_programs/userlib/src/ui/raster.rs:407:27
+    |
+150 | pub struct Canvas<'a> {
+    | --------------------- method `region_digest` not found for this struct
+...
+407 |         let digest=canvas.region_digest(Rect::new(0,0,2,2)).unwrap();
+    |                           ^^^^^^^^^^^^^ method not found in `Canvas<'_>`
+
+error[E0599]: no method named `region_digest` found for struct `raster::Canvas` in the current scope
+   --> user_programs/userlib/src/ui/raster.rs:409:67
+    |
+150 | pub struct Canvas<'a> {
+    | --------------------- method `region_digest` not found for this struct
+...
+409 |         assert_eq!(digest,Canvas::new(&mut packed,2,2,2).unwrap().region_digest(Rect::new(0,0,2,2)).unwrap());
+    |                                                                   ^^^^^^^^^^^^^ method not found in `Canvas<'_>`
+
+error[E0599]: no method named `region_digest` found for struct `raster::Canvas` in the current scope
+   --> user_programs/userlib/src/ui/raster.rs:410:24
+    |
+150 | pub struct Canvas<'a> {
+    | --------------------- method `region_digest` not found for this struct
+...
+410 |         let row=canvas.region_digest(Rect::new(0,1,2,1));
+    |                        ^^^^^^^^^^^^^ method not found in `Canvas<'_>`
+
+error[E0599]: no method named `region_digest` found for struct `raster::Canvas` in the current scope
+   --> user_programs/userlib/src/ui/raster.rs:411:69
+    |
+150 | pub struct Canvas<'a> {
+    | --------------------- method `region_digest` not found for this struct
+...
+411 |         assert_eq!(row,canvas.viewport(Rect::new(0,1,2,1)).unwrap().region_digest(Rect::new(0,0,2,1)));
+    |                                                                     ^^^^^^^^^^^^^ method not found in `Canvas<'_>`
+
+error[E0599]: no method named `region_digest` found for struct `raster::Canvas` in the current scope
+   --> user_programs/userlib/src/ui/raster.rs:412:24
+    |
+150 | pub struct Canvas<'a> {
+    | --------------------- method `region_digest` not found for this struct
+...
+412 |         assert!(canvas.region_digest(Rect::new(-1,0,1,1)).is_none());
+    |                        ^^^^^^^^^^^^^ method not found in `Canvas<'_>`
+
+error[E0599]: no method named `region_digest` found for struct `raster::Canvas` in the current scope
+   --> user_programs/userlib/src/ui/raster.rs:413:24
+    |
+150 | pub struct Canvas<'a> {
+    | --------------------- method `region_digest` not found for this struct
+...
+413 |         assert!(canvas.region_digest(Rect::new(0,0,u32::MAX,u32::MAX)).is_none());
+    |                        ^^^^^^^^^^^^^ method not found in `Canvas<'_>`
+
+error: aborting due to 6 previous errors
+
+For more information about this error, try `rustc --explain E0599`.

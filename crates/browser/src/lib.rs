@@ -16,7 +16,7 @@ pub struct ImageResource {
     pub node: usize,
     pub image: Arc<Image>,
 }
-pub use layout::{Item, Page};
+pub use layout::{Item, Page, Summary};
 pub use url::{address, resolve};
 
 pub const MAX_HTML: usize = 256 * 1024;

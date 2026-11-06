@@ -26,7 +26,32 @@ pub struct Page {
     pub controls: Vec<Control>,
     pub images: Vec<ImageResource>,
 }
+/// Content-free retained layout counters for optional developer diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Summary {
+    pub items: usize,
+    pub links: usize,
+    pub controls: usize,
+    pub images: usize,
+    pub truncated: bool,
+}
 impl Page {
+    /// Count distinct rendered destinations; hidden DOM links are not evidence
+    /// of visible navigation. No page text or URL is copied into this summary.
+    pub fn summary(&self) -> Summary {
+        let links: alloc::collections::BTreeSet<_> = self
+            .items
+            .iter()
+            .filter_map(|item| item.link.as_deref())
+            .collect();
+        Summary {
+            items: self.items.len(),
+            links: links.len(),
+            controls: self.controls.len(),
+            images: self.images.len(),
+            truncated: self.truncated,
+        }
+    }
     /// Whether layout exposes any readable text or interactive control.
     pub fn is_empty(&self) -> bool {
         self.controls.is_empty()

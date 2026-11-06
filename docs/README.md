@@ -25,6 +25,7 @@ current behavior; architecture targets are not evidence of implemented features.
 | [Network performance](network-performance.md) | TCP window optimization, DMA, measurements and future event delivery |
 | [Networking validation](networking-validation.md) | Red/green evidence, packet captures and remaining limits |
 | [Ethernet networking plan](networking-plan.md) | Delivered ping/client sockets and roadmap toward DNS, HTTP and TLS |
+| [Browser P8 compatibility](browser-compatibility-p8.md) | Pinned task corpus, actual displayed-page probes and explicit failed/untested public gates |
 | [Browser P7 ranges](browser-youtube-p7.md) | Validated native HTTP/HTTPS media byte ranges; the real YouTube playback gate remains open |
 | [Browser P6 audio](browser-media-p6.md) | Bounded native PCM, userspace WAV player, pause/seek and captured-sound evidence; video remains open |
 | [Browser performance](browser-performance.md) | Fixed native startup/page/navigation budgets, on-demand font outlines and before/after evidence |

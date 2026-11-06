@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 sys.path = [p for p in sys.path if Path(p or ".").resolve() != Path(__file__).resolve().parent]
 import http.server
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,7 @@ sys.path.insert(0, str(ROOT / 'tools'))
 from qemu_test import launchers, connect, copy_disk, disk_image, console_text
 from qemu_network import arguments as network_arguments
 from qemu_platform import arguments as platform_arguments
+from browser_probe import rgb_digest
 
 if os.environ.get('RUSTOS_JBROWSE_REQUIRE_GOOGLE_RESULTS') == '1':
     os.environ['RUSTOS_JBROWSE_GOOGLE']='1'
@@ -176,7 +178,7 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         def key(code):
             hmp('sendkey '+code);time.sleep(.08)
         def type_text(text):
-            keys={' ':'spc','/':'slash',':':'shift-semicolon','.':'dot','-':'minus','?':'shift-slash','=':'equal'}
+            keys={' ':'spc','/':'slash',':':'shift-semicolon','.':'dot','-':'minus','?':'shift-slash','=':'equal','+':'shift-equal','&':'shift-7','%':'shift-5','_':'shift-minus','(':'shift-9',')':'shift-0'}
             for c in text:
                 key(keys.get(c, ('shift-'+c.lower()) if c.isupper() else c))
         def shot(name):
@@ -196,11 +198,54 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         click(terminal_x,65)
         wait('[portal] shell pid=')
         start_path='/stalled' if os.environ.get('RUSTOS_JBROWSE_STOP_STARTUP') == '1' else '/start'
-        type_text('./jbrowse' if os.environ.get('RUSTOS_JBROWSE_GOOGLE') == '1' else f'./jbrowse http://10.0.2.2:{server.server_port}{start_path}')
+        site=os.environ.get('RUSTOS_JBROWSE_SITE')
+        type_text(f'./jbrowse {site} --diagnostics' if site else './jbrowse' if os.environ.get('RUSTOS_JBROWSE_GOOGLE') == '1' else f'./jbrowse http://10.0.2.2:{server.server_port}{start_path}')
+        launch_started=time.monotonic()
         key('ret')
         wait('[jbrowse] ready')
         # Second native window: x=92, titlebar y=128, content y=156.
         ox,oy=92,156
+        if site:
+            # A load probe records visible basic rendering, not an interactive
+            # Google/Facebook/YouTube task or a complete compatibility pass.
+            destination=Path(os.environ.get('RUSTOS_JBROWSE_SITE_OUT',str(ROOT/'target/site-probe')))
+            destination.mkdir(parents=True,exist_ok=True)
+            deadline=time.monotonic()+45
+            counters=None;error=None;expected_digest=None
+            while expected_digest is None:
+                text=output()
+                error=re.search(r'\[jbrowse\] error: ([^\n]+)',text)
+                match=re.search(r'\[jbrowse\] counters ([^\n]+)',text)
+                if match:
+                    counters={key:int(value) for key,value in re.findall(r'(\w+)=(\d+)',match.group(1))}
+                    expected_digest=counters.get('digest')
+                failed_frame=re.search(r'\[jbrowse\] error_frame digest=(\d+)',text)
+                if failed_frame:expected_digest=int(failed_frame.group(1))
+                assert qemu.poll() is None and time.monotonic()<deadline,'site outcome watchdog'
+                time.sleep(.02)
+            # Publication can precede composition. Accept the readback only once
+            # its opaque page interior matches the submitted native surface.
+            # Exclude the compositor's one-pixel decorative side rims.
+            deadline=time.monotonic()+20
+            while True:
+                frame=shot('site-probe')
+                body=frame.crop((ox+1,oy+64,ox+639,oy+372)).convert('RGB')
+                actual_digest=rgb_digest(body.getdata())
+                if actual_digest==expected_digest:break
+                assert qemu.poll() is None and time.monotonic()<deadline,'submitted page never reached the framebuffer'
+                time.sleep(.02)
+            frame.save(destination/'page.png')
+            colors=body.getcolors(638*308) or []
+            ink=638*308-max((count for count,_ in colors),default=638*308)
+            titles=re.findall(r'\[jbrowse\] loaded: ([^\n]+)',output());title=titles[-1] if titles else ''
+            seconds=time.monotonic()-launch_started
+            checks=dict(title=os.environ.get('RUSTOS_JBROWSE_SITE_TITLE','').lower() in title.lower(),readable_pixels=ink>=100,rendered_links=bool(counters and counters['links']>=int(os.environ.get('RUSTOS_JBROWSE_SITE_MIN_LINKS','1'))))
+            passed=bool(counters and 200<=counters['http_status']<300 and not counters['truncated'] and counters['script_errors']==0 and all(checks.values()) and seconds<=5)
+            result=dict(url=site,title=title,load_probe_passed=passed,complete_task_verified=False,elapsed_seconds=seconds,budget_seconds=5,counters=counters,ink_pixels=ink,readback_digest=actual_digest,submitted_digest=expected_digest,checks=checks,error=error.group(1) if error else None,unsupported_script='[jbrowse] unsupported script page' in output(),build_id=hashlib.sha256(disk_image(ROOT).read_bytes()).hexdigest())
+            (destination/'probe.json').write_text(json.dumps(result,indent=2)+'\n')
+            (destination/'serial.log').write_text(serial.read_text(errors='replace'))
+            print(json.dumps(result,indent=2),flush=True)
+            raise SystemExit(0 if passed else 1)
         if os.environ.get('RUSTOS_JBROWSE_STOP_STARTUP') == '1':
             assert stalled_started.wait(5), 'startup request not sent'
             mark=len(output());click(ox+608,oy+42);wait('[jbrowse] stopped',mark)

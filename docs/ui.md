@@ -278,6 +278,12 @@ and drawing clips within the rectangle. The borrow prevents simultaneous mutable
 access through the parent, and no new pointer or unsafe code is needed. Browser
 scrolling uses this to prevent page text from painting over native chrome.
 
+`Canvas::region_digest(Rect)` fingerprints a fully contained RGB24 region without
+mutating it; alpha and row padding are excluded. This noncryptographic developer
+readback helper returns `None` for invalid geometry. It does not acknowledge
+presentation. The [browser probe](browser-compatibility-p8.md) waits for a matching
+physical framebuffer region separately and excludes compositor decorations.
+
 Input received while waiting for frame RELEASE is buffered in a bounded FIFO and
 returned by `poll_event` in order. Pointer press/release and focus transitions
 are preserved. Capacity is 64 events; overflow returns `Error::Unavailable`

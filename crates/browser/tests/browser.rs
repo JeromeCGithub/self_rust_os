@@ -19,6 +19,14 @@ fn html_entities_raw_text_and_external_sheets() {
     assert_eq!(page.hit(link.x, link.y), Some("next.html"));
     assert_eq!(page.hit(-1, -1), None);
 }
+
+#[test]
+fn diagnostic_summary_counts_rendered_content_without_exporting_text_or_urls() {
+    let doc=Document::parse("<a href='/one'>Repeated wrapped destination with words</a><a href='/one'>Again</a><a href='/two'>Second</a><div style='display:none'><a href='/hidden'>Hidden</a></div><form><input name=q></form>").unwrap();
+    let page=doc.layout(160);let summary=page.summary();
+    assert_eq!(summary.links,2);assert_eq!(summary.controls,1);
+    assert!(summary.items>2);assert_eq!(summary.images,0);assert!(!summary.truncated);
+}
 #[test]
 fn css_cascade_inheritance_background_and_hidden_content() {
     let mut doc = Document::parse("<style>p {color:red} .note {color:#2468ac; padding:10px; background-color:#ffeecc} #main {color:blue} .hidden {display:none}</style><div class='note'><p id='main' style='color: #123456'>Visible</p><p>Inherited?</p><p class='hidden'>Secret</p></div>").unwrap();

@@ -1,0 +1,357 @@
+{
+  "version": 1,
+  "required_runs": 3,
+  "ordinary_threshold": 0.9,
+  "profile": {
+    "memory_mib": 1024,
+    "cpus": 8,
+    "viewport": [
+      1920,
+      1080
+    ],
+    "execution": "native Ring3 on QEMU TCG"
+  },
+  "tasks": [
+    {
+      "id": "google-search",
+      "group": "mandatory",
+      "url": "https://www.google.com/",
+      "task": "Default home and three queries; read real titles/snippets, follow a result, Back and refine.",
+      "checks": [
+        "default_home",
+        "query_one_results",
+        "query_two_results",
+        "query_three_results",
+        "real_destinations",
+        "follow",
+        "back",
+        "refine"
+      ]
+    },
+    {
+      "id": "youtube-video",
+      "group": "mandatory",
+      "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+      "task": "Play five minutes of public unencrypted video at available360p/30 with sound; pause, two seeks, volume, captions and fullscreen.",
+      "checks": [
+        "watch_ui",
+        "video_frames",
+        "sound",
+        "five_minutes",
+        "pause",
+        "two_seeks",
+        "volume",
+        "captions_if_available",
+        "fullscreen",
+        "av_drift_under_100ms",
+        "drops_under_5_percent"
+      ]
+    },
+    {
+      "id": "facebook-session",
+      "group": "mandatory",
+      "url": "https://www.facebook.com/",
+      "task": "With an authorized disposable account: normal login/verification, feed/profile, restart, logout/revocation and isolation.",
+      "checks": [
+        "authorized_account",
+        "login_verification",
+        "feed",
+        "repeated_scroll",
+        "profile",
+        "restart",
+        "logout",
+        "session_revoked",
+        "origin_isolation",
+        "clear_data",
+        "failed_login_reconnect"
+      ]
+    },
+    {
+      "id": "cern-read",
+      "group": "ordinary",
+      "url": "http://info.cern.ch/hypertext/WWW/TheProject.html",
+      "task": "Read the opening document with its title, readable body and distinct laid-out links.",
+      "checks": [
+        "title",
+        "readable_pixels",
+        "rendered_links"
+      ]
+    },
+    {
+      "id": "example-read",
+      "group": "ordinary",
+      "url": "https://example.com/",
+      "task": "Read the document and follow its information link.",
+      "checks": [
+        "read",
+        "follow"
+      ]
+    },
+    {
+      "id": "rust-book",
+      "group": "ordinary",
+      "url": "https://doc.rust-lang.org/book/",
+      "task": "Read a chapter and follow the next chapter/back.",
+      "checks": [
+        "read",
+        "next",
+        "back"
+      ]
+    },
+    {
+      "id": "rust-reference",
+      "group": "ordinary",
+      "url": "https://doc.rust-lang.org/reference/",
+      "task": "Read a section and use its navigation.",
+      "checks": [
+        "read",
+        "section_navigation"
+      ]
+    },
+    {
+      "id": "rustdoc-search",
+      "group": "ordinary",
+      "url": "https://doc.rust-lang.org/std/vec/struct.Vec.html",
+      "task": "Read a method and use the documentation search.",
+      "checks": [
+        "read",
+        "search"
+      ]
+    },
+    {
+      "id": "python-docs",
+      "group": "ordinary",
+      "url": "https://docs.python.org/3/tutorial/",
+      "task": "Read text/code and navigate chapters.",
+      "checks": [
+        "read",
+        "code_layout",
+        "navigation"
+      ]
+    },
+    {
+      "id": "gnu-manual",
+      "group": "ordinary",
+      "url": "https://www.gnu.org/software/bash/manual/bash.html",
+      "task": "Follow contents/fragment navigation and select/copy text.",
+      "checks": [
+        "read",
+        "fragment",
+        "copy"
+      ]
+    },
+    {
+      "id": "man7",
+      "group": "ordinary",
+      "url": "https://man7.org/linux/man-pages/man2/open.2.html",
+      "task": "Read preformatted documentation and follow a reference.",
+      "checks": [
+        "read",
+        "preformatted",
+        "follow"
+      ]
+    },
+    {
+      "id": "w3c-css",
+      "group": "ordinary",
+      "url": "https://www.w3.org/TR/CSS/",
+      "task": "Read specification navigation and follow a section.",
+      "checks": [
+        "read",
+        "navigation"
+      ]
+    },
+    {
+      "id": "whatwg-html",
+      "group": "ordinary",
+      "url": "https://html.spec.whatwg.org/",
+      "task": "Read a specification section and follow internal navigation.",
+      "checks": [
+        "read",
+        "fragment"
+      ]
+    },
+    {
+      "id": "mdn-html",
+      "group": "ordinary",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/HTML",
+      "task": "Read reference text/examples and follow links.",
+      "checks": [
+        "read",
+        "code_layout",
+        "follow"
+      ]
+    },
+    {
+      "id": "mdn-css",
+      "group": "ordinary",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/CSS",
+      "task": "Read CSS reference and resize responsively.",
+      "checks": [
+        "read",
+        "responsive_layout"
+      ]
+    },
+    {
+      "id": "wikipedia-article",
+      "group": "ordinary",
+      "url": "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+      "task": "Read an article, image and contents/fragment navigation.",
+      "checks": [
+        "read",
+        "image",
+        "fragment"
+      ]
+    },
+    {
+      "id": "wikipedia-search",
+      "group": "ordinary",
+      "url": "https://en.wikipedia.org/",
+      "task": "Submit a page search and read the target article.",
+      "checks": [
+        "search",
+        "read_result"
+      ]
+    },
+    {
+      "id": "wikimedia-image",
+      "group": "ordinary",
+      "url": "https://commons.wikimedia.org/wiki/Main_Page",
+      "task": "Render an image and navigate its file page.",
+      "checks": [
+        "image",
+        "follow"
+      ]
+    },
+    {
+      "id": "hacker-news",
+      "group": "ordinary",
+      "url": "https://news.ycombinator.com/",
+      "task": "Read story titles/comments and follow a real destination.",
+      "checks": [
+        "read",
+        "comments",
+        "follow"
+      ]
+    },
+    {
+      "id": "bbc-news",
+      "group": "ordinary",
+      "url": "https://www.bbc.com/news",
+      "task": "Handle served consent, read an article and image.",
+      "checks": [
+        "consent_if_served",
+        "article",
+        "image"
+      ]
+    },
+    {
+      "id": "guardian-news",
+      "group": "ordinary",
+      "url": "https://www.theguardian.com/international",
+      "task": "Handle served consent and read a story with images.",
+      "checks": [
+        "consent_if_served",
+        "article",
+        "image"
+      ]
+    },
+    {
+      "id": "reuters-news",
+      "group": "ordinary",
+      "url": "https://www.reuters.com/",
+      "task": "Record access/consent/paywall state and read an available story.",
+      "checks": [
+        "access_flow",
+        "article",
+        "image"
+      ]
+    },
+    {
+      "id": "github-readme",
+      "group": "ordinary",
+      "url": "https://github.com/rust-lang/rust",
+      "task": "Read a repository README/code blocks and follow links.",
+      "checks": [
+        "read",
+        "code_layout",
+        "follow"
+      ]
+    },
+    {
+      "id": "github-issues",
+      "group": "ordinary",
+      "url": "https://github.com/rust-lang/rust/issues",
+      "task": "Read/filter public issues and open one.",
+      "checks": [
+        "read",
+        "filter",
+        "open_issue"
+      ]
+    },
+    {
+      "id": "stackoverflow",
+      "group": "ordinary",
+      "url": "https://stackoverflow.com/questions",
+      "task": "Handle served consent and read a question/answer/code.",
+      "checks": [
+        "consent_if_served",
+        "question",
+        "answer",
+        "code_layout"
+      ]
+    },
+    {
+      "id": "npm-package",
+      "group": "ordinary",
+      "url": "https://www.npmjs.com/package/typescript",
+      "task": "Read package metadata and navigate documentation.",
+      "checks": [
+        "read",
+        "navigation"
+      ]
+    },
+    {
+      "id": "crates-search",
+      "group": "ordinary",
+      "url": "https://crates.io/",
+      "task": "Search for a crate and read its details.",
+      "checks": [
+        "search",
+        "details"
+      ]
+    },
+    {
+      "id": "openstreetmap",
+      "group": "ordinary",
+      "url": "https://www.openstreetmap.org/",
+      "task": "Render and pan/zoom a map using native input.",
+      "checks": [
+        "map",
+        "pan",
+        "zoom"
+      ]
+    },
+    {
+      "id": "httpbin-form",
+      "group": "ordinary",
+      "url": "https://httpbin.org/forms/post",
+      "task": "Fill the supplied controls, POST and verify returned values.",
+      "checks": [
+        "controls",
+        "post_roundtrip"
+      ]
+    },
+    {
+      "id": "duckduckgo-search",
+      "group": "ordinary",
+      "url": "https://duckduckgo.com/",
+      "task": "Submit a query, read results and follow a destination; separate from Google.",
+      "checks": [
+        "search",
+        "results",
+        "follow"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "url": "http://info.cern.ch/hypertext/WWW/TheProject.html",
+  "title": "The World Wide Web project",
+  "load_probe_passed": true,
+  "complete_task_verified": false,
+  "elapsed_seconds": 3.013027053006226,
+  "budget_seconds": 5,
+  "counters": {
+    "http_status": 200,
+    "items": 90,
+    "links": 25,
+    "controls": 0,
+    "images": 0,
+    "truncated": 0,
+    "script_errors": 0
+  },
+  "ink_pixels": 1771,
+  "checks": {
+    "title": true,
+    "readable_pixels": true,
+    "rendered_links": true
+  },
+  "error": null,
+  "unsupported_script": false,
+  "build_id": "50dd5ec5f11e2d88adcafb7ade839a063296e8a8a371a0d649278f2ea81f8bc6"
+}
+qemu-system-x86_64: terminating on signal 15 from pid 452419 (python3)
