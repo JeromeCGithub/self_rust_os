@@ -1,0 +1,117 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+error[E0432]: unresolved import `rustos_browser::Submission`
+   --> tests/forms.rs:110:9
+    |
+110 |     use rustos_browser::Submission;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `Submission` in the root
+
+error[E0432]: unresolved import `rustos_browser::Submission`
+   --> tests/forms.rs:122:9
+    |
+122 |     use rustos_browser::Submission;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `Submission` in the root
+
+error[E0599]: no method named `is_text` found for enum `FieldKind` in the current scope
+  --> tests/forms.rs:98:24
+   |
+98 |     assert!(field.kind.is_text());
+   |                        ^^^^^^^ method not found in `FieldKind`
+
+error[E0599]: no method named `display_value` found for reference `&Field` in the current scope
+  --> tests/forms.rs:99:22
+   |
+99 |     assert_eq!(field.display_value(),"*****");
+   |                      ^^^^^^^^^^^^^ method not found in `&Field`
+
+error[E0599]: no method named `submission` found for struct `Form` in the current scope
+   --> tests/forms.rs:112:29
+    |
+112 |     assert_eq!(doc.forms[0].submission("https://example.test/home",Some(4)).unwrap(),Submission::Post{
+    |                             ^^^^^^^^^^
+    |
+help: there is a method `submit` with a similar name
+    |
+112 |     assert_eq!(doc.forms[0].submit("https://example.test/home",Some(4)).unwrap(),Submission::Post{
+    |                             ~~~~~~
+
+error[E0599]: no method named `submission` found for struct `Form` in the current scope
+   --> tests/forms.rs:116:27
+    |
+116 |     assert!(!doc.forms[0].submission("https://example.test/",None).unwrap().url().contains("password"));
+    |                           ^^^^^^^^^^
+    |
+help: there is a method `submit` with a similar name
+    |
+116 |     assert!(!doc.forms[0].submit("https://example.test/",None).unwrap().url().contains("password"));
+    |                           ~~~~~~
+
+error[E0599]: no method named `submission` found for struct `Form` in the current scope
+   --> tests/forms.rs:124:29
+    |
+124 |     assert_eq!(doc.forms[0].submission("https://example.test/",None),Err(Error::UnsupportedForm));
+    |                             ^^^^^^^^^^
+    |
+help: there is a method `submit` with a similar name
+    |
+124 |     assert_eq!(doc.forms[0].submit("https://example.test/",None),Err(Error::UnsupportedForm));
+    |                             ~~~~~~
+
+error[E0599]: no method named `submission` found for struct `Form` in the current scope
+   --> tests/forms.rs:125:29
+    |
+125 |     assert_eq!(doc.forms[1].submission("https://example.test/",None),Err(Error::UnsupportedForm));
+    |                             ^^^^^^^^^^
+    |
+help: there is a method `submit` with a similar name
+    |
+125 |     assert_eq!(doc.forms[1].submit("https://example.test/",None),Err(Error::UnsupportedForm));
+    |                             ~~~~~~
+
+error[E0599]: no method named `submission` found for struct `Form` in the current scope
+   --> tests/forms.rs:126:29
+    |
+126 |     assert_eq!(doc.forms[2].submission("https://example.test/",None),Err(Error::InvalidUrl));
+    |                             ^^^^^^^^^^
+    |
+help: there is a method `submit` with a similar name
+    |
+126 |     assert_eq!(doc.forms[2].submit("https://example.test/",None),Err(Error::InvalidUrl));
+    |                             ~~~~~~
+
+error[E0599]: no method named `submission` found for struct `Form` in the current scope
+   --> tests/forms.rs:130:27
+    |
+130 |     assert!(matches!(form.submission("https://example.test/",None),Ok(Submission::Post{..})));
+    |                           ^^^^^^^^^^
+    |
+help: there is a method `submit` with a similar name
+    |
+130 |     assert!(matches!(form.submit("https://example.test/",None),Ok(Submission::Post{..})));
+    |                           ~~~~~~
+
+error[E0599]: no method named `submission` found for struct `Form` in the current scope
+   --> tests/forms.rs:132:21
+    |
+132 |     assert_eq!(form.submission("https://example.test/",None),Err(Error::Limit));
+    |                     ^^^^^^^^^^
+    |
+help: there is a method `submit` with a similar name
+    |
+132 |     assert_eq!(form.submit("https://example.test/",None),Err(Error::Limit));
+    |                     ~~~~~~
+
+error[E0599]: no method named `submission` found for struct `Form` in the current scope
+   --> tests/forms.rs:134:21
+    |
+134 |     assert_eq!(form.submission("https://example.test/",None),Err(Error::Limit));
+    |                     ^^^^^^^^^^
+    |
+help: there is a method `submit` with a similar name
+    |
+134 |     assert_eq!(form.submit("https://example.test/",None),Err(Error::Limit));
+    |                     ~~~~~~
+
+Some errors have detailed explanations: E0432, E0599.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `rustos-browser` (test "forms") due to 12 previous errors
+warning: build failed, waiting for other jobs to finish...
