@@ -34,6 +34,7 @@ current behavior; architecture targets are not evidence of implemented features.
 | [jbrowse scripting prototype](jbrowse-javascript.md) | Bounded inline JavaScript subset, typed DOM capabilities, engine research and limits |
 | [Google startup and forms](jbrowse-google.md) | Automatic Google homepage, generic GET forms, charset decoding and the remaining results-page limitation |
 | [jbrowse browser](jbrowse.md) | Native Ring 3 HTML/CSS browser, supported subset, limits and real-site testing |
+| [Window resizing](window-resize.md) | Compositor-owned edge resize/maximize/restore, version-2 SDK protocol and tested browser reflow |
 | [Window and UI toolkit](ui.md) | Native window API, canvas/widgets, glass materials and protocol |
 | [Expanded native capabilities](capabilities-validation.md) | Growable heap, larger images, offset writes, VFAT, environment and FP/compiler TLS evidence |
 | [Program arguments](arguments-validation.md) | argc/argv startup ABI, shell quoting and focused validation |

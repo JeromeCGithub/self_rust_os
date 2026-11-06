@@ -1,0 +1,7 @@
+idle CPU: 0.7% of one host core; pointer max: 30 ms
+idle terminal CPU: 7.5% of one host core
+keyboard burst drain: 0 ms
+Snake launch/wait with terminal CPU: 22.0% of one host core
+pointer under CPU load: 19 ms
+PASS: empty/terminal/Snake CPU budgets, keyboard bursts, and input under CPU load
+qemu-system-x86_64: terminating on signal 15 from pid 353126 (python3)

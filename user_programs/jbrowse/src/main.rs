@@ -21,6 +21,9 @@ struct Shared {
     result: Option<(u64, Result<loader::Loaded, String>)>,
 }
 struct Browser {
+    document: rustos_browser::Document,
+    fonts: Arc<ui::font::FontSet>,
+    size: (u32, u32),
     font_painter: ui::font::Painter,
     address: TextInput,
     current: String,
@@ -39,10 +42,13 @@ struct Browser {
 }
 impl Browser {
     fn new(fonts: Arc<ui::font::FontSet>) -> Self {
-        let initial = rustos_browser::Document::parse("<p>Loading the start page...</p>")
-            .expect("built-in page")
-            .layout_with(640, fonts.as_ref());
+        let document = rustos_browser::Document::parse("<p>Loading the start page...</p>")
+            .expect("built-in page");
+        let initial = document.layout_with(640, fonts.as_ref());
         Self {
+            document,
+            fonts: Arc::clone(&fonts),
+            size: (640, 400),
             font_painter: ui::font::Painter::new(fonts),
             address: TextInput::new(HOME_PAGE),
             current: String::new(),
@@ -59,6 +65,23 @@ impl Browser {
             active_field: None,
             field_editor: TextInput::default(),
         }
+    }
+    fn reflow(&mut self, width: u32, height: u32) {
+        if self.size == (width, height) {
+            return;
+        }
+        for (form, saved) in self.document.forms.iter_mut().zip(&self.page.forms) {
+            for (field, edited) in form.fields.iter_mut().zip(&saved.fields) {
+                field.value = edited.value.clone();
+            }
+        }
+        self.page = self.document.layout_with(width, self.fonts.as_ref());
+        self.size = (width, height);
+        self.pressed = None;
+        self.scroll_by(0);
+    }
+    fn view_height(&self) -> u32 {
+        self.size.1.saturating_sub(92)
     }
     fn navigate(&mut self, shared: &Mutex<Shared>, input: &str) {
         match address(input) {
@@ -92,11 +115,12 @@ impl Browser {
         }
     }
     fn scroll_by(&mut self, delta: i32) {
-        let max = self.page.height.saturating_sub(308);
+        let max = self.page.height.saturating_sub(self.view_height());
         self.scroll = (self.scroll as i64 + delta as i64).clamp(0, max as i64) as u32;
     }
     fn click(&mut self, shared: &Mutex<Shared>, x: i32, y: i32) {
-        if Rect::new(72, 30, 452, 26).contains(x, y) {
+        let (w, h) = (self.size.0 as i32, self.size.1 as i32);
+        if Rect::new(72, 30, self.size.0.saturating_sub(188), 26).contains(x, y) {
             self.editing = true;
             self.active_field = None;
             self.address.select_all();
@@ -104,7 +128,7 @@ impl Browser {
         }
         self.editing = false;
         self.active_field = None;
-        if (64..372).contains(&y) {
+        if (64..h - 28).contains(&y) {
             if let Some(control) = self
                 .page
                 .controls
@@ -139,10 +163,10 @@ impl Browser {
                 self.navigate(shared, &url);
                 self.history_mode = navigation::Mode::Forward;
             }
-        } else if Rect::new(532, 30, 48, 26).contains(x, y) {
+        } else if Rect::new(w - 108, 30, 48, 26).contains(x, y) {
             let url = self.address.as_str().to_string();
             self.navigate(shared, &url);
-        } else if Rect::new(588, 30, 44, 26).contains(x, y)
+        } else if Rect::new(w - 52, 30, 44, 26).contains(x, y)
             && (!self.current.is_empty() || self.loading)
         {
             if self.loading {
@@ -161,11 +185,11 @@ impl Browser {
                 self.navigate(shared, &url);
                 self.history_mode = navigation::Mode::Reload;
             }
-        } else if Rect::new(532, 376, 48, 20).contains(x, y) {
+        } else if Rect::new(w - 108, h - 24, 48, 20).contains(x, y) {
             self.scroll_by(-240);
-        } else if Rect::new(588, 376, 44, 20).contains(x, y) {
+        } else if Rect::new(w - 52, h - 24, 44, 20).contains(x, y) {
             self.scroll_by(240);
-        } else if (64..372).contains(&y) {
+        } else if (64..h - 28).contains(&y) {
             if let Some(link) = self.page.hit(x, y - 64 + self.scroll as i32) {
                 match resolve(&self.current, link) {
                     Ok(url) => self.navigate(shared, &url),
@@ -177,16 +201,21 @@ impl Browser {
         }
     }
     fn paint(&mut self, canvas: &mut ui::Canvas<'_>) {
+        self.reflow(canvas.width(), canvas.height());
+        let (w, h) = (self.size.0 as i32, self.size.1 as i32);
+        let view_height = self.view_height();
         canvas.clear(Color::rgb(0x15243a));
         canvas.rounded_rect(Rect::new(8, 4, 180, 22), 6, Color::rgb(0x263d59));
         ui::text(canvas, 18, 11, "jbrowse  /  1 tab", Color::rgb(0xd9e8f8), 1);
         canvas.rounded_rect(
-            Rect::new(72, 30, 452, 26),
+            Rect::new(72, 30, self.size.0.saturating_sub(188), 26),
             6,
             Color::rgb(if self.editing { 0xffffff } else { 0xe5edf5 }),
         );
-        if let Some(mut entry) = canvas.viewport(Rect::new(80, 37, 436, 12)) {
-            let max = 53;
+        if let Some(mut entry) =
+            canvas.viewport(Rect::new(80, 37, self.size.0.saturating_sub(204), 12))
+        {
+            let max = (entry.width() as usize / 8).saturating_sub(1);
             let text = self.address.as_str();
             let start = text.len().saturating_sub(max);
             let start = (start..=text.len())
@@ -208,19 +237,19 @@ impl Browser {
         for (x, y, w, h, label) in [
             (8, 30, 26, 26, "<"),
             (40, 30, 26, 26, ">"),
-            (532, 30, 48, 26, "Go"),
-            (588, 30, 44, 26, if self.loading { "Stop" } else { "R" }),
-            (532, 376, 48, 20, "Up"),
-            (588, 376, 44, 20, "Down"),
+            (w - 108, 30, 48, 26, "Go"),
+            (w - 52, 30, 44, 26, if self.loading { "Stop" } else { "R" }),
+            (w - 108, h - 24, 48, 20, "Up"),
+            (w - 52, h - 24, 44, 20, "Down"),
         ] {
             canvas.rounded_rect(Rect::new(x, y, w, h), 5, Color::rgb(0x314c6d));
             ui::text(canvas, x + 7, y + 7, label, Color::rgb(0xffffff), 1);
         }
-        if let Some(mut viewport) = canvas.viewport(Rect::new(0, 64, 640, 308)) {
+        if let Some(mut viewport) = canvas.viewport(Rect::new(0, 64, self.size.0, view_height)) {
             viewport.clear(Color::rgb(self.page.background));
             for item in &self.page.items {
                 let y = item.y - self.scroll as i32;
-                if y + item.height as i32 <= 0 || y >= 308 {
+                if y + item.height as i32 <= 0 || y >= view_height as i32 {
                     continue;
                 }
                 if let Some(color) = item.background {
@@ -239,8 +268,12 @@ impl Browser {
                 }
                 let left = item.x.max(0);
                 let top = y.max(0);
-                let right = (i64::from(item.x) + i64::from(item.width)).min(640).max(0) as i32;
-                let bottom = (i64::from(y) + i64::from(item.height)).min(308).max(0) as i32;
+                let right = (i64::from(item.x) + i64::from(item.width))
+                    .min(i64::from(self.size.0))
+                    .max(0) as i32;
+                let bottom = (i64::from(y) + i64::from(item.height))
+                    .min(i64::from(view_height))
+                    .max(0) as i32;
                 if right > left && bottom > top {
                     if let Some(mut fragment) = viewport.viewport(Rect::new(
                         left,
@@ -272,7 +305,7 @@ impl Browser {
             }
             for control in &self.page.controls {
                 let y = control.y - self.scroll as i32;
-                if y + control.height as i32 <= 0 || y >= 308 {
+                if y + control.height as i32 <= 0 || y >= view_height as i32 {
                     continue;
                 }
                 let field = &self.page.forms[control.form].fields[control.field];
@@ -299,7 +332,7 @@ impl Browser {
                 let left = control.x + 6;
                 let width = control.width.saturating_sub(12);
                 // Keep the complete control visible area inside the page viewport.
-                if y >= 0 && y + control.height as i32 <= 308 && width > 0 {
+                if y >= 0 && y + control.height as i32 <= view_height as i32 && width > 0 {
                     if let Some(mut input) = viewport.viewport(Rect::new(left, y + 7, width, 12)) {
                         let label = if field.value.is_empty() {
                             &field.label
@@ -329,7 +362,9 @@ impl Browser {
                 }
             }
         }
-        if let Some(mut status) = canvas.viewport(Rect::new(8, 380, 516, 14)) {
+        if let Some(mut status) =
+            canvas.viewport(Rect::new(8, h - 20, self.size.0.saturating_sub(124), 14))
+        {
             ui::text(&mut status, 0, 1, &self.status, Color::rgb(0xc6d9ed), 1);
         }
     }
@@ -397,6 +432,10 @@ fn main(_argc: usize, argv: &[&str]) {
                         active.cancel();
                     }
                     return;
+                }
+                Some(Event::Resized { width, height }) => {
+                    browser.reflow(width, height);
+                    dirty = true;
                 }
                 Some(Event::Focus(false)) => {
                     browser.pressed = None;
@@ -466,6 +505,10 @@ fn main(_argc: usize, argv: &[&str]) {
                         );
                         browser.title = loaded.title;
                         browser.page = loaded.page;
+                        browser.document = loaded.document;
+                        let (width, height) = (window.width(), window.height());
+                        browser.size = (0, 0);
+                        browser.reflow(width, height);
                         browser.scroll = 0;
                         browser.status = format!(
                             "HTTP {}  |  {}{}",

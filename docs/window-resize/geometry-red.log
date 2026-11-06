@@ -1,0 +1,19 @@
+
+running 1 test
+test tests::corners_resize_with_fixed_opposite_edges_and_workspace_clipping ... FAILED
+
+failures:
+
+---- tests::corners_resize_with_fixed_opposite_edges_and_workspace_clipping stdout ----
+
+thread 'tests::corners_resize_with_fixed_opposite_edges_and_workspace_clipping' panicked at user_programs/wm/src/geometry.rs:26:9:
+assertion `left == right` failed
+  left: Bounds { x: 100, y: 120, width: 640, height: 400 }
+ right: Bounds { x: 100, y: 120, width: 960, height: 600 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::corners_resize_with_fixed_opposite_edges_and_workspace_clipping
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

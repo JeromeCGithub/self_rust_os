@@ -5,6 +5,7 @@ Build first with tools/build-grub-disk.sh. Only the disposable development image
 is attached. Screenshots supplement the input and framebuffer assertions.
 """
 import json
+import os
 import pathlib
 import re
 import socket
@@ -121,6 +122,27 @@ def main():
                 assert log.read_text()[offset:].count('[hello-ui] accent changed:') == 1
                 colors = shot().crop((104, 424, 500, 436)).getcolors(10000) or []
                 assert any(color == (210, 185, 255) for _, color in colors), 'component state did not rerender after click'
+                if os.environ.get('RUSTOS_WINDOW_RESIZE') == '1':
+                    def close_at(point,name):
+                        deadline=time.monotonic()+20
+                        while True:
+                            image=shot(name)
+                            if image.getpixel(point)==(255,107,121):return image
+                            assert time.monotonic()<deadline, 'resize did not publish the expected bounds'
+                            time.sleep(.1)
+                    for _ in range(2):
+                        click(669,140)
+                        image=close_at((1902,42),'desktop-glass-maximized')
+                        assert image.getpixel((1800,900))!=backdrop.getpixel((1800,900)), 'maximized glass missing'
+                        assert image.getpixel((1919,0))==backdrop.getpixel((1919,0)), 'top panel overwritten'
+                        assert image.getpixel((1919,1079))==backdrop.getpixel((1919,1079)), 'bottom panel overwritten'
+                        for point in [(1000,26),(1000,1049)]:
+                            assert image.getpixel(point)==backdrop.getpixel(point), 'maximized shadow painted over a reserved panel'
+                        colors=image.crop((24,326,500,338)).getcolors(10000) or []
+                        assert any(color==(210,185,255) for _,color in colors), 'component state lost during maximize'
+                        click(1869,42)
+                        close_at((702,140),'desktop-glass-restored')
+                    print('PASS: repeated glass maximize/restore, preserved widget state and work area')
                 offset = log.stat().st_size
                 move(140, 298)
                 button(True)

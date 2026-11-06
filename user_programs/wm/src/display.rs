@@ -18,18 +18,15 @@ pub(super) struct Compositor {
     pub(super) cursor: Option<(i32, i32)>,
     pub(super) cursor_under: [u32; 8 * 14],
     pub(super) pointer_input: crate::input::PointerInput,
+    pub(super) caches: [crate::cache::Cache; MAX],
+    pub(super) staging: [Option<crate::cache::Cache>; MAX],
 }
 static mut BACK: [u32; MAX_PITCH / 4 * MAX_H] = [0; MAX_PITCH / 4 * MAX_H];
 static mut BASE: [u32; MAX_W * MAX_H] = [0; MAX_W * MAX_H];
-static mut SURFACE: [u32; MAX_PITCH / 4 * 480] = [0; MAX_PITCH / 4 * 480];
-pub(super) const CONTENT_W: usize = protocol::MAX_WIDTH;
-pub(super) const CONTENT_H: usize = protocol::MAX_HEIGHT;
+static mut SURFACE: [u32; MAX_PITCH / 4 * MAX_H] = [0; MAX_PITCH / 4 * MAX_H];
 pub(super) const TITLE_H: i32 = 28;
 pub(super) const HALO: i32 = crate::damage::BACKDROP_MARGIN as i32;
-pub(super) const BLUR_LEN: usize = 168 * 115;
-static mut CACHE: [[u32; CONTENT_W * CONTENT_H]; MAX] = [[0; CONTENT_W * CONTENT_H]; MAX];
-static mut BACKDROP_CACHE: [[u32; CONTENT_W * (CONTENT_H + TITLE_H as usize)]; MAX] =
-    [[0; CONTENT_W * (CONTENT_H + TITLE_H as usize)]; MAX];
+pub(super) const BLUR_LEN: usize = ((MAX_W + 32 + 3) / 4) * ((MAX_H + 28 + 32 + 3) / 4);
 static mut BLUR_A: [u32; BLUR_LEN] = [0; BLUR_LEN];
 static mut BLUR_B: [u32; BLUR_LEN] = [0; BLUR_LEN];
 pub(super) fn string(bytes: &[u8]) -> &str {
@@ -196,13 +193,58 @@ impl Compositor {
             bottom.saturating_sub(top),
         );
     }
-    pub(super) fn update_surface(&self, win: &mut Window) -> bool {
+    pub(super) fn update_surface(&mut self, win: &mut Window) -> bool {
         let status = sys::surface_status(win.pid);
         win.exited = status.map(|(_, exited)| exited).unwrap_or(true);
         if win.native && win.commit.is_none() {
             return false;
         }
         if !win.native && win.revision == status.ok() && win.revision.is_some() {
+            return false;
+        }
+        if win.resizable {
+            let Some(frame) = win
+                .commit
+                .and_then(|value| protocol::Frame::decode(protocol::COMMIT | value))
+            else {
+                return false;
+            };
+            let Some(bounds) = crate::geometry::frame_bounds(
+                win.bounds(),
+                win.offered,
+                win.resize_sent,
+                (frame.width, frame.height),
+            ) else {
+                win.commit = None;
+                win.reply = Some(protocol::REJECT);
+                win.closing = Some(sys::ticks());
+                return false;
+            };
+            if (bounds.width, bounds.height) != (win.width, win.height) {
+                let Some(cache) = self.staging[win.cache_slot]
+                    .take()
+                    .filter(|c| (c.width, c.height) == (bounds.width, bounds.height))
+                else {
+                    win.commit = None;
+                    win.reply = Some(protocol::REJECT);
+                    win.closing = Some(sys::ticks());
+                    return false;
+                };
+                self.caches[win.cache_slot] = cache;
+                (win.x, win.y, win.width, win.height) =
+                    (bounds.x, bounds.y, bounds.width, bounds.height);
+                win.expansion.committed();
+                win.offered = None;
+                win.resize_sent = false;
+                win.pointer = None;
+            }
+        }
+        if (
+            self.caches[win.cache_slot].width,
+            self.caches[win.cache_slot].height,
+        ) != (win.width, win.height)
+            && !self.allocate_content(win.cache_slot, win.width, win.height)
+        {
             return false;
         }
         let scale = !win.native && win.large;
@@ -234,7 +276,7 @@ impl Compositor {
                     } else {
                         SURFACE[sy * (self.info.pitch / 4) + sx]
                     };
-                    CACHE[win.cache_slot][y * CONTENT_W + x] = if win.native {
+                    self.caches[win.cache_slot].content[y * win.width + x] = if win.native {
                         pixel
                     } else {
                         pixel | 0xff000000
@@ -248,6 +290,13 @@ impl Compositor {
         true
     }
     pub(super) fn window(&mut self, win: &Window, active: bool, reuse_backdrop: bool) {
+        if (
+            self.caches[win.cache_slot].width,
+            self.caches[win.cache_slot].height,
+        ) != (win.width, win.height)
+        {
+            return;
+        }
         let w = win.width as i32;
         let h = win.height as i32 + TITLE_H;
         let blur_width = (w + HALO * 2 + 3) as usize / 4;
@@ -298,15 +347,19 @@ impl Compositor {
             }
             // A restrained shadow outside the rounded window's bounding box.
         }
-        for y in -8..h + 16 {
-            for x in -12..w + 12 {
-                if x >= 0 && y >= 0 && x < w && y < h {
-                    continue;
+        // Expanded windows end at the reserved work area; their shadow must
+        // not shade the DE panels outside it.
+        if !win.expansion.expanded() {
+            for y in -8..h + 16 {
+                for x in -12..w + 12 {
+                    if x >= 0 && y >= 0 && x < w && y < h {
+                        continue;
+                    }
+                    let dx = (-x).max(x - w + 1).max(0);
+                    let dy = (-y + 2).max(y - h - 2).max(0);
+                    let alpha = ((256 - dx * dx - dy * dy).max(0) / 12).min(21) as u8;
+                    self.blend(win.x + x, win.y + y, Color::rgba(3, 8, 18, alpha).0);
                 }
-                let dx = (-x).max(x - w + 1).max(0);
-                let dy = (-y + 2).max(y - h - 2).max(0);
-                let alpha = ((256 - dx * dx - dy * dy).max(0) / 12).min(21) as u8;
-                self.blend(win.x + x, win.y + y, Color::rgba(3, 8, 18, alpha).0);
             }
         }
         for y in 0..h {
@@ -320,7 +373,7 @@ impl Compositor {
                 }
                 let sx = (x + HALO) as usize;
                 let sy = (y + HALO) as usize;
-                let material_index = y as usize * CONTENT_W + x as usize;
+                let material_index = y as usize * win.width + x as usize;
                 let material = if !win.native && y >= TITLE_H {
                     0
                 } else if reuse_backdrop {
@@ -328,7 +381,7 @@ impl Compositor {
                     // paint initialized every covered pixel for this unique live
                     // slot. The isolated-content plan excludes changes to geometry,
                     // focus, background or any layer in the sampler's reach.
-                    unsafe { BACKDROP_CACHE[win.cache_slot][material_index] }
+                    self.caches[win.cache_slot].backdrop[material_index]
                 } else {
                     // SAFETY: Validated window geometry bounds the blur and
                     // material indices. This compositor alone owns both buffers;
@@ -345,17 +398,14 @@ impl Compositor {
                     // SAFETY: Same unique slot and bounded index. Populate even
                     // under opaque foreground pixels, which may become transparent
                     // on a later content-only frame.
-                    unsafe {
-                        BACKDROP_CACHE[win.cache_slot][material_index] = material;
-                    }
+                    self.caches[win.cache_slot].backdrop[material_index] = material;
                     material
                 };
                 let mut pixel = if y >= TITLE_H {
                     // SAFETY: Content coordinates and this live slot are bounded
                     // by the accepted dimensions; this WM alone owns CACHE.
-                    let content = unsafe {
-                        CACHE[win.cache_slot][(y - TITLE_H) as usize * CONTENT_W + x as usize]
-                    };
+                    let content = self.caches[win.cache_slot].content
+                        [(y - TITLE_H) as usize * win.width + x as usize];
                     over(content, material)
                 } else {
                     over(title_color, material)
@@ -381,6 +431,21 @@ impl Compositor {
             string(&win.title),
             if active { 0xf2f6ff } else { 0x9aaec5 },
         );
+        if win.resizable {
+            // A separate expand/restore target beside the existing close button.
+            let cx = win.x + w - 51;
+            let cy = win.y + 14;
+            for d in -5..=5 {
+                self.pixel(cx + d, cy - 5, 0xd9e8f8);
+                self.pixel(cx + d, cy + 5, 0xd9e8f8);
+                self.pixel(cx - 5, cy + d, 0xd9e8f8);
+                self.pixel(cx + 5, cy + d, 0xd9e8f8);
+            }
+            if win.expansion.expanded() {
+                self.pixel(cx - 2, cy - 2, 0xd9e8f8);
+                self.pixel(cx + 2, cy + 2, 0xd9e8f8);
+            }
+        }
         // Close control keeps a fixed, observable hit target for every material.
         for y in -5..=5 {
             for x in -5..=5 {
@@ -434,11 +499,23 @@ impl Compositor {
         };
         copied
     }
-    /// A live window owns its cache slot until removal from the session.
-    pub(super) fn reset_content(&mut self, window: &Window) {
-        // SAFETY: The session assigns a unique in-range slot to every live window.
-        unsafe {
-            CACHE[window.cache_slot].fill(0);
-        }
+    /// Allocate complete buffers before replacing any live cache or offering a resize.
+    pub(super) fn allocate_content(&mut self, slot: usize, width: usize, height: usize) -> bool {
+        let Some(cache) = crate::cache::Cache::new(width, height) else {
+            return false;
+        };
+        self.caches[slot] = cache;
+        true
+    }
+    pub(super) fn prepare_resize(&mut self, slot: usize, width: usize, height: usize) -> bool {
+        let Some(cache) = crate::cache::Cache::new(width, height) else {
+            return false;
+        };
+        self.staging[slot] = Some(cache);
+        true
+    }
+    pub(super) fn release_cache(&mut self, slot: usize) {
+        self.caches[slot] = crate::cache::Cache::empty();
+        self.staging[slot] = None;
     }
 }
