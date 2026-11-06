@@ -94,8 +94,11 @@ transport. Network failure leaves the previous page readable and shows an error.
 There is no JPEG/WebP/SVG, POST forms, cookies, storage, downloads, multiple tabs,
 flex/grid or responsive media queries. See [P2 limits](browser-rendering-p2.md) for
 image/font budgets and remaining classic browsing work.
-The [inline scripting prototype](jbrowse-javascript.md) adds a bounded JavaScript
-subset; it does not support modern JavaScript applications. Only HTTP(S) navigation is accepted; file/data/javascript links
+The [native JavaScript integration](browser-javascript-p3.md) executes bounded inline
+classic scripts in a restricted QuickJS child, with an initial DOM binding subset
+and explicit promise checkpoints. It replaces the prototype in the application.
+The [old subset interpreter](jbrowse-javascript.md) remains optional library/test
+code; it is not linked into jbrowse. Full modern web applications remain unsupported. Only HTTP(S) navigation is accepted; file/data/javascript links
 are rejected. HTTPS capability does not imply support for arbitrary modern sites.
 UTF-8 and Windows-1252/Latin-1 responses are supported through typed HTTP charset
 metadata; other declared encodings are rejected. Allocation failure

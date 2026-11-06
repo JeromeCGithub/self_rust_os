@@ -7,6 +7,37 @@ fn raw(number: u64, a: u64, b: u64, c: u64) -> u64 {
     unsafe { sys::syscall(number, a, b, c) }
 }
 fn main(_: usize, argv: &[&str]) {
+    if argv.contains(&"--host-child") {
+        let mut worker =
+            rustos_browser_worker::native::Native::start(|| false).expect("nested sealed worker");
+        assert_eq!(
+            raw(34, 1, 1024 * 1024, 0),
+            sys::SYSCALL_ERROR,
+            "worker host cannot seal with a live descendant"
+        );
+        let effects = worker
+            .render_document(
+                "<script>Promise.resolve(42).then(n=>{document.title='Native nested '+n})</script>",
+                || false,
+            )
+            .unwrap();
+        assert_eq!(&effects[4..8], &[0; 4]);
+        assert!(effects
+            .windows(b"Native nested 42".len())
+            .any(|w| w == b"Native nested 42"));
+        let parent_selector = raw(22, 0, 0, 0) >> 1;
+        assert_eq!(
+            raw(22, 2, 0, parent_selector),
+            sys::SYSCALL_ERROR,
+            "parent cannot be selected as an owned child"
+        );
+        let mut input = [0];
+        assert_eq!(sys::read(sys::STDIN_FD, &mut input), 1);
+        assert_eq!(input, [0x5a], "worker IPC preserves parent stdin");
+        drop(worker);
+        userlib::println!("nested host PASS");
+        return;
+    }
     if argv.contains(&"--unconnected") {
         assert_eq!(raw(34, 1, 1024 * 1024, 0), sys::SYSCALL_ERROR);
         return;
@@ -86,6 +117,11 @@ fn main(_: usize, argv: &[&str]) {
             sys::SYSCALL_ERROR,
             "no keyboard capability"
         );
+        assert_eq!(
+            raw(22, 2, 0, u64::from(u32::MAX) + 1),
+            sys::SYSCALL_ERROR,
+            "sealed worker cannot select a foreign child endpoint"
+        );
         let base = raw(31, 0, 0, 0);
         let cap = 0x1_0000_0000 + 1024 * 1024;
         assert_eq!(raw(31, cap, 0, 0), cap);
@@ -158,6 +194,43 @@ fn main(_: usize, argv: &[&str]) {
             sys::sleep_ticks(1).unwrap();
         }
     }
+    for _ in 0..3 {
+        let mut nested = Child::spawn_with_args("/BIN/ZSANDBOX.BIN", &["--host-child"]).unwrap();
+        nested.write_byte(0x5a).unwrap();
+        let mut text = [0u8; 64];
+        let mut used = 0;
+        let started = sys::ticks();
+        loop {
+            match nested.read() {
+                Ok(Some((part, n))) => {
+                    assert!(used + n <= text.len());
+                    text[used..used + n].copy_from_slice(&part[..n]);
+                    used += n;
+                    if text[..used]
+                        .windows(b"nested host PASS".len())
+                        .any(|w| w == b"nested host PASS")
+                    {
+                        break;
+                    }
+                }
+                Ok(None) => {
+                    sys::sleep_ticks(1).unwrap();
+                }
+                Err(_) => panic!("nested host failed"),
+            }
+            assert!(
+                sys::ticks().wrapping_sub(started) < 180,
+                "nested document deadline"
+            );
+        }
+        drop(nested);
+        assert_eq!(raw(31, 0, 0, 0), parent_break);
+        let deadline = sys::ticks() + 50;
+        while raw(107, 0, 0, 0) != before {
+            assert!(sys::ticks() < deadline, "nested worker frames reclaimed");
+            sys::sleep_ticks(1).unwrap();
+        }
+    }
     use rustos_browser_worker::{native::Native, Error};
     for _ in 0..3 {
         let mut worker = Native::start(|| false).expect("sealed engine handshake");
@@ -181,6 +254,23 @@ fn main(_: usize, argv: &[&str]) {
             Err(Error::Engine(3))
         );
         assert_eq!(worker.eval("6*7", || false).unwrap(), "42");
+        let effects = worker.render_document("<p id=x>Before</p><script>Promise.resolve(6).then(n=>{document.title='Native restricted DOM';document.getElementById('x').textContent=String(n*7)})</script>", ||false).expect("restricted native DOM document");
+        assert_eq!(&effects[..4], b"JDM1");
+        assert_eq!(&effects[4..8], &[0; 4], "native script succeeds");
+        assert!(effects
+            .windows(b"Native restricted DOM".len())
+            .any(|w| w == b"Native restricted DOM"));
+        assert!(
+            raw(107, 0, 0, 0) - before < 8192,
+            "document fits existing worker envelope"
+        );
+        let fresh = worker
+            .render_document("<script>document.title=typeof C</script>", || false)
+            .unwrap();
+        assert!(
+            fresh.windows(b"undefined".len()).any(|w| w == b"undefined"),
+            "document realm has no earlier eval globals"
+        );
         assert_eq!(worker.eval("6*7", || true), Err(Error::Cancelled));
         drop(worker);
         let deadline = sys::ticks() + 50;

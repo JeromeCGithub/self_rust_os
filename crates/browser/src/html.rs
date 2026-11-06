@@ -198,7 +198,6 @@ pub(crate) fn parse(source: &str) -> Result<Document, Error> {
                     if tag == "textarea" {
                         doc.nodes[id].text = entities(raw);
                     }
-                    #[cfg(feature = "javascript")]
                     if tag == "script" {
                         doc.nodes[id].text = raw.to_string();
                     }

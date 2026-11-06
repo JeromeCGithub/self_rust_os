@@ -91,6 +91,11 @@ bounded work; ordinary scheduler entry consumes pending wakeups. Readiness sysca
 109 atomically checks and parks on mailbox, connected-I/O, focused-keyboard and
 display-owner pointer events.
 Portal uses a native I/O thread independently of its renderer; app policy stays in Ring 3.
+A connected application can host one separately addressed connected child through
+syscall22's owned-child selector, while stdin/stdout still reach its parent.
+Descendant queues remain private and bounded; host teardown stops/reaps its owned
+chain. [P3](browser-javascript-p3.md) uses this generic mechanism for restricted
+script workers. HTML/DOM/JavaScript policy never enters the kernel.
 
 Blocking reads, waits and sleeps affect the calling thread. Thread states are
 `Ready`, `Running`, `Blocked` and `Zombie`; process lifetime is `Live`/`Zombie`.

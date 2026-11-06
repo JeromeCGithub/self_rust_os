@@ -1,0 +1,16 @@
+   Compiling self_rust_os v0.1.0 (/home/jay/personal/os/jbrowse)
+    Finished `release` profile [optimized] target(s) in 0.89s
+     Running tests/heap_allocation.rs (target/x86_64-self-rust-os/release/deps/heap_allocation-d26f7011b9e65c8f)
+Building bootloader
+   Compiling bootloader v0.9.30 (/home/jay/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bootloader-0.9.30)
+warning: target json file contains unused fields: rustc-abi
+
+warning: `bootloader` (lib) generated 1 warning
+warning: `bootloader` (bin "bootloader") generated 1 warning (1 duplicate)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.34s
+Running: `qemu-system-x86_64 -drive format=raw,file=/home/jay/personal/os/jbrowse/target/x86_64-self-rust-os/release/deps/bootimage-heap_allocation-d26f7011b9e65c8f.bin -no-reboot -m 1024 -device isa-debug-exit,iobase=0xf4,iosize=0x04 -serial stdio -display none -drive file=tests/fixtures/disk-ata.img,format=raw,file.locking=off -drive file=tests/fixtures/disk-fat32.img,format=raw,file.locking=off`
+heap_allocation::larger_kernel_heap_supports_concurrent_loading_buffers...	[ok]
+heap_allocation::when_creating_large_vec_then_memory_is_allocated...	[ok]
+heap_allocation::when_creating_simple_allocation_then_memory_is_allocated...	[ok]
+heap_allocation::when_loading_1080p_compositor_then_staging_buffer_fits...	[ok]
+heap_allocation::when_many_boxes_are_allocated_then_memory_is_allocated...	[ok]

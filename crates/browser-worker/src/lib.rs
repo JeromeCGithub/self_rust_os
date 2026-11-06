@@ -29,6 +29,7 @@ pub enum Kind {
     Eval = 1,
     Result = 2,
     Failure = 3,
+    Document = 4,
 }
 /// Explicit-width, little-endian wire fields, validated before allocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,7 +43,9 @@ impl Header {
     fn valid(&self) -> bool {
         match self.kind {
             Kind::Ready => self.generation == 0 && self.length == 0 && self.status == 0,
-            Kind::Eval => self.generation != 0 && self.length <= MAX_SOURCE && self.status == 0,
+            Kind::Eval | Kind::Document => {
+                self.generation != 0 && self.length <= MAX_SOURCE && self.status == 0
+            }
             Kind::Result => self.generation != 0 && self.length <= MAX_OUTPUT && self.status == 0,
             Kind::Failure => {
                 self.generation != 0 && self.length == 0 && (1..=6).contains(&self.status)
@@ -72,6 +75,7 @@ impl Header {
             1 => Kind::Eval,
             2 => Kind::Result,
             3 => Kind::Failure,
+            4 => Kind::Document,
             _ => return Err(Error::Protocol),
         };
         let header = Self {
@@ -156,23 +160,51 @@ impl<E: Endpoint> Session<E> {
         self.read(&mut bytes, start, cancel)?;
         Header::parse(bytes)
     }
+    /// Execute a document in its own native realm and return bounded DOM effects.
+    pub fn render_document(
+        &mut self,
+        html: &str,
+        cancel: impl Fn() -> bool,
+    ) -> Result<Vec<u8>, Error> {
+        self.request(Kind::Document, html, &cancel)
+    }
     /// Evaluate one bounded script; recoverable engine errors preserve the realm.
     /// Cancellation, EOF, malformed replies and deadlines kill/reap the endpoint.
     pub fn eval(&mut self, source: &str, cancel: impl Fn() -> bool) -> Result<String, Error> {
-        if source.len() > MAX_SOURCE || source.as_bytes().contains(&0) {
+        let bytes = self.request(Kind::Eval, source, &cancel)?;
+        match String::from_utf8(bytes) {
+            Ok(text) => Ok(text),
+            Err(_) => {
+                self.endpoint.take();
+                Err(Error::Protocol)
+            }
+        }
+    }
+    fn request(
+        &mut self,
+        kind: Kind,
+        source: &str,
+        cancel: &impl Fn() -> bool,
+    ) -> Result<Vec<u8>, Error> {
+        if source.len() > MAX_SOURCE || (kind == Kind::Eval && source.as_bytes().contains(&0)) {
             return Err(Error::Input);
         }
-        let result = self.evaluate(source, &cancel);
+        let result = self.evaluate(kind, source, cancel);
         if matches!(result,Err(error) if !matches!(error,Error::Engine(_)|Error::Input)) {
             self.endpoint.take();
         }
         result
     }
-    fn evaluate(&mut self, source: &str, cancel: &impl Fn() -> bool) -> Result<String, Error> {
+    fn evaluate(
+        &mut self,
+        kind: Kind,
+        source: &str,
+        cancel: &impl Fn() -> bool,
+    ) -> Result<Vec<u8>, Error> {
         self.generation = self.generation.checked_add(1).ok_or(Error::Unavailable)?;
         let generation = self.generation;
         let bytes = Header {
-            kind: Kind::Eval,
+            kind,
             generation,
             length: source.len(),
             status: 0,
@@ -202,7 +234,7 @@ impl<E: Endpoint> Session<E> {
                     .map_err(|_| Error::Memory)?;
                 bytes.resize(reply.length, 0);
                 self.read(&mut bytes, start, cancel)?;
-                String::from_utf8(bytes).map_err(|_| Error::Protocol)
+                Ok(bytes)
             }
             _ => Err(Error::Protocol),
         }

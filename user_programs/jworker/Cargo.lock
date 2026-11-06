@@ -12,6 +12,7 @@ checksum = "875488b8711a968268c7cf5d139578713097ca4635a76044e8fe8eedf831d07e"
 name = "jworker"
 version = "0.1.0"
 dependencies = [
+ "rustos-browser-dom",
  "rustos-browser-worker",
  "rustos-quickjs",
  "userlib",
@@ -28,6 +29,22 @@ name = "linked_list_allocator"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "549ce1740e46b291953c4340adcd74c59bcf4308f4cac050fd33ba91b7168f4a"
+
+[[package]]
+name = "rustos-browser"
+version = "0.1.0"
+dependencies = [
+ "rustos-text",
+ "rustos-web-image",
+]
+
+[[package]]
+name = "rustos-browser-dom"
+version = "0.1.0"
+dependencies = [
+ "rustos-browser",
+ "rustos-quickjs",
+]
 
 [[package]]
 name = "rustos-browser-worker"
@@ -63,8 +80,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustos-text"
+version = "0.1.0"
+
+[[package]]
 name = "rustos-thread-abi"
 version = "0.1.0"
+
+[[package]]
+name = "rustos-web-image"
+version = "0.1.0"
+dependencies = [
+ "zune-core",
+ "zune-png",
+]
+
+[[package]]
+name = "simd-adler32"
+version = "0.3.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
 name = "spin"
@@ -84,4 +119,29 @@ dependencies = [
  "rustos-process-abi",
  "rustos-thread-abi",
  "spin",
+]
+
+[[package]]
+name = "zune-core"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f423a2c17029964870cfaabb1f13dfab7d092a62a29a89264f4d36990ca414a"
+
+[[package]]
+name = "zune-inflate"
+version = "0.2.54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73ab332fe2f6680068f3582b16a24f90ad7096d5d39b974d1c0aff0125116f02"
+dependencies = [
+ "simd-adler32",
+]
+
+[[package]]
+name = "zune-png"
+version = "0.4.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d29c085769c6f29effea890f093120ac019375fdc789d2a496ba8ba96c77509"
+dependencies = [
+ "zune-core",
+ "zune-inflate",
 ]

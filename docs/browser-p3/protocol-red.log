@@ -1,0 +1,28 @@
+   Compiling rustos-browser-worker v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser-worker)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (/home/jay/personal/os/jbrowse/crates/browser-worker/target/x86_64-unknown-linux-gnu/debug/deps/rustos_browser_worker-462275c70492cca7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/protocol.rs (/home/jay/personal/os/jbrowse/crates/browser-worker/target/x86_64-unknown-linux-gnu/debug/deps/protocol-d5ac08dd6c9e8ba8)
+
+running 1 test
+test document_requests_have_a_distinct_kind_and_preserve_binary_effect_records ... FAILED
+
+failures:
+
+---- document_requests_have_a_distinct_kind_and_preserve_binary_effect_records stdout ----
+
+thread 'document_requests_have_a_distinct_kind_and_preserve_binary_effect_records' panicked at tests/protocol.rs:117:46:
+called `Result::unwrap()` on an `Err` value: Protocol
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    document_requests_have_a_distinct_kind_and_preserve_binary_effect_records
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test protocol`

@@ -11,6 +11,7 @@ opt-level = "z"
 lto = true
 [dependencies]
 userlib = { path = "../userlib", default-features = true }
+rustos-browser-dom = { path = "../../crates/browser-dom" }
 rustos-quickjs = { path = "../../crates/quickjs" }
 rustos-browser-worker = { path = "../../crates/browser-worker" }
 [[bin]]

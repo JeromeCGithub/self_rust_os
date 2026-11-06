@@ -1,0 +1,9 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/dom.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/dom-3b05a15ba13ae843)
+
+running 2 tests
+test bounded_pointer_free_changes_round_trip_and_reject_malformed_input ... ok
+test text_is_literal_and_invalid_worker_effects_cannot_partially_commit ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

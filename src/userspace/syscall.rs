@@ -172,10 +172,15 @@ pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: 
         }
         30 if arg3 == 48 => crate::userspace::launch::spawn(arg1, arg2),
         SYS_STDIO => {
-            if arg1 > 2 || arg2 > u32::MAX as u64 || arg3 != 0 || (arg1 != 1 && arg2 != 0) {
+            if arg1 > 2
+                || arg2 > u32::MAX as u64
+                || (arg3 > u32::MAX as u64 + 1)
+                || (arg1 == 0 && arg3 != 0)
+                || (arg1 != 1 && arg2 != 0)
+            {
                 return SYSCALL_ERROR;
             }
-            crate::scheduler::stdio(arg1, arg2 as u32)
+            crate::scheduler::stdio_selected(arg1, arg2 as u32, arg3)
         }
         SYS_KILL => sys_kill(arg1),
         SYS_WAITPID => sys_waitpid(arg1),
@@ -759,9 +764,14 @@ mod tests {
 
     #[test_case]
     fn stdio_rejects_reserved_and_truncated_arguments() {
-        for (op, payload, reserved) in
-            [(3, 0, 0), (1, u64::MAX, 0), (0, 1, 0), (2, 1, 0), (0, 0, 1)]
-        {
+        for (op, payload, reserved) in [
+            (3, 0, 0),
+            (1, u64::MAX, 0),
+            (0, 1, 0),
+            (2, 1, 0),
+            (0, 0, 1),
+            (2, 0, u64::MAX),
+        ] {
             assert_eq!(
                 syscall_dispatch(SYS_STDIO, op, payload, reserved),
                 SYSCALL_ERROR

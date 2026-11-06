@@ -25,6 +25,7 @@ current behavior; architecture targets are not evidence of implemented features.
 | [Network performance](network-performance.md) | TCP window optimization, DMA, measurements and future event delivery |
 | [Networking validation](networking-validation.md) | Red/green evidence, packet captures and remaining limits |
 | [Ethernet networking plan](networking-plan.md) | Delivered ping/client sockets and roadmap toward DNS, HTTP and TLS |
+| [Browser P3 JavaScript](browser-javascript-p3.md) | Restricted QuickJS DOM effects, bounded promise checkpoints, nested owned IPC and open web API gates |
 | [Browser P2 presentation](browser-rendering-p2.md) | Proportional native fonts, bounded PNG, stylesheet order and navigation; remaining classic browsing gates |
 | [Browser P1 runtime](browser-runtime-p1.md) | Restricted native worker, framed IPC, heap limits, cancellation and navigation/resource recovery |
 | [Browser P0 engine decision](browser-engine-p0.md) | Native QuickJS feasibility, ownership, full-engine investigation and remaining platform work |

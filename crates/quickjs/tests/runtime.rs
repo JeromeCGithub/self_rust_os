@@ -79,3 +79,87 @@ extern "C" fn rustos_qjs_epoch_micros() -> u64 {
 extern "C" fn rustos_qjs_abort() -> ! {
     std::process::abort()
 }
+
+#[test]
+fn classic_execution_does_not_coerce_unused_results_and_jobs_are_explicit() {
+    let mut runtime = Runtime::new(Limits::default()).unwrap();
+    runtime
+        .execute("globalThis.result=0; ({toString(){throw Error('must not coerce')}})")
+        .unwrap();
+    runtime
+        .execute("Promise.resolve(6).then(x=>{result=x*7})")
+        .unwrap();
+    assert_eq!(runtime.eval("result").unwrap(), "0");
+    assert_eq!(runtime.run_jobs(16), Ok(1));
+    assert_eq!(runtime.eval("result").unwrap(), "42");
+    assert_eq!(runtime.run_jobs(16), Ok(0));
+    assert_eq!(runtime.run_jobs(0), Err(Error::InvalidInput));
+}
+
+#[test]
+fn promise_checkpoints_bound_both_job_count_and_cpu_work() {
+    let mut runtime = Runtime::new(Limits::default()).unwrap();
+    runtime
+        .execute("function again(){Promise.resolve().then(again)}; again()")
+        .unwrap();
+    assert_eq!(runtime.run_jobs(8), Err(Error::Interrupted));
+    drop(runtime); // Discard the unbounded queue with its realm.
+    let mut runtime = Runtime::new(Limits::default()).unwrap();
+    runtime
+        .execute("Promise.resolve().then(()=>{for(;;){}})")
+        .unwrap();
+    assert_eq!(runtime.run_jobs(8), Err(Error::Interrupted));
+    assert_eq!(runtime.eval("6*7").unwrap(), "42");
+}
+
+#[test]
+fn native_host_calls_copy_values_and_keep_state_owned_until_engine_drops() {
+    struct Host {
+        calls: usize,
+    }
+    impl rustos_quickjs::Host for Host {
+        fn call(
+            &mut self,
+            op: u32,
+            node: u32,
+            a: &str,
+            b: &str,
+        ) -> Result<rustos_quickjs::Reply, Error> {
+            self.calls += 1;
+            Ok(match op {
+                0 => rustos_quickjs::Reply::Text(format!("{node}:{a}:{b}")),
+                1 => rustos_quickjs::Reply::Node(42),
+                2 => rustos_quickjs::Reply::Null,
+                3 => rustos_quickjs::Reply::Unit,
+                4 => rustos_quickjs::Reply::Text("x".repeat(8193)),
+                _ => return Err(Error::InvalidInput),
+            })
+        }
+    }
+    let mut runtime = Runtime::new(Limits::default())
+        .unwrap()
+        .with_host(Host { calls: 0 })
+        .unwrap();
+    assert_eq!(
+        runtime.eval("__rustosHost(0,7,'café','Ω')").unwrap(),
+        "7:café:Ω"
+    );
+    assert_eq!(runtime.eval("JSON.stringify([__rustosHost(1,0,'',''),__rustosHost(2,0,'',''),typeof __rustosHost(3,0,'','')])").unwrap(), "[42,null,\"undefined\"]");
+    assert_eq!(
+        runtime.eval("__rustosHost(255,0,'','')"),
+        Err(Error::Exception)
+    );
+    assert_eq!(
+        runtime.eval("__rustosHost(4,0,'','')"),
+        Err(Error::Exception)
+    );
+    assert_eq!(
+        runtime.eval("__rustosHost(0,0,'x'.repeat(8193),'')"),
+        Err(Error::Exception)
+    );
+    assert_eq!(
+        runtime.host().calls,
+        6,
+        "oversized input never reaches the host"
+    );
+}
