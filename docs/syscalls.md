@@ -311,6 +311,32 @@ Failed=3, distinct from network errors and scheduler control sentinels. Existing
 syscall numbers and network ABI records remain unchanged. TLS, certificates,
 trust policy and HTTPS are [userspace library responsibilities](tls.md), with no
 TLS-specific kernel syscall.
+## PCM audio output
+
+Audio policy/decoding remains Ring3. The optional kernel AC97 driver exposes one
+exclusive stereo signed16-bit little-endian48kHz stream, with opaque PID-owned
+handles and32 bounded DMA descriptors. See [P6 ownership/testing](browser-media-p6.md).
+
+| Number | SDK operation | Arguments (`rdi`, `rsi`, `rdx`) | Result |
+| --- | --- | --- | --- |
+|82 | `audio::Stream::open` |zero, zero, zero |Owned handle, or NoDevice/Busy/error |
+|83 | `Stream::write` |handle, readable PCM ptr, byte length |Exact accepted bytes or WouldBlock/error; length4–4096, divisible by4 |
+|84 | Stream control/Drop |handle, operation, zero |0 or error;0 close,1 pause,2 resume |
+|85 | `Stream::status` |handle, writable status ptr,40 |0 or error; copies complete version1 record |
+
+Status layout is padding-free: version u32, flags u32 (bit0 running,bit1 paused),
+submitted frames u64, played frames u64, queued frames u32, free slots u32,
+hardware FIFO-error count u64. Counters are complete stereo PCM frames, not bytes
+or individual samples. Complete readable/writable mappings and reserved arguments
+are validated before device access; no user pointer survives a copy. Audio errors
+use `u64::MAX-1023+code` (Invalid1, NoDevice2, Busy3, WouldBlock4, Failed5,
+NotOwner6); unknown reserved encodings fail closed in the SDK.
+
+Close/exit/kill stops DMA and invalidates the lease, including owned child teardown.
+Boot-owned33 DMA frames are reused for the controller lifetime. Reset failure
+quarantines the controller and prevents buffer reuse. Restricted script workers
+cannot invoke these calls. This is a native mechanism, not an OSS/ALSA/Linux ABI.
+
 ## Connected child standard I/O
 
 `spawn` flags zero retains ordinary spawning. Flag one creates an owned duplex

@@ -36,6 +36,7 @@ pub use args::{argc, args, argv};
 pub mod env;
 pub mod fs;
 pub mod http;
+pub mod audio;
 pub mod io;
 pub mod net;
 pub mod process;

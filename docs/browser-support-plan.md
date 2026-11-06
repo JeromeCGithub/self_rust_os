@@ -268,6 +268,11 @@ WebRTC/device permissions.
 
 ### P6 — Media and OS audio before YouTube
 
+Implementation in progress: [native PCM and userspace WAV playback](browser-media-p6.md).
+The audio mechanism/player is tested; codecs, browser media elements and synchronized
+video remain open. [Browser startup performance](browser-performance.md) now has
+fixed native timing gates and measured on-demand font initialization.
+
 - Add an audio device mechanism with bounded PCM streams, clock/position,
   readiness, buffer ownership, underrun handling and close/kill recovery. Choose
   a documented QEMU device first; mixing/codecs/player policy stay in Ring 3.

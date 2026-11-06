@@ -1,0 +1,23 @@
+   Compiling rustos-audio-queue v0.1.0 (/home/jay/personal/os/jbrowse/crates/audio-queue)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (/home/jay/personal/os/jbrowse/crates/audio-queue/target/x86_64-unknown-linux-gnu/debug/deps/rustos_audio_queue-7dd244cc5ac6fb36)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/queue.rs (/home/jay/personal/os/jbrowse/crates/audio-queue/target/x86_64-unknown-linux-gnu/debug/deps/queue-21e8685463a68355)
+
+running 3 tests
+test backpressure_cursor_wrap_and_last_buffer_completion_preserve_pcm_frame_counts ... ok
+test empty_partial_and_invalid_observations_cannot_invent_or_lose_samples ... ok
+test paused_partial_descriptor_rebases_without_replaying_or_losing_frames ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustos_audio_queue
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

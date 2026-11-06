@@ -1,0 +1,22 @@
+   Compiling rustos-audio-abi v0.1.0 (/home/jay/personal/os/jbrowse/crates/audio-abi)
+   Compiling rustos-audio-queue v0.1.0 (/home/jay/personal/os/jbrowse/crates/audio-queue)
+error[E0599]: no method named `rebase` found for struct `Ring` in the current scope
+  --> tests/queue.rs:44:21
+   |
+44 |     assert_eq!(ring.rebase(1024).unwrap(),(1,512));
+   |                     ^^^^^^ method not found in `Ring`
+
+error[E0599]: no method named `completed` found for struct `Ring` in the current scope
+  --> tests/queue.rs:45:21
+   |
+45 |     assert_eq!(ring.completed(),1536);assert_eq!(ring.queued(),3);
+   |                     ^^^^^^^^^ private field, not a method
+
+error[E0599]: no method named `rebase` found for struct `Ring` in the current scope
+  --> tests/queue.rs:50:21
+   |
+50 |     assert_eq!(ring.rebase(0).unwrap().1,0);
+   |                     ^^^^^^ method not found in `Ring`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `rustos-audio-queue` (test "queue") due to 3 previous errors

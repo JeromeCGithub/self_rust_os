@@ -1,0 +1,6 @@
+{
+  "sample_rate": 48000,
+  "channels": 2,
+  "active_frames": 36864,
+  "frequency_hz": 984.375
+}

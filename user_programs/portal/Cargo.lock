@@ -23,6 +23,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustos-audio-abi"
+version = "0.1.0"
+
+[[package]]
 name = "rustos-http"
 version = "0.1.0"
 dependencies = [
@@ -57,6 +61,7 @@ version = "0.1.0"
 dependencies = [
  "font8x8",
  "linked_list_allocator",
+ "rustos-audio-abi",
  "rustos-http",
  "rustos-net-abi",
  "rustos-platform-abi",
