@@ -69,6 +69,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             '/script': b"<title>Before script</title><p id='result'>Waiting</p><script>const n=6*7; document.getElementById('result').textContent='Answer: '+n; document.getElementById('result').style.color='#123456'; document.body.style.backgroundColor='#e8dcff'; document.title='Script ready';</script>",
             '/native-script': b"<title>Before native</title><p id='result'>Waiting</p><script>class Counter {#n=40;next(){return ++this.#n}} const c=new Counter(); const p=document.getElementById('result'); if(p!==document.getElementById('result') || typeof os!=='undefined' || typeof __rustosHost!=='undefined')throw Error('boundary'); p.style.color='#0c5a42'; Promise.resolve([c.next(),c.next()].map(x=>x*2)).then(xs=>{p.textContent='Native functions: '+xs.join(',');document.body.style.backgroundColor='#c9eaff';document.title='Native engine ready';}); ({toString(){throw Error('unused completion')}});</script>",
             '/native-queue': b"<title>Native queue bounded</title><style>body {background:#fff0dd}</style><p>Still readable after a microtask loop</p><script>function again(){Promise.resolve().then(again)};again()</script>",
+            '/native-attributes': b"<title>Before attributes</title><style>.ready{background:#b4e9d2;color:#163e72;padding:12px}</style><a id='result' style='display:none' href='/wrong'>Scripted destination</a><script>const a=document.getElementById('result');a.setAttribute('CLASS','ready');a.removeAttribute('style');a.setAttribute('href',atob('L2Rpci9uZXh0Lmh0bWw='));if(a.getAttribute('style')!==null || a.className!=='ready')throw Error('attributes');document.body.setAttribute('style','background:#edf6ff');document.title=atob(btoa('Native attributes ready'));</script>",
             '/blank-script': b"<title>Blank script</title><script>while(true) {}</script>",
             '/bad-script': b"<title>Unsupported script</title><style>body {background:#fce8e6}</style><script>while(true) {}</script><p>Still readable</p>",
         }
@@ -233,6 +234,15 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
             pixel((ox+500,oy+200),(255,240,221),'native-queue')
             assert '[jbrowse] script errors: 1' in output()[last_navigation:], 'unbounded microtask queue was not rejected'
             print('PASS: native restricted QuickJS, classes/functions/promises, DOM pixels and bounded microtask recovery')
+        if os.environ.get('RUSTOS_JBROWSE_P4') == '1':
+            navigate('/native-attributes');wait('[jbrowse] loaded: Native attributes ready')
+            pixel((ox+500,oy+200),(237,246,255),'native-attributes')
+            # Blank area of the class-colored row, clear of antialiased glyphs.
+            pixel((ox+500,oy+75),(180,233,210),'native-attributes')
+            assert '[jbrowse] script errors:' not in output()[last_navigation:]
+            mark=len(output());click(ox+90,oy+80);wait('[jbrowse] loaded: Second page',mark)
+            assert '/dir/next.html' in requests and '/wrong' not in requests, 'scripted href was not followed'
+            print('PASS: native attributes, CSS class/style invalidation, base64 and real scripted link navigation')
         navigate('/start')
         wait('[jbrowse] loaded: Browser fixture')
         assert '/dir/theme.css' in requests, requests

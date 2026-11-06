@@ -15,6 +15,12 @@ pub enum Change {
         property: String,
         value: String,
     },
+    /// HTML attribute mutation; None removes the attribute. Names are lowercase.
+    Attribute {
+        node: u32,
+        name: String,
+        value: Option<String>,
+    },
 }
 #[derive(Default, Debug, PartialEq, Eq)]
 pub struct Changes {
@@ -32,7 +38,7 @@ impl Changes {
         bytes.extend_from_slice(&(self.changes.len() as u16).to_le_bytes());
         bytes.extend_from_slice(&[0; 2]);
         for change in &self.changes {
-            let (kind, node, property, value) = match change {
+            let (kind, node, property, value): (u8, u32, &str, &str) = match change {
                 Change::Title(value) => (0, 0, "", value),
                 Change::Text { node, value } => (1, *node, "", value),
                 Change::Style {
@@ -40,6 +46,12 @@ impl Changes {
                     property,
                     value,
                 } => (2, *node, property.as_str(), value),
+                Change::Attribute { node, name, value } => (
+                    if value.is_some() { 3 } else { 4 },
+                    *node,
+                    name.as_str(),
+                    value.as_deref().unwrap_or(""),
+                ),
             };
             if property.len() > 128 || value.len() > MAX_CHANGE_BYTES {
                 return Err(Error::Limit);
@@ -96,6 +108,16 @@ impl Changes {
                     node,
                     property: key.to_string(),
                     value,
+                },
+                3 if property > 0 => Change::Attribute {
+                    node,
+                    name: key.to_string(),
+                    value: Some(value),
+                },
+                4 if property > 0 && value.is_empty() => Change::Attribute {
+                    node,
+                    name: key.to_string(),
+                    value: None,
                 },
                 _ => return Err(Error::Limit),
             });
@@ -181,6 +203,44 @@ impl Document {
                     node.attributes[i].1 = style;
                 } else {
                     node.attributes.push(("style".to_string(), style));
+                }
+            }
+            Change::Attribute { node, name, value } => {
+                if name.is_empty()
+                    || name.len() > 128
+                    || !name.bytes().all(|b| {
+                        b.is_ascii_lowercase() || b.is_ascii_digit() || b"_:.-".contains(&b)
+                    })
+                    || value.as_ref().is_some_and(|v| v.len() > MAX_CHANGE_BYTES)
+                {
+                    return Err(Error::Limit);
+                }
+                let id = *node as usize;
+                let node = self.nodes.get_mut(id).ok_or(Error::Limit)?;
+                if node.tag.is_empty() {
+                    return Err(Error::Limit);
+                }
+                let old = node.attributes.clone();
+                let index = node.attributes.iter().position(|(key, _)| key == name);
+                match (index, value) {
+                    (Some(i), Some(value)) => node.attributes[i].1 = value.clone(),
+                    (Some(i), None) => {
+                        node.attributes.remove(i);
+                    }
+                    (None, Some(value)) if node.attributes.len() < 64 => {
+                        node.attributes.push((name.clone(), value.clone()))
+                    }
+                    (None, Some(_)) => return Err(Error::Limit),
+                    (None, None) => {}
+                }
+                // Forms are a derived view. Recollect before exposing success,
+                // and restore attributes if a form budget rejects this mutation.
+                match forms::collect(self) {
+                    Ok(forms) => self.forms = forms,
+                    Err(error) => {
+                        self.nodes[id].attributes = old;
+                        return Err(error);
+                    }
                 }
             }
         }
