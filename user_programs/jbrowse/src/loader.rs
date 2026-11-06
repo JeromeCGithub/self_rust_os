@@ -12,6 +12,7 @@ pub struct Loaded {
     pub page: Page,
     pub status: u16,
     pub script_errors: usize,
+    pub image_errors: usize,
 }
 fn fetch(
     url: &str,
@@ -40,7 +41,11 @@ fn fetch(
     .map_err(|e| http::error_message(e).to_string())?;
     Ok((effective, bytes, response))
 }
-pub fn load(url: &str, cancel: &userlib::io::Cancellation) -> Result<Loaded, String> {
+pub fn load(
+    url: &str,
+    cancel: &userlib::io::Cancellation,
+    fonts: &userlib::ui::font::FontSet,
+) -> Result<Loaded, String> {
     let (url, bytes, response) = fetch(url, MAX_HTML, cancel)?;
     let encoding = match response.charset {
         Some(http::Charset::Utf8) => Some(Encoding::Utf8),
@@ -51,20 +56,15 @@ pub fn load(url: &str, cancel: &userlib::io::Cancellation) -> Result<Loaded, Str
     let html =
         decode_html(&bytes, encoding).map_err(|_| "Page character decoding failed".to_string())?;
     let mut doc = Document::parse(&html).map_err(|_| "HTML resource limit exceeded".to_string())?;
-    // Inline CSS has already been parsed; linked sheets follow in link order.
-    // Unsupported/failed optional sheets leave a readable HTML fallback.
-    for sheet in doc.stylesheets.clone() {
-        if let Ok(sheet) = resolve(&url, &sheet) {
-            if let Ok((_, bytes, response)) = fetch(&sheet, 32 * 1024, cancel) {
-                if response.status != 200 {
-                    continue;
-                }
-                if let Ok(css) = core::str::from_utf8(&bytes) {
-                    let _ = doc.add_css(css);
-                }
-            }
+    // Source-order author sheets; resource transport policy stays in the app.
+    let _style_errors = doc.apply_stylesheets(|source| {
+        let source = resolve(&url, source).ok()?;
+        let (_, bytes, response) = fetch(&source, 32 * 1024, cancel).ok()?;
+        if response.status != 200 {
+            return None;
         }
-    }
+        core::str::from_utf8(&bytes).ok().map(str::to_string)
+    });
     if cancel.is_cancelled() {
         return Err("request cancelled".to_string());
     }
@@ -73,15 +73,40 @@ pub fn load(url: &str, cancel: &userlib::io::Cancellation) -> Result<Loaded, Str
     if script_errors > 0 {
         userlib::println!("[jbrowse] script errors: {}", script_errors);
     }
+    let mut image_errors = 0;
+    let requests: Vec<_> = doc
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| node.tag == "img")
+        .filter_map(|(id, node)| node.attr("src").map(|src| (id, src.to_string())))
+        .take(16)
+        .collect();
+    for (node, source) in requests {
+        if cancel.is_cancelled() {
+            return Err("request cancelled".to_string());
+        }
+        let image = resolve(&url, &source)
+            .ok()
+            .and_then(|source| fetch(&source, 1024 * 1024, cancel).ok())
+            .filter(|(_, _, response)| response.status == 200)
+            .and_then(|(_, bytes, _)| rustos_browser::Image::decode(&bytes).ok());
+        if image
+            .and_then(|image| doc.set_image(node, alloc::sync::Arc::new(image)).ok())
+            .is_none()
+        {
+            image_errors += 1;
+        }
+    }
     let title = if doc.title.is_empty() {
         url.clone()
     } else {
         doc.title.clone()
     };
-    let mut page = doc.layout(640);
+    let mut page = doc.layout_with(640, fonts);
     if script_errors > 0 && page.is_empty() {
         userlib::println!("[jbrowse] unsupported script page");
-        page=Document::parse("<h1>Page needs more JavaScript support</h1><p>The request succeeded, but this browser cannot display this page yet.</p><p>The current scripting prototype does not run full web applications.</p><p>You can edit the address to visit another page.</p>").map_err(|_|"Could not create error page".to_string())?.layout(640);
+        page=Document::parse("<h1>Page needs more JavaScript support</h1><p>The request succeeded, but this browser cannot display this page yet.</p><p>The current scripting prototype does not run full web applications.</p><p>You can edit the address to visit another page.</p>").map_err(|_|"Could not create error page".to_string())?.layout_with(640,fonts);
     }
     Ok(Loaded {
         url,
@@ -89,5 +114,6 @@ pub fn load(url: &str, cancel: &userlib::io::Cancellation) -> Result<Loaded, Str
         page,
         status: response.status,
         script_errors,
+        image_errors,
     })
 }

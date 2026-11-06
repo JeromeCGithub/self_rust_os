@@ -172,12 +172,14 @@ pub(crate) struct Style {
     pub color: u32,
     pub background: Option<u32>,
     pub scale: u32,
+    pub font: rustos_text::Style,
     pub block: bool,
     pub hidden: bool,
     pub pre: bool,
     pub margin: u32,
     pub padding: u32,
     pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 impl Style {
     pub fn root() -> Self {
@@ -185,12 +187,17 @@ impl Style {
             color: 0x202124,
             background: None,
             scale: 1,
+            font: rustos_text::Style {
+                size: 8,
+                ..rustos_text::Style::default()
+            },
             block: false,
             hidden: false,
             pre: false,
             margin: 0,
             padding: 0,
             width: None,
+            height: None,
         }
     }
     fn apply(&mut self, key: &str, value: &str) {
@@ -208,7 +215,25 @@ impl Style {
             "font-size" => {
                 if let Some(n) = pixels(value) {
                     self.scale = ((n + 7) / 8).clamp(1, 4);
+                    self.font.size = n.clamp(1, 96) as u16;
                 }
+            }
+            "font-family" => {
+                self.font.family = if value.contains("monospace") || value.contains("courier") {
+                    rustos_text::Family::Monospace
+                } else if value.contains("sans-serif")
+                    || value.contains("arial")
+                    || value.contains("helvetica")
+                {
+                    rustos_text::Family::Sans
+                } else if value.contains("serif") || value.contains("times") {
+                    rustos_text::Family::Serif
+                } else {
+                    self.font.family
+                };
+            }
+            "font-weight" => {
+                self.font.bold = value == "bold" || value.parse::<u16>().is_ok_and(|n| n >= 600)
             }
             "display" => match value {
                 "none" => self.hidden = true,
@@ -228,6 +253,7 @@ impl Style {
                 }
             }
             "width" => self.width = pixels(value),
+            "height" => self.height = pixels(value),
             _ => {}
         }
     }
@@ -237,6 +263,7 @@ pub(crate) fn style(doc: &Document, id: usize, parent: &Style) -> Style {
     let mut result = Style {
         color: parent.color,
         scale: parent.scale,
+        font: parent.font,
         pre: parent.pre,
         ..Style::root()
     };
@@ -279,10 +306,17 @@ pub(crate) fn style(doc: &Document, id: usize, parent: &Style) -> Style {
         result.margin = 8;
     }
     if ["h1", "h2"].contains(&node.tag.as_str()) {
-        result.scale = 2;
+        result.scale = (parent.scale * 2).min(4);
+        result.font.size = parent.font.size.saturating_mul(2).min(96);
     }
     if ["ul", "ol", "blockquote", "dd"].contains(&node.tag.as_str()) {
         result.padding = 12;
+    }
+    if ["pre", "code", "kbd", "samp"].contains(&node.tag.as_str()) {
+        result.font.family = rustos_text::Family::Monospace;
+    }
+    if ["b", "strong", "h1", "h2", "h3", "h4", "h5", "h6"].contains(&node.tag.as_str()) {
+        result.font.bold = true;
     }
     if node.tag == "pre" {
         result.pre = true;
@@ -290,21 +324,47 @@ pub(crate) fn style(doc: &Document, id: usize, parent: &Style) -> Style {
     if node.tag == "a" && node.attr("href").is_some() {
         result.color = 0x1a56b0;
     }
-    let mut rules: Vec<_> = doc
+    let inline = node.attr("style").map(declarations).unwrap_or_default();
+    let mut candidates = Vec::new();
+    for (order, rule) in doc
         .rules
         .iter()
-        .filter(|r| matches(doc, id, &r.selector))
-        .collect();
-    rules.sort_by_key(|r| r.specificity);
-    for rule in rules {
-        for (key, value) in &rule.declarations {
-            result.apply(key, value);
+        .enumerate()
+        .filter(|(_, rule)| matches(doc, id, &rule.selector))
+    {
+        for (declaration, (key, value)) in rule.declarations.iter().enumerate() {
+            let (value, important) = priority(value);
+            candidates.push((
+                important,
+                rule.specificity,
+                order,
+                declaration,
+                key.as_str(),
+                value,
+            ));
         }
     }
-    if let Some(inline) = node.attr("style") {
-        for (key, value) in declarations(inline) {
-            result.apply(&key, &value);
-        }
+    for (declaration, (key, value)) in inline.iter().enumerate() {
+        let (value, important) = priority(value);
+        candidates.push((
+            important,
+            u32::MAX,
+            usize::MAX,
+            declaration,
+            key.as_str(),
+            value,
+        ));
+    }
+    candidates.sort_by_key(|entry| (entry.0, entry.1, entry.2, entry.3));
+    for (_, _, _, _, key, value) in candidates {
+        result.apply(key, value);
     }
     result
+}
+
+fn priority(value: &str) -> (&str, bool) {
+    match value.rsplit_once('!') {
+        Some((value, flag)) if flag.trim() == "important" => (value.trim(), true),
+        _ => (value, false),
+    }
 }

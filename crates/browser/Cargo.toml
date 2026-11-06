@@ -11,4 +11,6 @@ path = "src/lib.rs"
 javascript = ["dep:rustos-script"]
 
 [dependencies]
+rustos-web-image = { path = "../web-image" }
+rustos-text = { path = "../text" }
 rustos-script = { path = "../script", optional = true }

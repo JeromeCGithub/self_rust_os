@@ -1,0 +1,10 @@
+[package]
+name = "rustos-text"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Shared font metrics and bounded native TrueType glyphs"
+[features]
+truetype = ["dep:fontdue"]
+[dependencies]
+fontdue = { version = "=0.9.3", optional = true, default-features = false, features = ["hashbrown"] }

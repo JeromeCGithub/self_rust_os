@@ -5,6 +5,8 @@
 pub mod declarative;
 pub mod desktop_protocol;
 mod events;
+#[cfg(feature = "fonts")]
+pub mod font;
 mod input;
 pub use events::Event;
 #[cfg(feature = "alloc")]

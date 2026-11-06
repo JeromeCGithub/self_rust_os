@@ -98,6 +98,8 @@ pub(crate) fn parse(source: &str) -> Result<Document, Error> {
         stylesheets: Vec::new(),
         rules: Vec::new(),
         css_bytes: 0,
+        images: Vec::new(),
+        sheets: Vec::new(),
         forms: Vec::new(),
     };
     let mut stack: Vec<usize> = vec![];
@@ -184,6 +186,7 @@ pub(crate) fn parse(source: &str) -> Result<Document, Error> {
                             return Err(Error::Limit);
                         }
                         doc.stylesheets.push(href.to_string());
+                        doc.sheets.push(Sheet::External(href.to_string()));
                     }
                 }
                 let id = append(&mut doc, &stack, node)?;
@@ -201,6 +204,7 @@ pub(crate) fn parse(source: &str) -> Result<Document, Error> {
                     }
                     if tag == "style" {
                         doc.add_css(raw)?;
+                        doc.sheets.push(Sheet::Inline(raw.to_string()));
                     }
                     if tag == "title" {
                         doc.title = entities(raw)

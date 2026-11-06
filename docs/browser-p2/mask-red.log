@@ -1,0 +1,41 @@
+
+running 24 tests
+test declarative::tests::excessive_nesting_is_rejected_before_any_drawing ... ok
+test declarative::tests::exhausted_width_and_empty_viewports_emit_nothing ... ok
+test declarative::tests::nested_columns_reserve_padding_and_gap_before_siblings ... ok
+test declarative::tests::functions_compose_styled_views_and_keep_stable_button_keys ... ok
+test desktop_protocol::tests::desktop_pointer_reaches_the_right_and_bottom_display_edges ... ok
+test desktop_protocol::tests::desktop_role_is_bound_to_spawned_shell_identity ... ok
+test desktop_protocol::tests::legacy_registration_cannot_wrap_pids_or_flags ... ok
+test desktop_protocol::tests::work_area_reserves_room_for_a_decorated_minimum_window ... ok
+test events::tests::capacity_failure_is_explicit_and_wraparound_preserves_queued_events ... ok
+test events::tests::frame_wait_preserves_press_release_focus_and_close_in_order ... ok
+test input::tests::click_requires_press_and_release_on_the_same_widget ... ok
+test input::tests::coalesced_press_outside_and_release_inside_does_not_click ... ok
+test input::tests::release_outside_or_focus_loss_cancels_activation ... ok
+test protocol::tests::client_geometry_reserves_only_decorations_and_leaves_panels_to_the_shell ... ok
+test protocol::tests::geometry_and_material_round_trip_and_reject_malformed_requests ... ok
+test raster::tests::clipping_preserves_pitch_padding_and_trailing_guards ... ok
+test raster::mask_tests::clipped_coverage_blends_and_preserves_padding_and_guards ... FAILED
+test raster::tests::invalid_geometry_never_constructs_a_canvas ... ok
+test raster::tests::surface_copy_preserves_padding_guards_and_rejects_partial_updates ... ok
+test raster::tests::translucent_drawing_is_premultiplied_and_composited ... ok
+test raster::tests::rounded_coverage_handles_large_geometry_and_preserves_clear_corners ... ok
+test raster::viewport_tests::viewport_clips_to_content_preserving_toolbar_pitch_and_guards ... ok
+test text_input::tests::invalid_and_oversized_set_preserves_the_previous_value ... ok
+test text_input::tests::edits_selection_backspace_cursor_and_bounded_input ... ok
+
+failures:
+
+---- raster::mask_tests::clipped_coverage_blends_and_preserves_padding_and_guards stdout ----
+
+thread 'raster::mask_tests::clipped_coverage_blends_and_preserves_padding_and_guards' panicked at user_programs/userlib/src/ui/raster.rs:377:3:
+assertion failed: canvas.alpha_mask(-1, 0, 3, 2, &[0, 128, 255, 255, 0, 128],
+    Color::rgb(0xff0000))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    raster::mask_tests::clipped_coverage_blends_and_preserves_padding_and_guards
+
+test result: FAILED. 23 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

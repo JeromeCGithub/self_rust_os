@@ -11,7 +11,7 @@ panic = "abort"
 opt-level = "z"
 lto = true
 [dependencies]
-userlib = { path = "../userlib", features = ["tls", "threads"] }
+userlib = { path = "../userlib", features = ["tls", "threads", "fonts"] }
 rustos-browser = { path = "../../crates/browser", features = ["javascript"] }
 [[bin]]
 name = "jbrowse"

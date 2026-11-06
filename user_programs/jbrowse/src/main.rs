@@ -21,8 +21,11 @@ struct Shared {
     result: Option<(u64, Result<loader::Loaded, String>)>,
 }
 struct Browser {
+    font_painter: ui::font::Painter,
     address: TextInput,
     current: String,
+    history: navigation::History,
+    history_mode: navigation::Mode,
     status: String,
     title: String,
     page: Page,
@@ -35,15 +38,19 @@ struct Browser {
     field_editor: TextInput,
 }
 impl Browser {
-    fn new() -> Self {
+    fn new(fonts: Arc<ui::font::FontSet>) -> Self {
+        let initial = rustos_browser::Document::parse("<p>Loading the start page...</p>")
+            .expect("built-in page")
+            .layout_with(640, fonts.as_ref());
         Self {
+            font_painter: ui::font::Painter::new(fonts),
             address: TextInput::new(HOME_PAGE),
             current: String::new(),
+            history: navigation::History::default(),
+            history_mode: navigation::Mode::Push,
             status: "Loading start page...".into(),
             title: "New page".into(),
-            page: rustos_browser::Document::parse("<p>Loading the start page...</p>")
-                .expect("built-in page")
-                .layout(640),
+            page: initial,
             scroll: 0,
             editing: false,
             loading: false,
@@ -56,6 +63,7 @@ impl Browser {
     fn navigate(&mut self, shared: &Mutex<Shared>, input: &str) {
         match address(input) {
             Ok(url) => {
+                self.history_mode = navigation::Mode::Push;
                 self.generation = self.generation.wrapping_add(1);
                 self.address.set(&url);
                 self.editing = false;
@@ -88,7 +96,7 @@ impl Browser {
         self.scroll = (self.scroll as i64 + delta as i64).clamp(0, max as i64) as u32;
     }
     fn click(&mut self, shared: &Mutex<Shared>, x: i32, y: i32) {
-        if Rect::new(8, 30, 516, 26).contains(x, y) {
+        if Rect::new(72, 30, 452, 26).contains(x, y) {
             self.editing = true;
             self.active_field = None;
             self.address.select_all();
@@ -121,12 +129,38 @@ impl Browser {
                 return;
             }
         }
-        if Rect::new(532, 30, 48, 26).contains(x, y) {
+        if Rect::new(8, 30, 26, 26).contains(x, y) {
+            if let Some(url) = self.history.back().map(str::to_string) {
+                self.navigate(shared, &url);
+                self.history_mode = navigation::Mode::Back;
+            }
+        } else if Rect::new(40, 30, 26, 26).contains(x, y) {
+            if let Some(url) = self.history.forward().map(str::to_string) {
+                self.navigate(shared, &url);
+                self.history_mode = navigation::Mode::Forward;
+            }
+        } else if Rect::new(532, 30, 48, 26).contains(x, y) {
             let url = self.address.as_str().to_string();
             self.navigate(shared, &url);
-        } else if Rect::new(588, 30, 44, 26).contains(x, y) && !self.current.is_empty() {
-            let url = self.current.clone();
-            self.navigate(shared, &url);
+        } else if Rect::new(588, 30, 44, 26).contains(x, y)
+            && (!self.current.is_empty() || self.loading)
+        {
+            if self.loading {
+                let mut shared = shared.lock();
+                if let Some(active) = shared.active.take() {
+                    active.cancel();
+                }
+                shared.request = None;
+                self.generation = self.generation.wrapping_add(1);
+                self.loading = false;
+                self.status = "Stopped".into();
+                self.address.set(&self.current);
+                println!("[jbrowse] stopped");
+            } else {
+                let url = self.current.clone();
+                self.navigate(shared, &url);
+                self.history_mode = navigation::Mode::Reload;
+            }
         } else if Rect::new(532, 376, 48, 20).contains(x, y) {
             self.scroll_by(-240);
         } else if Rect::new(588, 376, 44, 20).contains(x, y) {
@@ -142,17 +176,17 @@ impl Browser {
             }
         }
     }
-    fn paint(&self, canvas: &mut ui::Canvas<'_>) {
+    fn paint(&mut self, canvas: &mut ui::Canvas<'_>) {
         canvas.clear(Color::rgb(0x15243a));
         canvas.rounded_rect(Rect::new(8, 4, 180, 22), 6, Color::rgb(0x263d59));
         ui::text(canvas, 18, 11, "jbrowse  /  1 tab", Color::rgb(0xd9e8f8), 1);
         canvas.rounded_rect(
-            Rect::new(8, 30, 516, 26),
+            Rect::new(72, 30, 452, 26),
             6,
             Color::rgb(if self.editing { 0xffffff } else { 0xe5edf5 }),
         );
-        if let Some(mut entry) = canvas.viewport(Rect::new(16, 37, 500, 12)) {
-            let max = 61;
+        if let Some(mut entry) = canvas.viewport(Rect::new(80, 37, 436, 12)) {
+            let max = 53;
             let text = self.address.as_str();
             let start = text.len().saturating_sub(max);
             let start = (start..=text.len())
@@ -172,8 +206,10 @@ impl Browser {
             }
         }
         for (x, y, w, h, label) in [
+            (8, 30, 26, 26, "<"),
+            (40, 30, 26, 26, ">"),
             (532, 30, 48, 26, "Go"),
-            (588, 30, 44, 26, "R"),
+            (588, 30, 44, 26, if self.loading { "Stop" } else { "R" }),
             (532, 376, 48, 20, "Up"),
             (588, 376, 44, 20, "Down"),
         ] {
@@ -193,17 +229,43 @@ impl Browser {
                         Color::rgb(color),
                     );
                 }
-                ui::text(
-                    &mut viewport,
-                    item.x,
-                    y,
-                    &item.text,
-                    Color::rgb(item.color),
-                    item.scale,
-                );
-                if item.link.is_some() {
+                if let Some(image) = item.image.and_then(|index| self.page.images.get(index)) {
+                    let _ = viewport.rgba_image(
+                        Rect::new(item.x, y, item.width, item.height),
+                        image.image.width,
+                        image.image.height,
+                        &image.image.rgba,
+                    );
+                }
+                let left = item.x.max(0);
+                let top = y.max(0);
+                let right = (i64::from(item.x) + i64::from(item.width)).min(640).max(0) as i32;
+                let bottom = (i64::from(y) + i64::from(item.height)).min(308).max(0) as i32;
+                if right > left && bottom > top {
+                    if let Some(mut fragment) = viewport.viewport(Rect::new(
+                        left,
+                        top,
+                        (right - left) as u32,
+                        (bottom - top) as u32,
+                    )) {
+                        let _ = self.font_painter.draw(
+                            &mut fragment,
+                            item.x - left,
+                            y - top,
+                            &item.text,
+                            item.font,
+                            Color::rgb(item.color),
+                        );
+                    }
+                }
+                if item.link.is_some() && item.image.is_none() {
                     viewport.fill_rect(
-                        Rect::new(item.x, y + (8 * item.scale) as i32, item.width, 1),
+                        Rect::new(
+                            item.x,
+                            y + item.height.saturating_sub(2) as i32,
+                            item.width,
+                            1,
+                        ),
                         Color::rgb(item.color),
                     );
                 }
@@ -274,6 +336,24 @@ impl Browser {
 }
 
 fn main(_argc: usize, argv: &[&str]) {
+    let fonts = match ui::font::FontSet::load(
+        include_bytes!("../../../third_party/fonts/DejaVuSans.ttf"),
+        include_bytes!("../../../third_party/fonts/DejaVuSans-Bold.ttf"),
+        include_bytes!("../../../third_party/fonts/DejaVuSerif.ttf"),
+        include_bytes!("../../../third_party/fonts/DejaVuSansMono.ttf"),
+    )
+    .and_then(|fonts| {
+        fonts.with_bold_faces(
+            include_bytes!("../../../third_party/fonts/DejaVuSerif-Bold.ttf"),
+            include_bytes!("../../../third_party/fonts/DejaVuSansMono-Bold.ttf"),
+        )
+    }) {
+        Ok(fonts) => Arc::new(fonts),
+        Err(_) => {
+            println!("[jbrowse] font assets unavailable");
+            return;
+        }
+    };
     let mut window = Window::create(
         WindowOptions::new("jbrowse")
             .content_size(640, 400)
@@ -286,10 +366,11 @@ fn main(_argc: usize, argv: &[&str]) {
         active: None,
     }));
     let transport = Arc::clone(&shared);
+    let layout_fonts = Arc::clone(&fonts);
     let _worker = match thread::Builder::new().spawn(move || loop {
         let request = transport.lock().request.take();
         if let Some((generation, url, cancel)) = request {
-            let loaded = loader::load(&url, &cancel);
+            let loaded = loader::load(&url, &cancel, layout_fonts.as_ref());
             transport.lock().result = Some((generation, loaded));
         } else {
             let _ = sys::sleep_ticks(1);
@@ -301,7 +382,7 @@ fn main(_argc: usize, argv: &[&str]) {
             return;
         }
     };
-    let mut browser = Browser::new();
+    let mut browser = Browser::new(fonts);
     browser.navigate(&shared, argv.get(1).copied().unwrap_or(HOME_PAGE));
     window
         .draw(|canvas| browser.paint(canvas))
@@ -374,6 +455,9 @@ fn main(_argc: usize, argv: &[&str]) {
                 browser.loading = false;
                 match result {
                     Ok(loaded) => {
+                        browser
+                            .history
+                            .commit(&browser.current, &loaded.url, browser.history_mode);
                         browser.current = loaded.url;
                         navigation::commit_address(
                             &mut browser.address,
@@ -397,6 +481,12 @@ fn main(_argc: usize, argv: &[&str]) {
                             browser
                                 .status
                                 .push_str(&format!(" | {} script errors", loaded.script_errors));
+                        }
+                        if loaded.image_errors > 0 {
+                            browser.status.push_str(&format!(
+                                " | {} images unavailable",
+                                loaded.image_errors
+                            ));
                         }
                         println!("[jbrowse] loaded: {}", browser.title);
                     }
