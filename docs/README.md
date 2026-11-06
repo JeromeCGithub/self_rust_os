@@ -25,6 +25,7 @@ current behavior; architecture targets are not evidence of implemented features.
 | [Network performance](network-performance.md) | TCP window optimization, DMA, measurements and future event delivery |
 | [Networking validation](networking-validation.md) | Red/green evidence, packet captures and remaining limits |
 | [Ethernet networking plan](networking-plan.md) | Delivered ping/client sockets and roadmap toward DNS, HTTP and TLS |
+| [Browser P6 audio](browser-media-p6.md) | Bounded native PCM, userspace WAV player, pause/seek and captured-sound evidence; video remains open |
 | [Browser performance](browser-performance.md) | Fixed native startup/page/navigation budgets, on-demand font outlines and before/after evidence |
 | [Browser P5 forms](browser-sessions-p5.md) | Masked password controls and bounded POST/redirect foundations; authenticated sessions remain open |
 | [Browser P4 Google gate](browser-google-p4.md) | Native DOM attributes/base64, scripted link navigation and the still-open results gate |

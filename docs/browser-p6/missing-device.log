@@ -1,0 +1,2 @@
+qemu-system-x86_64: terminating on signal 15 from pid 423272 (python3)
+PASS: absent audio hardware returns typed NoDevice

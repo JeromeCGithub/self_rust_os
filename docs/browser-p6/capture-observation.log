@@ -1,0 +1,24 @@
+qemu-system-x86_64: -device AC97,audiodev=test: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: -device AC97,audiodev=test: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: terminating on signal 15 from pid 423330 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/audio.py", line 69, in <module>
+    if __name__=='__main__':main()
+                            ~~~~^^
+  File "/home/jay/personal/os/jbrowse/e2e/audio.py", line 51, in main
+    with wave.open(str(capture),'rb') as wav:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/wave.py", line 661, in open
+    return Wave_read(f)
+  File "/usr/lib/python3.14/wave.py", line 286, in __init__
+    self.initfp(f)
+    ~~~~~~~~~~~^^^
+  File "/usr/lib/python3.14/wave.py", line 255, in initfp
+    raise Error('not a WAVE file')
+wave.Error: not a WAVE file

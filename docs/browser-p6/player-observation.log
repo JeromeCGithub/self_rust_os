@@ -1,0 +1,20 @@
+qemu-system-x86_64: -device AC97,audiodev=test: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: -device AC97,audiodev=test: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: terminating on signal 15 from pid 438655 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/media.py", line 85, in <module>
+    if __name__=='__main__':main()
+                            ~~~~^^
+  File "/home/jay/personal/os/jbrowse/e2e/media.py", line 61, in main
+    color((580,225),(49,95,135),'ready')
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jay/personal/os/jbrowse/e2e/media.py", line 57, in color
+    assert time.monotonic()<end,(point,image.getpixel(point),rgb)
+           ^^^^^^^^^^^^^^^^^^^^
+AssertionError: ((580, 225), (23, 43, 67), (49, 95, 135))
