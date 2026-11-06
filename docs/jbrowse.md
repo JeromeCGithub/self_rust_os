@@ -1,5 +1,9 @@
 # jbrowse: a native single-tab browser
 
+See the [complete browser roadmap](browser-support-plan.md) for planned classic
+browsing, Google results, YouTube playback, Facebook and broader compatibility.
+The roadmap separates future milestones from the implemented subset below.
+
 [jbrowse](../user_programs/jbrowse/src/main.rs) is an ordinary Ring 3 application.
 Launch **JBROWSE** on the desktop, or run `./jbrowse` in Terminal.
 Without arguments it loads Google. An optional first argument supplies the initial URL:
