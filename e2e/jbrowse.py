@@ -22,6 +22,9 @@ from qemu_test import launchers, connect, copy_disk, disk_image
 from qemu_network import arguments as network_arguments
 from qemu_platform import arguments as platform_arguments
 
+if os.environ.get('RUSTOS_JBROWSE_REQUIRE_GOOGLE_RESULTS') == '1':
+    os.environ['RUSTOS_JBROWSE_GOOGLE']='1'
+
 requests = []
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
@@ -39,9 +42,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             '/dir/theme.css': b'body { background-color: #f5f0df; } #banner {background-color:#2468ac; padding:12px} a {color:white}',
             '/dir/next.html': b"<title>Second page</title><style>body {background:#d4edda}</style><h1>Navigation works</h1>",
             '/big': b'x' * 262145,
+            '/form': b"<title>Search fixture</title><form action='/find'><input type=hidden name=hl value=en><input name=q title='Search'><input type=submit name=btnG value=Search></form>",
             '/script': b"<title>Before script</title><p id='result'>Waiting</p><script>const n=6*7; document.getElementById('result').textContent='Answer: '+n; document.getElementById('result').style.color='#123456'; document.body.style.backgroundColor='#e8dcff'; document.title='Script ready';</script>",
+            '/blank-script': b"<title>Blank script</title><script>while(true) {}</script>",
             '/bad-script': b"<title>Unsupported script</title><style>body {background:#fce8e6}</style><script>while(true) {}</script><p>Still readable</p>",
         }
+        if self.path.startswith('/find?'):
+            from urllib.parse import parse_qs,urlsplit
+            query=parse_qs(urlsplit(self.path).query).get('q',[''])[0]
+            pages[self.path]=("<title>Search results</title><style>body {background:#ddf3ff}</style><h1>Search results</h1><p>"+query+"</p><a href='/dir/next.html'>A matching result</a>").encode()
         body = pages.get(self.path, b'<h1>Missing page</h1>')
         self.send_response(200 if self.path in pages else 404)
         self.send_header('Content-Length', str(len(body)))
@@ -82,7 +91,9 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         def output():
             raw = serial.read_text(errors='replace')
             return raw + ''.join(re.findall(r'\[kernel\] sys_write: "(.*?)"\n', raw, re.S))
-        def wait(value, after=0):
+        last_navigation=0
+        def wait(value, after=None):
+            if after is None: after=last_navigation
             deadline = time.monotonic()+45
             while value not in output()[after:]:
                 assert qemu.poll() is None, 'QEMU exited'
@@ -119,12 +130,42 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         wait('[desktop] ready:')
         click(terminal_x,65)
         wait('[portal] shell pid=')
-        type_text('./jbrowse')
+        type_text('./jbrowse' if os.environ.get('RUSTOS_JBROWSE_GOOGLE') == '1' else f'./jbrowse http://10.0.2.2:{server.server_port}/start')
         key('ret')
         wait('[jbrowse] ready')
-        # The native window is placed after Portal at (92,128), content y=156.
+        # Second native window: x=92, titlebar y=128, content y=156.
         ox,oy=92,156
+        if os.environ.get('RUSTOS_JBROWSE_GOOGLE') == '1':
+            wait('[jbrowse] loaded: Google')
+            # Wait for the actual native input rectangle, excluding the loading
+            # placeholder and chrome. The published screenshot must show Google.
+            deadline=time.monotonic()+20
+            entry=None
+            while entry is None:
+                image=shot('google-home')
+                for y in range(oy+65,oy+346):
+                    for x in range(ox+1,ox+239):
+                        if image.getpixel((x,y))==(247,251,255) and image.getpixel((x+180,y))==(247,251,255):
+                            entry=(x+20,y+8);break
+                    if entry is not None:break
+                assert time.monotonic()<deadline,'Google homepage has no rendered search input'
+            click(*entry);type_text('rust operating system')
+            mark=len(output());key('ret')
+            wait('[jbrowse] loaded:',mark)
+            # The current public endpoint may return a JavaScript gate. Capture
+            # the response as evidence; this does not assert usable search results.
+            deadline=time.monotonic()+20
+            while True:
+                image=shot('google-search-response')
+                colors=image.crop((ox,oy+64,ox+640,oy+372)).getcolors(640*308)
+                if not any(color==(247,251,255) and count>100 for count,color in colors):break
+                assert time.monotonic()<deadline,'Google search response did not replace homepage'
+                time.sleep(.1)
+            if os.environ.get('RUSTOS_JBROWSE_REQUIRE_GOOGLE_RESULTS') == '1':
+                assert '[jbrowse] unsupported script page' not in output()[mark:], 'Google results remain blocked by unsupported JavaScript'
         def navigate(path):
+            global last_navigation
+            last_navigation=len(output())
             click(ox+120,oy+42)
             type_text(f'http://10.0.2.2:{server.server_port}{path}')
             key('ret')
@@ -148,6 +189,17 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         navigate('/big');wait('[jbrowse] error: response or URL exceeds limits')
         navigate('/dir/next.html');wait('[jbrowse] loaded: Second page')
         pixel((ox+500,oy+200),(212,237,218),'recovered')
+        navigate('/form');wait('[jbrowse] loaded: Search fixture')
+        # Entry x=8,y=8 in document coordinates; submit is on the next row.
+        click(ox+100,oy+84);type_text('rust os');key('ret')
+        wait('[jbrowse] loaded: Search results')
+        assert '/find?hl=en&q=rust+os' in requests,requests
+        pixel((ox+500,oy+200),(221,243,255),'form-search')
+        navigate('/form');wait('[jbrowse] loaded: Search fixture')
+        click(ox+100,oy+84);type_text('browser');click(ox+40,oy+118)
+        wait('[jbrowse] loaded: Search results')
+        assert '/find?hl=en&q=browser&btnG=Search' in requests,requests
+        pixel((ox+500,oy+200),(221,243,255),'form-button')
         if os.environ.get('RUSTOS_JBROWSE_SCRIPTS') == '1':
             navigate('/script');wait('[jbrowse] loaded: Script ready')
             image=pixel((ox+500,oy+200),(232,220,255),'scripted-page')
@@ -155,6 +207,10 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
             assert any(color==(18,52,86) and count>20 for count,color in colors), 'scripted text color absent'
             navigate('/bad-script');wait('[jbrowse] loaded: Unsupported script')
             pixel((ox+500,oy+200),(252,232,230),'unsupported-script')
+            navigate('/blank-script');wait('[jbrowse] loaded: Blank script')
+            image=pixel((ox+500,oy+200),(255,255,255),'script-fallback')
+            colors=image.crop((ox,oy+64,ox+640,oy+200)).getcolors(640*136)
+            assert sum(count for count,color in colors if color==(32,33,36))>100,'unsupported-script fallback is blank'
             # The bounded interpreter must reject loops and return to navigation.
             navigate('/dir/next.html');wait('[jbrowse] loaded: Second page')
             pixel((ox+500,oy+200),(212,237,218),'script-recovery')
@@ -175,7 +231,7 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         wait('[portal] output: browser-closed')
         mark=len(output());type_text('./jbrowse');key('ret');wait('[jbrowse] ready',mark)
         click(ox+622,128+14)
-        print('PASS: HTML/CSS pixels, redirected stylesheet/link, URL editing, scrolling, resource failure/recovery, independent terminal and relaunch')
+        print('PASS: HTML/CSS pixels, links, editable GET forms, Enter/button search submission, scrolling, failure recovery, terminal survival and relaunch')
         (out/'requests.json').write_text(json.dumps(requests,indent=2))
     finally:
         qemu.terminate()

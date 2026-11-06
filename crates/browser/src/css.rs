@@ -137,12 +137,10 @@ pub(crate) fn color(value: &str) -> Option<u32> {
         return match hex.len() {
             6 => u32::from_str_radix(hex, 16).ok(),
             3 => u32::from_str_radix(hex, 16).ok().map(|v| {
-                ((v & 0xf00) << 8)
-                    | ((v & 0xf00) << 4)
-                    | ((v & 0xf0) << 4)
-                    | (v & 0xf0)
-                    | ((v & 0xf) << 4)
-                    | (v & 0xf)
+                let red = ((v >> 8) & 15) * 17;
+                let green = ((v >> 4) & 15) * 17;
+                let blue = (v & 15) * 17;
+                (red << 16) | (green << 8) | blue
             }),
             _ => None,
         };

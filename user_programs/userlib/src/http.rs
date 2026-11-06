@@ -2,7 +2,7 @@
 //! The callback receives decoded body bytes; sockets close on success or error.
 //! HTTPS uses the optional TLS feature, verified certificates and platform time/RNG.
 use crate::{net, sys};
-pub use rustos_http::{Error, Options, Response};
+pub use rustos_http::{Charset, Error, Options, Response};
 
 #[derive(Default)]
 struct Sockets {

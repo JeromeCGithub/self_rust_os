@@ -75,10 +75,17 @@ impl Default for Options {
     }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Charset {
+    Utf8,
+    Windows1252,
+    Other,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Final response metadata after a successfully decoded body.
 pub struct Response {
     /// HTTP status, including error statuses such as 404.
     pub status: u16,
+    pub charset: Option<Charset>,
     /// Number of decoded bytes delivered to the callback.
     pub bytes: usize,
 }
@@ -187,6 +194,7 @@ fn exchange(
     let bytes = wire::body(&mut reader, &head, body)?;
     Ok(Some(Response {
         status: head.status,
+        charset: head.charset,
         bytes,
     }))
 }

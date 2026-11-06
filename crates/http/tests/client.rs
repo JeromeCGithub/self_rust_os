@@ -607,3 +607,17 @@ fn final_url_after_redirect_is_observed_once_for_relative_resources() {
     assert_eq!(urls, ["http://10.0.2.2/directory/page"]);
     assert_eq!(m.opened, m.closed);
 }
+
+#[test]
+fn response_reports_declared_charset_for_browser_decoding() {
+    for (label, expected) in [
+        ("ISO-8859-1", rustos_http::Charset::Windows1252),
+        ("\"utf-8\"", rustos_http::Charset::Utf8),
+        ("Shift_JIS", rustos_http::Charset::Other),
+    ] {
+        let raw=format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset={label}\r\nContent-Length: 1\r\n\r\nx");
+        let (response, _, mock) = fetch(raw.as_bytes(), 7);
+        assert_eq!(response.unwrap().charset, Some(expected));
+        assert_eq!(mock.opened, mock.closed);
+    }
+}

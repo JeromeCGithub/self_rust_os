@@ -98,6 +98,7 @@ pub(crate) fn parse(source: &str) -> Result<Document, Error> {
         stylesheets: Vec::new(),
         rules: Vec::new(),
         css_bytes: 0,
+        forms: Vec::new(),
     };
     let mut stack: Vec<usize> = vec![];
     let mut rest = source;
@@ -191,6 +192,9 @@ pub(crate) fn parse(source: &str) -> Result<Document, Error> {
                     let marker = alloc::format!("</{tag}");
                     let end = lower.find(&marker).unwrap_or(rest.len());
                     let raw = &rest[..end];
+                    if tag == "textarea" {
+                        doc.nodes[id].text = entities(raw);
+                    }
                     #[cfg(feature = "javascript")]
                     if tag == "script" {
                         doc.nodes[id].text = raw.to_string();
@@ -271,5 +275,6 @@ pub(crate) fn parse(source: &str) -> Result<Document, Error> {
             children,
         });
     }
+    doc.forms = crate::forms::collect(&doc)?;
     Ok(doc)
 }

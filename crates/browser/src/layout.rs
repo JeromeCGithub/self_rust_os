@@ -20,8 +20,14 @@ pub struct Page {
     pub height: u32,
     pub background: u32,
     pub truncated: bool,
+    pub forms: Vec<Form>,
+    pub controls: Vec<Control>,
 }
 impl Page {
+    /// Whether layout exposes any readable text or interactive control.
+    pub fn is_empty(&self) -> bool {
+        self.controls.is_empty() && !self.items.iter().any(|item| !item.text.trim().is_empty())
+    }
     pub fn hit(&self, x: i32, y: i32) -> Option<&str> {
         self.items
             .iter()
@@ -189,6 +195,43 @@ fn node(
         text(page, flow, &n.text, &style, link);
         return;
     }
+    if let Some((form, field)) = page.forms.iter().enumerate().find_map(|(form, f)| {
+        f.fields
+            .iter()
+            .position(|field| field.node == id)
+            .map(|field| (form, field))
+    }) {
+        let data = &page.forms[form].fields[field];
+        if data.kind == FieldKind::Hidden {
+            return;
+        }
+        if data.kind == FieldKind::Text {
+            flow.flush();
+        }
+        let available = (flow.right - flow.left).max(0) as u32;
+        let width = if data.kind == FieldKind::Text {
+            400.min(available)
+        } else {
+            (data.value.len().max(6) as u32 * 8 + 20).min(available)
+        };
+        if flow.x + width as i32 > flow.right {
+            flow.newline();
+        }
+        page.controls.push(Control {
+            form,
+            field,
+            x: flow.x,
+            y: flow.y,
+            width,
+            height: 26,
+        });
+        flow.x += width as i32 + 8;
+        flow.line = flow.line.max(34);
+        if data.kind == FieldKind::Text {
+            flow.newline();
+        }
+        return;
+    }
     if n.tag == "br" {
         flow.newline();
         return;
@@ -297,6 +340,8 @@ pub(crate) fn layout(doc: &Document, width: u32) -> Page {
         height: 0,
         background: 0xffffff,
         truncated: false,
+        forms: doc.forms.clone(),
+        controls: Vec::new(),
     };
     if width == 0 {
         return page;

@@ -90,6 +90,7 @@ pub(crate) struct Head {
     pub status: u16,
     pub length: Option<usize>,
     pub chunked: bool,
+    pub charset: Option<crate::Charset>,
 }
 fn number(bytes: &[u8], radix: u32) -> Result<usize, Error> {
     if bytes.is_empty() {
@@ -149,6 +150,7 @@ pub(crate) fn headers(
             status,
             length: None,
             chunked: false,
+            charset: None,
         };
         loop {
             let n = r.line(&mut line)?;
@@ -160,6 +162,35 @@ pub(crate) fn headers(
                 break;
             }
             let (k, v) = field(&line[..n])?;
+            if k.eq_ignore_ascii_case(b"content-type") {
+                for parameter in v.split(|b| *b == b';').skip(1) {
+                    if let Some(at) = parameter.iter().position(|b| *b == b'=') {
+                        if trim(&parameter[..at]).eq_ignore_ascii_case(b"charset") {
+                            let mut label = trim(&parameter[at + 1..]);
+                            if label.len() >= 2
+                                && label[0] == b'"'
+                                && label[label.len() - 1] == b'"'
+                            {
+                                label = &label[1..label.len() - 1];
+                            }
+                            head.charset = Some(
+                                if label.eq_ignore_ascii_case(b"utf-8")
+                                    || label.eq_ignore_ascii_case(b"utf8")
+                                {
+                                    crate::Charset::Utf8
+                                } else if label.eq_ignore_ascii_case(b"iso-8859-1")
+                                    || label.eq_ignore_ascii_case(b"windows-1252")
+                                    || label.eq_ignore_ascii_case(b"latin1")
+                                {
+                                    crate::Charset::Windows1252
+                                } else {
+                                    crate::Charset::Other
+                                },
+                            );
+                        }
+                    }
+                }
+            }
             if k.eq_ignore_ascii_case(b"content-length") {
                 if head.length.is_some() {
                     return Err(Error::Protocol);

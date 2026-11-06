@@ -157,3 +157,11 @@ GET contract and calls `effective(&str)` once after a successful response and
 socket close. The URL includes followed redirects and excludes the fragment.
 The observer is not called on failure. Existing `get` / `get_with` callers retain
 their API. [jbrowse](jbrowse.md) uses this for redirected relative links and CSS.
+
+## Declared text encoding
+
+`Response::charset` reports an optional typed `Charset` from the final response's
+Content-Type header: `Utf8`, `Windows1252` (also ISO-8859-1/Latin-1 labels), or
+`Other`. The transport does not decode or alter body bytes. Browser decoding
+policy stays in [userspace](jbrowse-google.md); existing streaming consumers can
+ignore this additive metadata. This changes no syscall ABI.

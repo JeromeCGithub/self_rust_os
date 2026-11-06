@@ -129,3 +129,8 @@ unsupported-loop recovery and subsequent navigation, in addition to the parent
 browser acceptance cases and the real CERN request. PR evidence distinguishes
 these checks from inherited HTTP/TLS/UI results. Manual host GUI testing remains
 outstanding. No modern website or full JavaScript conformance has been verified.
+
+The browser now opens Google by default and has generic GET form controls; see
+[the Google status guide](jbrowse-google.md). Google search results still require
+JavaScript beyond this prototype. A script-only blank page now gets an explicit
+unsupported-script fallback, covered by QEMU pixel assertions.

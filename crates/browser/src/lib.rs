@@ -2,6 +2,10 @@
 #![no_std]
 extern crate alloc;
 mod css;
+mod encoding;
+mod forms;
+pub use encoding::{decode_html, Encoding};
+pub use forms::{Control, Field, FieldKind, Form};
 mod html;
 mod layout;
 mod url;
@@ -18,6 +22,8 @@ pub const MAX_DEPTH: usize = 64;
 pub enum Error {
     Limit,
     InvalidUrl,
+    UnsupportedForm,
+    Encoding,
 }
 
 /// Flat arena: indices own relationships, never references into movable storage.
@@ -43,6 +49,7 @@ pub struct Document {
     pub title: String,
     pub nodes: Vec<Node>,
     pub stylesheets: Vec<String>,
+    pub forms: Vec<Form>,
     rules: Vec<css::Rule>,
     css_bytes: usize,
 }

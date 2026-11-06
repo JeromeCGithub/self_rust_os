@@ -2,7 +2,7 @@
 
 [jbrowse](../user_programs/jbrowse/src/main.rs) is an ordinary Ring 3 application.
 Launch **JBROWSE** on the desktop, or run `./jbrowse` in Terminal.
-An optional first argument supplies the initial URL:
+Without arguments it loads Google. An optional first argument supplies the initial URL:
 
 ```text
 ./jbrowse http://info.cern.ch/hypertext/WWW/TheProject.html
@@ -12,7 +12,9 @@ Click the address field to select its contents, type a replacement and press
 Enter or click Go. An explicit HTTP/HTTPS URL navigates directly; a bare hostname
 uses HTTPS; words become a percent-encoded Google search URL. This submits a
 search, but does not promise that the search engine's modern result page fits
-the supported HTML/CSS subset. R reloads the current document. Up/Down scroll;
+the supported HTML/CSS subset. Click a page text field to edit it; Enter or its submit button sends a GET form.
+[Google startup and search status](jbrowse-google.md) records the real public-site
+check and the remaining JavaScript-gated results limitation. R reloads the current document. Up/Down scroll;
 click the document and use j/k or Space to scroll with the keyboard. Escape
 selects the address again. Backspace edits it. There is one tab and no history.
 
@@ -80,12 +82,13 @@ input and resolved URLs are bounded to 2048 bytes. HTTP uses existing redirect
 and connection deadlines and verified TLS; HTTPS downgrades are refused by the
 transport. Network failure leaves the previous page readable and shows an error.
 
-There is no image decoding, forms, cookies, storage, downloads, tabs/history,
+There is no image decoding, POST forms, cookies, storage, downloads, tabs/history,
 flex/grid, responsive media queries, or browser-compatible font metrics.
 The [inline scripting prototype](jbrowse-javascript.md) adds a bounded JavaScript
 subset; it does not support modern JavaScript applications. Only HTTP(S) navigation is accepted; file/data/javascript links
 are rejected. HTTPS capability does not imply support for arbitrary modern sites.
-UTF-8 is required; legacy character encodings are rejected. Allocation failure
+UTF-8 and Windows-1252/Latin-1 responses are supported through typed HTTP charset
+metadata; other declared encodings are rejected. Allocation failure
 can still terminate the application through the SDK allocator. This is an early
 browser, with no claim of production browser security or web standards conformance.
 

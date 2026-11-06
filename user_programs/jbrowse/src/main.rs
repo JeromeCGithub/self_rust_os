@@ -5,7 +5,8 @@ use alloc::{
     format,
     string::{String, ToString},
 };
-use rustos_browser::{address, resolve, Page};
+use rustos_browser::{address, resolve, FieldKind, Page};
+const HOME_PAGE: &str = "https://www.google.com/";
 use userlib::{
     println,
     sync::{Arc, Mutex},
@@ -28,10 +29,27 @@ struct Browser {
     loading: bool,
     generation: u64,
     pressed: Option<(i32, i32)>,
+    active_field: Option<(usize, usize)>,
+    field_editor: TextInput,
 }
 impl Browser {
     fn new() -> Self {
-        Self { address:TextInput::new("http://info.cern.ch/hypertext/WWW/TheProject.html"),current:String::new(),status:"Click the address, type a URL or search, then Enter".into(),title:"New page".into(),page:rustos_browser::Document::parse("<h1>jbrowse</h1><p>A small window onto the web.</p><p>Enter an HTTP or HTTPS URL above. Words open web search.</p><p>Click links to navigate. Use Up / Down or j / k to scroll.</p>").expect("built-in page").layout(640),scroll:0,editing:true,loading:false,generation:0,pressed:None }
+        Self {
+            address: TextInput::new(HOME_PAGE),
+            current: String::new(),
+            status: "Loading start page...".into(),
+            title: "New page".into(),
+            page: rustos_browser::Document::parse("<p>Loading the start page...</p>")
+                .expect("built-in page")
+                .layout(640),
+            scroll: 0,
+            editing: false,
+            loading: false,
+            generation: 0,
+            pressed: None,
+            active_field: None,
+            field_editor: TextInput::default(),
+        }
     }
     fn navigate(&mut self, shared: &Mutex<Shared>, input: &str) {
         match address(input) {
@@ -39,6 +57,7 @@ impl Browser {
                 self.generation = self.generation.wrapping_add(1);
                 self.address.set(&url);
                 self.editing = false;
+                self.active_field = None;
                 self.status = "Loading...".into();
                 self.loading = true;
                 // One worker, one replaceable request and one result. No app lock
@@ -51,6 +70,12 @@ impl Browser {
             }
         }
     }
+    fn submit_form(&mut self, shared: &Mutex<Shared>, form: usize, submitter: Option<usize>) {
+        match self.page.forms[form].submit(&self.current, submitter) {
+            Ok(url) => self.navigate(shared, &url),
+            Err(_) => self.status = "Unsupported form or search URL too long".into(),
+        }
+    }
     fn scroll_by(&mut self, delta: i32) {
         let max = self.page.height.saturating_sub(308);
         self.scroll = (self.scroll as i64 + delta as i64).clamp(0, max as i64) as u32;
@@ -58,10 +83,37 @@ impl Browser {
     fn click(&mut self, shared: &Mutex<Shared>, x: i32, y: i32) {
         if Rect::new(8, 30, 516, 26).contains(x, y) {
             self.editing = true;
+            self.active_field = None;
             self.address.select_all();
             return;
         }
         self.editing = false;
+        self.active_field = None;
+        if (64..372).contains(&y) {
+            if let Some(control) = self
+                .page
+                .controls
+                .iter()
+                .rev()
+                .find(|control| control.contains(x, y - 64 + self.scroll as i32))
+            {
+                let (form, field) = (control.form, control.field);
+                let data = &self.page.forms[form].fields[field];
+                if data.disabled {
+                    return;
+                }
+                match data.kind {
+                    FieldKind::Text if !data.readonly => {
+                        self.field_editor.set(&data.value);
+                        self.field_editor.select_all();
+                        self.active_field = Some((form, field));
+                    }
+                    FieldKind::Submit => self.submit_form(shared, form, Some(field)),
+                    _ => {}
+                }
+                return;
+            }
+        }
         if Rect::new(532, 30, 48, 26).contains(x, y) {
             let url = self.address.as_str().to_string();
             self.navigate(shared, &url);
@@ -149,6 +201,64 @@ impl Browser {
                     );
                 }
             }
+            for control in &self.page.controls {
+                let y = control.y - self.scroll as i32;
+                if y + control.height as i32 <= 0 || y >= 308 {
+                    continue;
+                }
+                let field = &self.page.forms[control.form].fields[control.field];
+                let active = self.active_field == Some((control.form, control.field));
+                let border = if active { 0x397ac0 } else { 0x7e9bb9 };
+                viewport.fill_rect(
+                    Rect::new(control.x, y, control.width, control.height),
+                    Color::rgb(border),
+                );
+                let fill = if field.kind == FieldKind::Text {
+                    0xf7fbff
+                } else {
+                    0xe3edf9
+                };
+                viewport.fill_rect(
+                    Rect::new(
+                        control.x + 1,
+                        y + 1,
+                        control.width.saturating_sub(2),
+                        control.height.saturating_sub(2),
+                    ),
+                    Color::rgb(fill),
+                );
+                let left = control.x + 6;
+                let width = control.width.saturating_sub(12);
+                // Keep the complete control visible area inside the page viewport.
+                if y >= 0 && y + control.height as i32 <= 308 && width > 0 {
+                    if let Some(mut input) = viewport.viewport(Rect::new(left, y + 7, width, 12)) {
+                        let label = if field.value.is_empty() {
+                            &field.label
+                        } else {
+                            &field.value
+                        };
+                        if active && self.field_editor.is_selected() {
+                            input.clear(Color::rgb(0xc2d8f5));
+                        }
+                        ui::text(
+                            &mut input,
+                            0,
+                            1,
+                            label,
+                            Color::rgb(if field.disabled { 0x8a8a8a } else { 0x172b43 }),
+                            1,
+                        );
+                        if active && !self.field_editor.is_selected() {
+                            let cursor = (self.field_editor.as_str()[..self.field_editor.cursor()]
+                                .chars()
+                                .count()
+                                .min((width / 8) as usize)
+                                * 8) as i32;
+                            input.fill_rect(Rect::new(cursor, 0, 1, 10), Color::rgb(0x172b43));
+                        }
+                    }
+                }
+            }
         }
         if let Some(mut status) = canvas.viewport(Rect::new(8, 380, 516, 14)) {
             ui::text(&mut status, 0, 1, &self.status, Color::rgb(0xc6d9ed), 1);
@@ -184,9 +294,7 @@ fn main(_argc: usize, argv: &[&str]) {
         }
     };
     let mut browser = Browser::new();
-    if let Some(url) = argv.get(1) {
-        browser.navigate(&shared, url);
-    }
+    browser.navigate(&shared, argv.get(1).copied().unwrap_or(HOME_PAGE));
     window
         .draw(|canvas| browser.paint(canvas))
         .expect("browser first frame");
@@ -218,13 +326,24 @@ fn main(_argc: usize, argv: &[&str]) {
         let n = sys::read_nb(sys::STDIN_FD, &mut bytes);
         for &byte in &bytes[..n] {
             if byte == b'\n' || byte == b'\r' {
-                let url = browser.address.as_str().to_string();
-                browser.navigate(&shared, &url);
+                if let Some((form, _)) = browser.active_field {
+                    browser.submit_form(&shared, form, None);
+                } else {
+                    let url = browser.address.as_str().to_string();
+                    browser.navigate(&shared, &url);
+                }
                 dirty = true;
             } else if byte == 27 {
                 browser.editing = true;
+                browser.active_field = None;
                 browser.address.select_all();
                 dirty = true;
+            } else if let Some((form, field)) = browser.active_field {
+                if browser.field_editor.byte(byte) {
+                    browser.page.forms[form].fields[field].value =
+                        browser.field_editor.as_str().to_string();
+                    dirty = true;
+                }
             } else if browser.editing {
                 dirty |= browser.address.byte(byte);
             } else {
