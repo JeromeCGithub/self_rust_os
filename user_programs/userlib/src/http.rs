@@ -2,7 +2,7 @@
 //! The callback receives decoded body bytes; sockets close on success or error.
 //! HTTPS uses the optional TLS feature, verified certificates and platform time/RNG.
 use crate::{net, sys};
-pub use rustos_http::{Charset, Error, Options, Request, Response};
+pub use rustos_http::{ByteRange, Charset, ContentRange, Error, Options, Request, Response};
 
 #[derive(Default)]
 struct Sockets {
@@ -125,6 +125,8 @@ pub fn error_message(error: Error) -> &'static str {
         Error::Clock => "UTC clock unavailable",
         Error::InsecureRedirect => "HTTPS downgrade refused",
         Error::CrossOriginRedirect => "POST redirect to another origin refused",
+        Error::RangeIgnored => "server ignored the media byte range",
+        Error::RangeUnsatisfiable => "media byte range unavailable",
         Error::InvalidUrl => "invalid HTTP or HTTPS URL",
         Error::Dns => "DNS lookup failed",
         Error::Timeout => "request timed out",

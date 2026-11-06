@@ -8,4 +8,4 @@
 ///
 /// Pages beyond this offset (if any) contain mutable data, GOT or BSS sections
 /// and are mapped as writable.
-pub const READONLY_SIZE: usize = 3788800;
+pub const READONLY_SIZE: usize = 3792896;

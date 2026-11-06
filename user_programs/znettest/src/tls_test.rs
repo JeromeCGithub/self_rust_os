@@ -102,6 +102,7 @@ pub fn run(config: [u8; 12]) -> ! {
         for (server, host, path, trusted, expected) in [
             (0, "fixture.test", "/", true, None),
             (0, "fixture.test", "/post", true, None),
+            (0, "fixture.test", "/range", true, None),
             (3, "fixture.test", "/", true, None),
             (0, "fixture.test", "/large", true, None),
             (0, "fixture.test", "/chunked", true, None),
@@ -156,7 +157,9 @@ pub fn run(config: [u8; 12]) -> ! {
             let mut sum = 0u64;
             let result = http::request_with_url(
                 url.text(),
-                if path == "/post" {
+                if path == "/range" {
+                    http::Request::GetRange(http::ByteRange { first: 4, last: 7 })
+                } else if path == "/post" {
                     http::Request::FormPost(b"user=guest&password=testpass")
                 } else {
                     http::Request::Get
@@ -189,7 +192,17 @@ pub fn run(config: [u8; 12]) -> ! {
                 assert_eq!(length, 0);
             } else {
                 assert_eq!(result.unwrap().bytes, length);
-                if path == "/large" {
+                if path == "/range" {
+                    assert_eq!(&output[..length], b"efgh");
+                    assert_eq!(
+                        result.unwrap().range,
+                        Some(http::ContentRange::Satisfied {
+                            first: 4,
+                            last: 7,
+                            total: 12
+                        })
+                    );
+                } else if path == "/large" {
                     assert_eq!(length, 65536);
                     assert_eq!(sum, 65536 * 120);
                 } else {

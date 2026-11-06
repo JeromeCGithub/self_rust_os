@@ -112,6 +112,119 @@ fn content_length_and_fragmented_headers_short_writes() {
 }
 
 #[test]
+fn ranged_get_validates_coordinates_and_exact_body_before_accepting_a_seek() {
+    use rustos_http::{request_with_url, ByteRange, ContentRange, Request};
+    for (last, total) in [(7, 100), (7, 8)] {
+        let mut m = Mock {
+            short: 3,
+            ..Mock::default()
+        };
+        m.incoming.push_back(format!("HTTP/1.1 206 Partial\r\nContent-Range: bytes 4-{last}/{total}\r\nContent-Length: 4\r\n\r\nefgh").into_bytes());
+        let mut data = vec![];
+        let result = request_with_url(
+            &mut m,
+            "http://10.0.2.2/media",
+            Request::GetRange(ByteRange { first: 4, last: 10 }),
+            Options::default(),
+            |part| {
+                data.extend_from_slice(part);
+                Ok(())
+            },
+            |_| {},
+        );
+        if total == 8 {
+            assert_eq!(
+                result.unwrap().range,
+                Some(ContentRange::Satisfied {
+                    first: 4,
+                    last: 7,
+                    total: 8
+                })
+            );
+            assert_eq!(data, b"efgh");
+        } else {
+            assert_eq!(result, Err(Error::Protocol));
+            assert!(data.is_empty());
+        }
+        assert!(String::from_utf8(m.sent)
+            .unwrap()
+            .contains("\r\nRange: bytes=4-10\r\n"));
+        assert_eq!(m.closed, 1);
+    }
+}
+
+#[test]
+fn media_range_rejects_ignored_unsatisfiable_and_malformed_responses_without_body_delivery() {
+    use rustos_http::{request_with_url, ByteRange, Request};
+    for (head,expected) in [
+        ("HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nabcd",Error::RangeIgnored),
+        ("HTTP/1.1 416 Range\r\nContent-Range: bytes */4\r\nContent-Length: 0\r\n\r\n",Error::RangeUnsatisfiable),
+        ("HTTP/1.1 206 Partial\r\nContent-Range: bytes 3-7/8\r\nContent-Length: 5\r\n\r\ndefgh",Error::Protocol),
+        ("HTTP/1.1 206 Partial\r\nContent-Range: bytes 4-8/8\r\n\r\n",Error::Protocol),
+        ("HTTP/1.1 206 Partial\r\nContent-Length: 4\r\n\r\nefgh",Error::Protocol),
+        ("HTTP/1.1 206 Partial\r\nContent-Range: bytes 4-7/8\r\nContent-Range: bytes 4-7/8\r\n\r\n",Error::Protocol),
+    ] {
+        let mut m=Mock::default();m.incoming.push_back(head.as_bytes().to_vec());let mut delivered=0;
+        assert_eq!(request_with_url(&mut m,"http://10.0.2.2/media",Request::GetRange(ByteRange{first:4,last:7}),Options::default(),|part|{delivered+=part.len();Ok(())},|_|{}),Err(expected));
+        assert_eq!(delivered,0);assert_eq!(m.closed,1);
+    }
+}
+
+#[test]
+fn media_range_bounds_chunked_truncation_and_redirects_preserve_cleanup() {
+    use rustos_http::{request_with_url, ByteRange, Request};
+    for range in [
+        ByteRange { first: 8, last: 7 },
+        ByteRange {
+            first: 0,
+            last: u64::MAX,
+        },
+        ByteRange {
+            first: 0,
+            last: 1000,
+        },
+    ] {
+        let mut m = Mock::default();
+        assert!(request_with_url(
+            &mut m,
+            "http://10.0.2.2/media",
+            Request::GetRange(range),
+            Options {
+                max_body: 8,
+                ..Default::default()
+            },
+            |_| Ok(()),
+            |_| {}
+        )
+        .is_err());
+        assert_eq!(m.opened, 0);
+    }
+    let mut m = Mock::default();
+    m.incoming
+        .push_back(b"HTTP/1.1 302 Redirect\r\nLocation: /next\r\n\r\n".to_vec());
+    m.incoming.push_back(b"HTTP/1.1 206 Partial\r\nContent-Range: bytes 4-7/10\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nefg\r\n0\r\n\r\n".to_vec());
+    assert_eq!(
+        request_with_url(
+            &mut m,
+            "http://10.0.2.2/media",
+            Request::GetRange(ByteRange { first: 4, last: 7 }),
+            Options::default(),
+            |_| Ok(()),
+            |_| {}
+        ),
+        Err(Error::Truncated)
+    );
+    assert_eq!(m.closed, 2);
+    assert_eq!(
+        String::from_utf8(m.sent)
+            .unwrap()
+            .matches("Range: bytes=4-7")
+            .count(),
+        2
+    );
+}
+
+#[test]
 fn form_post_short_writes_body_and_content_headers_without_url_leakage() {
     use rustos_http::{request_with_url, Request};
     let mut m = Mock {
