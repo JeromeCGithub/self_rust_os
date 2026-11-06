@@ -144,6 +144,7 @@ pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: 
         }
         64..=70 => crate::net::syscall(num, arg1, arg2, arg3),
         80..=81 => crate::system::syscall(num, arg1, arg2, arg3),
+        82..=85 => crate::audio::syscall(num, arg1, arg2, arg3),
         SYS_READ_NB => sys_read_nb(arg1, arg2, arg3),
         SYS_LS => sys_ls(arg1, arg2, arg3),
         SYS_READ_FILE => sys_read_file(arg1, arg2, arg3),

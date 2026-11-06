@@ -13,6 +13,7 @@ fonts = ["alloc", "dep:rustos-text", "rustos-text/truetype"]
 tls = ["alloc", "dep:rustos-tls", "dep:getrandom"]
 
 [dependencies]
+rustos-audio-abi = { path = "../../crates/audio-abi" }
 rustos-text = { path = "../../crates/text", optional = true }
 rustos-process-abi = { path = "../../crates/process-abi" }
 rustos-thread-abi = { path = "../../crates/thread-abi" }

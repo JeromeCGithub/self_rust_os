@@ -209,6 +209,7 @@ pub(super) fn stop_owned_child_locked(sched: &mut Scheduler, parent: Pid) {
             p.exit_code = 9;
         }
         crate::net::cleanup(child);
+        crate::audio::cleanup(child);
         stop_threads_locked(sched, child);
         current = child;
     }

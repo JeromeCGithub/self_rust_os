@@ -718,6 +718,7 @@ fn stop_process_locked(s: &mut Scheduler, pid: Pid, code: u64) {
     stop_threads_locked(s, pid);
     smp::reschedule_all();
     crate::net::cleanup(pid);
+    crate::audio::cleanup(pid);
     stop_owned_child_locked(s, pid);
     events::wake_locked(s);
     wake_waiters_locked(s, pid);
