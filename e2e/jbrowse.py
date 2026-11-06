@@ -59,6 +59,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             '/after-cancel': b'<title>HTTP cancellation recovered</title><style>body {background:#e2f3e4}</style><h1>HTTP cancellation recovered</h1>',
             '/after-tls': b'<title>TLS cancellation recovered</title><style>body {background:#dbf0fa}</style><h1>TLS cancellation recovered</h1>',
             '/big': b'x' * 262145,
+            '/pixels.png': (ROOT/'crates/web-image/tests/fixtures/two-pixels.png').read_bytes(),
+            '/image': b"<title>Image fixture</title><a href='/dir/next.html'><img src='/pixels.png' width=120 alt='Image fallback'></a>",
+            '/bad.png': b'not an image',
+            '/bad-image': b"<title>Broken image fixture</title><img src='/bad.png' alt='Readable fallback'><p>Image failure recovery</p>",
+            '/typography': "<title>Typography fixture</title><style>body{font-family:sans-serif;font-size:16px;background:#f9f9f9}</style><h1>Readable text</h1><p><span style='color:#0000ff'>WWW</span> <span style='color:#ff0000'>iii</span> café Ω Ж</p><p style='font-family:serif'>A proportional serif paragraph.</p><pre>Monospace code: 0123456789</pre>".encode(),
             '/form': b"<title>Search fixture</title><form action='/find'><input type=hidden name=hl value=en><input name=q title='Search'><input type=submit name=btnG value=Search></form>",
             '/script': b"<title>Before script</title><p id='result'>Waiting</p><script>const n=6*7; document.getElementById('result').textContent='Answer: '+n; document.getElementById('result').style.color='#123456'; document.body.style.backgroundColor='#e8dcff'; document.title='Script ready';</script>",
             '/blank-script': b"<title>Blank script</title><script>while(true) {}</script>",
@@ -171,11 +176,17 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         wait('[desktop] ready:')
         click(terminal_x,65)
         wait('[portal] shell pid=')
-        type_text('./jbrowse' if os.environ.get('RUSTOS_JBROWSE_GOOGLE') == '1' else f'./jbrowse http://10.0.2.2:{server.server_port}/start')
+        start_path='/stalled' if os.environ.get('RUSTOS_JBROWSE_STOP_STARTUP') == '1' else '/start'
+        type_text('./jbrowse' if os.environ.get('RUSTOS_JBROWSE_GOOGLE') == '1' else f'./jbrowse http://10.0.2.2:{server.server_port}{start_path}')
         key('ret')
         wait('[jbrowse] ready')
         # Second native window: x=92, titlebar y=128, content y=156.
         ox,oy=92,156
+        if os.environ.get('RUSTOS_JBROWSE_STOP_STARTUP') == '1':
+            assert stalled_started.wait(5), 'startup request not sent'
+            mark=len(output());click(ox+608,oy+42);wait('[jbrowse] stopped',mark)
+            assert stalled_closed.wait(.5), 'startup stop did not close its socket'
+            print('PASS: Stop cancels the first navigation before any page commits')
         if os.environ.get('RUSTOS_JBROWSE_GOOGLE') == '1':
             wait('[jbrowse] loaded: Google')
             # Wait for the actual native input rectangle, excluding the loading
@@ -256,15 +267,53 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
             navigate('/dir/next.html');wait('[jbrowse] loaded: Second page')
             pixel((ox+500,oy+200),(212,237,218),'script-recovery')
         if os.environ.get('RUSTOS_JBROWSE_PUBLIC') == '1':
+            before_public=shot('before-public').crop((ox,oy+64,ox+640,oy+200)).tobytes()
             click(ox+120,oy+42)
             type_text('http://info.cern.ch/hypertext/WWW/TheProject.html')
             key('ret')
             wait('[jbrowse] loaded: The World Wide Web project')
-            image=pixel((ox+500,oy+200),(255,255,255),'cern-public')
+            # The old background probe now intersects proportional text.
+            # Probe the empty margin and require fresh document pixels as well.
+            deadline=time.monotonic()+20
+            while True:
+                image=pixel((ox+2,oy+100),(255,255,255),'cern-public')
+                if image.crop((ox,oy+64,ox+640,oy+200)).tobytes()!=before_public: break
+                assert time.monotonic()<deadline, 'public document did not replace old pixels'
+                time.sleep(.1)
             # Real page text occupies the document area; toolbar is excluded.
             colors=image.crop((ox,oy+64,ox+640,oy+200)).getcolors(640*136)
             assert sum(count for count,color in colors if color != (255,255,255)) > 100, 'public page has no rendered text'
+        if os.environ.get('RUSTOS_JBROWSE_IMAGES') == '1':
+            navigate('/image');wait('[jbrowse] loaded: Image fixture')
+            pixel((ox+20,oy+84),(255,0,0),'decoded-image')
+            pixel((ox+100,oy+84),(127,255,127),'alpha-image')
+            pixel((ox+100,oy+130),(127,255,127),'image-no-text-decoration')
+            click(ox+20,oy+84);wait('[jbrowse] loaded: Second page')
+            mark=len(output());click(ox+21,oy+42);wait('[jbrowse] loaded: Image fixture',mark)
+            pixel((ox+20,oy+84),(255,0,0),'history-image')
+            mark=len(output());click(ox+53,oy+42);wait('[jbrowse] loaded: Second page',mark)
+            pixel((ox+500,oy+200),(212,237,218),'history-forward')
+            navigate('/bad-image');wait('[jbrowse] loaded: Broken image fixture')
+            image=pixel((ox+500,oy+200),(255,255,255),'bad-image-fallback')
+            assert any(color!=(255,255,255) and count>20 for count,color in image.crop((ox,oy+64,ox+400,oy+150)).getcolors(400*86)), 'image failure erased document fallback'
+            print('PASS: native PNG pixels, alpha/scaling, image link hits and failure fallback')
+        if os.environ.get('RUSTOS_JBROWSE_TYPOGRAPHY') == '1':
+            navigate('/typography');wait('[jbrowse] loaded: Typography fixture')
+            image=pixel((ox+500,oy+200),(249,249,249),'typography')
+            crop=image.crop((ox,oy+64,ox+640,oy+300))
+            colors=crop.getcolors(crop.width*crop.height)
+            assert len(colors)>20, 'page text has no antialiased coverage'
+            blue=[];red=[]
+            for y in range(crop.height):
+                for x in range(crop.width):
+                    r,g,b=crop.getpixel((x,y))
+                    if b>200 and r<120 and g<120:blue.append(x)
+                    if r>200 and g<120 and b<120:red.append(x)
+            assert blue and red, 'proportional glyph fixtures absent'
+            assert max(blue)-min(blue)>2*(max(red)-min(red)), 'WWW and iii still use a fixed glyph cell'
+            print('PASS: native proportional antialiased fonts, CSS families and Unicode fixture')
         if os.environ.get('RUSTOS_JBROWSE_LIFECYCLE') == '1':
+            stalled_started.clear();stalled_closed.clear()
             navigate('/stalled')
             assert stalled_started.wait(5), 'stalled HTTP fixture not requested'
             began=time.monotonic()

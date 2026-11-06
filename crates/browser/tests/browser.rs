@@ -133,3 +133,167 @@ fn optional_list_end_tags_do_not_accumulate_indentation() {
     let x = |text| page.items.iter().find(|item| item.text == text).unwrap().x;
     assert_eq!(x("First"), x("Second"));
 }
+
+#[test]
+fn proportional_metrics_drive_wrap_geometry_and_link_hits() {
+    struct Proportional;
+    impl rustos_text::Metrics for Proportional {
+        fn advance(&self, ch: char, _: rustos_text::Style) -> u32 {
+            if ch == 'W' {
+                9
+            } else {
+                3
+            }
+        }
+        fn line_height(&self, _: rustos_text::Style) -> u32 {
+            14
+        }
+        fn default_size(&self) -> u16 {
+            16
+        }
+    }
+    let doc =
+        Document::parse("<p><a href='/wide'>WWW</a></p><p><a href='/narrow'>iii</a></p>").unwrap();
+    let page = doc.layout_with(200, &Proportional);
+    let wide = page.items.iter().find(|item| item.text == "WWW").unwrap();
+    let narrow = page.items.iter().find(|item| item.text == "iii").unwrap();
+    assert_eq!(wide.width, 27);
+    assert_eq!(narrow.width, 9);
+    assert_eq!(wide.height, 14);
+    assert_eq!(page.hit(wide.x + 26, wide.y), Some("/wide"));
+    assert_eq!(page.hit(wide.x + 27, wide.y), None);
+}
+
+#[test]
+fn decoded_images_have_aspect_geometry_link_hits_and_a_visible_page() {
+    use std::sync::Arc;
+    let mut doc =
+        Document::parse("<a href='/next'><img src='/logo.png' width='120' alt='fallback'></a>")
+            .unwrap();
+    let image = rustos_browser::Image::decode(include_bytes!(
+        "../../web-image/tests/fixtures/two-pixels.png"
+    ))
+    .unwrap();
+    let node = doc.nodes.iter().position(|node| node.tag == "img").unwrap();
+    doc.set_image(node, Arc::new(image))
+        .expect("associate decoded image");
+    let page = doc.layout(640);
+    assert!(!page.is_empty());
+    assert_eq!(page.hit(20, 20), Some("/next"));
+    assert!(page
+        .items
+        .iter()
+        .any(|item| item.width == 120 && item.height == 60));
+}
+
+#[test]
+fn linked_and_inline_author_sheets_follow_document_order_and_importance() {
+    let mut doc = Document::parse(
+        "<link rel='stylesheet' href='/first.css'><style>p {color:blue}</style><p id=x>Order</p>",
+    )
+    .unwrap();
+    assert_eq!(doc.apply_stylesheets(|_| Some("p {color:red}".into())), 0);
+    assert_eq!(
+        doc.layout(200)
+            .items
+            .iter()
+            .find(|item| item.text == "Order")
+            .unwrap()
+            .color,
+        0x0000ff
+    );
+    let doc=Document::parse("<style>p {color:blue !important} #x{color:green}</style><p id=x style='color:red'>Priority</p><p style='color:red!important'>Inline important</p>").unwrap();
+    let page = doc.layout(200);
+    assert_eq!(
+        page.items
+            .iter()
+            .find(|item| item.text == "Priority")
+            .unwrap()
+            .color,
+        0x0000ff
+    );
+    assert!(page
+        .items
+        .iter()
+        .any(|item| item.text.contains("Inline") && item.color == 0xff0000));
+}
+
+#[test]
+fn text_after_image_keeps_its_own_metrics_and_image_geometry() {
+    use std::sync::Arc;
+    let mut doc =
+        Document::parse("<body style='color:black'><img src='/x' width=120>After</body>").unwrap();
+    let node = doc.nodes.iter().position(|node| node.tag == "img").unwrap();
+    let image = rustos_browser::Image::decode(include_bytes!(
+        "../../web-image/tests/fixtures/two-pixels.png"
+    ))
+    .unwrap();
+    doc.set_image(node, Arc::new(image)).unwrap();
+    let page = doc.layout(640);
+    let image = page.items.iter().find(|i| i.image.is_some()).unwrap();
+    assert_eq!(
+        image.width, 120,
+        "text must not stretch the preceding image"
+    );
+    assert!(image.text.is_empty());
+    assert!(page
+        .items
+        .iter()
+        .any(|i| i.image.is_none() && i.text == "After" && i.x == image.x + 120));
+}
+
+#[test]
+fn image_limits_reject_invalid_buffers_and_keep_previous_resource_on_failure() {
+    use std::sync::Arc;
+    let mut doc = Document::parse(&"<img>".repeat(17)).unwrap();
+    let nodes: Vec<_> = doc
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.tag == "img")
+        .map(|(id, _)| id)
+        .collect();
+    let valid = Arc::new(rustos_browser::Image {
+        width: 1,
+        height: 1,
+        rgba: vec![255; 4],
+    });
+    assert!(doc.set_image(usize::MAX, valid.clone()).is_err());
+    assert!(doc
+        .set_image(
+            nodes[0],
+            Arc::new(rustos_browser::Image {
+                width: 2,
+                height: 1,
+                rgba: vec![0; 4]
+            })
+        )
+        .is_err());
+    for &id in &nodes[..16] {
+        doc.set_image(id, valid.clone()).unwrap();
+    }
+    assert!(doc.set_image(nodes[16], valid.clone()).is_err());
+    doc.set_image(nodes[0], valid).unwrap(); // Replacement does not consume another slot.
+    let page = doc.layout(640);
+    assert_eq!(page.images.len(), 16);
+    assert_eq!(page.images[0].image.rgba, [255; 4]);
+
+    let mut doc = Document::parse("<img><img><img><img><img>").unwrap();
+    let nodes: Vec<_> = doc
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.tag == "img")
+        .map(|(id, _)| id)
+        .collect();
+    let large = Arc::new(rustos_browser::Image {
+        width: 1024,
+        height: 1024,
+        rgba: vec![0; 4 * 1024 * 1024],
+    });
+    for &id in &nodes[..4] {
+        doc.set_image(id, large.clone()).unwrap();
+    }
+    assert!(doc.set_image(nodes[4], large).is_err());
+    assert_eq!(doc.layout(640).images.len(), 4);
+}

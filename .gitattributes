@@ -6,3 +6,7 @@ user_programs/de/wallpaper.ppm binary
 # Local engine adapters keep the repository's normal whitespace checks.
 third_party/quickjs/upstream/* linguist-vendored whitespace=-blank-at-eol
 third_party/quickjs/nanoprintf.h linguist-vendored
+
+# Retain original third-party license text exactly, including whitespace.
+third_party/fonts/LICENSE whitespace=-blank-at-eol
+third_party/font-notices/*-MIT.txt whitespace=-blank-at-eof
