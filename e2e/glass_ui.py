@@ -18,7 +18,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / 'tools'))
 from qemu_platform import arguments as platform_arguments
-from qemu_test import disk_image, copy_disk
+from qemu_test import launchers, disk_image, copy_disk
 
 
 def main():
@@ -154,7 +154,7 @@ def main():
                 click(140, 298)
                 wait('[hello-ui] accent changed: 1', offset)
                 # A second native app owns focused input while covering Hello.
-                click(350, 65)
+                click(launchers(disk)['PORTAL'], 65)
                 wait('self_rust_os forge v1.0')
                 offset = log.stat().st_size
                 click(140, 298)

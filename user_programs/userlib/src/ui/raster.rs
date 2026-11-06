@@ -175,6 +175,26 @@ impl<'a> Canvas<'a> {
             stride,
         })
     }
+    /// Borrow a fully contained viewport with local coordinates and inherited pitch.
+    pub fn viewport(&mut self, bounds: Rect) -> Option<Canvas<'_>> {
+        let x = usize::try_from(bounds.x).ok()?;
+        let y = usize::try_from(bounds.y).ok()?;
+        let width = bounds.width as usize;
+        let height = bounds.height as usize;
+        if width == 0
+            || height == 0
+            || x.checked_add(width)? > self.width
+            || y.checked_add(height)? > self.height
+        {
+            return None;
+        }
+        let start = y.checked_mul(self.stride)?.checked_add(x)?;
+        let end = (height - 1)
+            .checked_mul(self.stride)?
+            .checked_add(width)?
+            .checked_add(start)?;
+        Canvas::new(self.pixels.get_mut(start..end)?, width, height, self.stride)
+    }
     /// Content width in pixels.
     pub fn width(&self) -> u32 {
         self.width as u32
@@ -309,5 +329,37 @@ mod tests {
         canvas.fill_rect(Rect::new(0, 0, 1, 1), Color::rgba(255, 0, 0, 128));
         assert_eq!(pixel[0], 0xff80007f);
         assert_eq!(Color::rgba(255, 255, 255, 0), Color::TRANSPARENT);
+    }
+}
+
+#[cfg(test)]
+mod viewport_tests {
+    use super::*;
+    #[test]
+    fn viewport_clips_to_content_preserving_toolbar_pitch_and_guards() {
+        let mut pixels = [0x12345678; 36];
+        let mut canvas = Canvas::new(&mut pixels, 5, 5, 7).unwrap();
+        {
+            let mut view = canvas
+                .viewport(Rect::new(1, 2, 3, 2))
+                .expect("valid viewport");
+            view.fill_rect(Rect::new(-99, -99, 200, 200), Color::rgb(0xabcdef));
+        }
+        assert!(canvas.viewport(Rect::new(-1, 0, 3, 3)).is_none());
+        assert!(canvas.viewport(Rect::new(4, 4, 2, 2)).is_none());
+        assert!(canvas.viewport(Rect::new(0, 0, 0, 2)).is_none());
+        assert!(canvas
+            .viewport(Rect::new(i32::MAX, i32::MAX, u32::MAX, u32::MAX))
+            .is_none());
+        for (index, pixel) in pixels.iter().enumerate() {
+            assert_eq!(
+                *pixel,
+                if [15, 16, 17, 22, 23, 24].contains(&index) {
+                    0xffabcdef
+                } else {
+                    0x12345678
+                }
+            );
+        }
     }
 }

@@ -96,7 +96,19 @@ pub fn get(
     t: &mut impl Transport,
     url: &str,
     options: Options,
+    body: impl FnMut(&[u8]) -> Result<(), Error>,
+) -> Result<Response, Error> {
+    get_with_url(t, url, options, body, |_| {})
+}
+
+/// GET and observe the final response URL once, after success and socket close.
+/// This lets document clients resolve relative resources after HTTP redirects.
+pub fn get_with_url(
+    t: &mut impl Transport,
+    url: &str,
+    options: Options,
     mut body: impl FnMut(&[u8]) -> Result<(), Error>,
+    mut effective: impl FnMut(&str),
 ) -> Result<Response, Error> {
     if options.timeout_ticks == 0 || options.dns_port == 0 {
         return Err(Error::InvalidUrl);
@@ -110,6 +122,11 @@ pub fn get(
             .map_err(|error| t.transport_error().unwrap_or(error));
         t.close(handle);
         if let Some(response) = outcome? {
+            let mut final_url = url::Text::<{ limits::REQUEST }>::new();
+            final_url.push(if url.tls { "https://" } else { "http://" })?;
+            url.authority(&mut final_url)?;
+            final_url.push(url.target.as_str())?;
+            effective(final_url.as_str());
             return Ok(response);
         }
         if redirect == options.redirects {

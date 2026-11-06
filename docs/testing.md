@@ -308,3 +308,10 @@ also exercise a representative existing allocation-heavy application; the local
 `e2e/tls.py` HTTPS fixture covers certificate validation, streaming and exhaustion
 cleanup without requiring a public endpoint. This is separate from compiler TLS.
 See [executed capability evidence](capabilities-validation.md).
+
+## Browser
+
+The [jbrowse guide](jbrowse.md#validation-and-reproduction) lists independent host
+engine/UI tests, QEMU pixel and navigation assertions, and an optional real CERN
+website check. Use a fresh disposable disk. The ordinary desktop suite resolves
+launchers by the same FAT order as DE, so new user applications remain testable.

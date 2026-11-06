@@ -1,0 +1,18 @@
+[package]
+name = "jbrowse"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Single-tab Ring 3 HTML/CSS browser"
+[profile.dev]
+panic = "abort"
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+[dependencies]
+userlib = { path = "../userlib", features = ["tls", "threads"] }
+rustos-browser = { path = "../../crates/browser" }
+[[bin]]
+name = "jbrowse"
+path = "../userlib/src/application.rs"

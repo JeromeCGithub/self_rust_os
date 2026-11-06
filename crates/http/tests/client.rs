@@ -580,3 +580,30 @@ fn streams_up_to_the_expanded_default_body_limit() {
     );
     assert_eq!(mock.closed, 2);
 }
+
+#[test]
+fn final_url_after_redirect_is_observed_once_for_relative_resources() {
+    let mut m = Mock::default();
+    m.incoming.push_back(
+        b"HTTP/1.1 302 Found\r\nLocation: /directory/page\r\nContent-Length: 0\r\n\r\n".to_vec(),
+    );
+    m.incoming
+        .push_back(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec());
+    let mut urls = vec![];
+    let mut bytes = vec![];
+    let r = rustos_http::get_with_url(
+        &mut m,
+        "http://10.0.2.2/start",
+        Options::default(),
+        |b| {
+            bytes.extend_from_slice(b);
+            Ok(())
+        },
+        |u| urls.push(u.to_owned()),
+    )
+    .unwrap();
+    assert_eq!(r.status, 200);
+    assert_eq!(bytes, b"ok");
+    assert_eq!(urls, ["http://10.0.2.2/directory/page"]);
+    assert_eq!(m.opened, m.closed);
+}

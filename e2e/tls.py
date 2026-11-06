@@ -7,7 +7,7 @@ sys.dont_write_bytecode=True
 sys.path.insert(0,str(ROOT/'tools'))
 from qemu_network import arguments as network_arguments
 from qemu_platform import arguments as platform_arguments
-from qemu_test import disk_image
+from qemu_test import launchers, disk_image
 from tls_fixtures import create
 
 
@@ -103,12 +103,12 @@ def main():
      for char in line+'\n':
       key={' ':'spc',':':'shift-semicolon','/':'slash','.':'dot','-':'minus','\n':'ret'}.get(char,char)
       call('human-monitor-command',{'command-line':'sendkey '+key});time.sleep(.075)
-    call('qmp_capabilities');wait('[desktop] ready: 8 applications');click(350);wait('self_rust_os forge v1.0')
+    call('qmp_capabilities');wait('[desktop] ready: ');click(launchers(disk)['PORTAL']);wait('self_rust_os forge v1.0')
     type_line(f'curl https://10.0.2.2:{servers[0].getsockname()[1]}/')
     error='secure randomness unavailable' if args.no_rng else 'UTC clock unavailable' if args.bad_clock else 'TLS certificate rejected'
     wait('[portal] output: curl: '+error)
     type_line('echo tls-prompt-ok');wait('[portal] output: tls-prompt-ok')
-    click(650)
+    click(launchers(disk)['ZNETTEST'])
     expected='unavailable entropy refused' if args.no_rng else 'invalid UTC refused' if args.bad_clock else 'verified HTTPS RSA hostname dates trust redirects streaming cleanup'
     wait('[tlstest] PASS: '+expected)
     if args.site:

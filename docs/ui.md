@@ -90,7 +90,7 @@ panel), with container gaps added between children. Excessive padding produces
 zero available width; drawing and hit-testing stay clipped to window content.
 Trees deeper than 16 levels return `Error::InvalidView` before drawing, protecting
 the small user stack. The tree stores concrete nested values without allocation,
-unsafe code or a DOM. There is no browser, CSS parser, React/Dioxus dependency,
+unsafe code or a DOM. This component layer has no CSS parser, React/Dioxus dependency,
 hook system or reconciliation engine. Text is borrowed `&str`; the mounted root
 must return a fixed view type whose text does not borrow transient application
 state. The example uses static strings selected from state. Dynamic-length lists
@@ -124,7 +124,7 @@ components, layout and styles. The window protocol and syscall ABI are unchanged
 - `poll_event` provides local pointer, focus and close events. The WM routes
   pointer events to the focused native window, retaining delivery outside its
   bounds so a pressed widget can cancel on release outside. Keyboard reads still
-  use focused `sys::read_nb`; the toolkit does not provide text entry widgets yet.
+  use focused `sys::read_nb`; the SDK also provides an independent bounded text editor model.
 - `run` redraws on initial display and window input, and sleeps otherwise. Widget
   state lives in the app's closure. Buttons activate on release inside the widget
   that received the press; focus loss cancels capture. Button labels identify
@@ -206,3 +206,23 @@ lower-layer damage, focus, and close/reopen. Kernel display-mapping tests cover
 authenticated FIFO delivery, queue bounds, isolation and dead recipients.
 Screenshots are generated from these QEMU runs. Manual host GUI testing remains
 separate from QMP-injected input.
+
+## Text entry and contained viewports
+
+`ui::text_input::TextInput` (alloc feature) owns at most 2048 bytes of single-line
+UTF-8 text. It supports selection replacement, printable ASCII byte input,
+UTF-8-safe Backspace, and home/end control bytes. Applications own focus,
+selection policy, rendering and transport-specific key decoding. The current
+keyboard syscall does not deliver arbitrary raw-key navigation or Ctrl shortcuts.
+Clicking the [browser](jbrowse.md) address selects all; Escape also selects it.
+
+`Canvas::viewport(Rect)` returns a borrowed canvas only for a nonempty fully
+contained rectangle. Coordinates become local, scanline pitch is preserved,
+and drawing clips within the rectangle. The borrow prevents simultaneous mutable
+access through the parent, and no new pointer or unsafe code is needed. Browser
+scrolling uses this to prevent page text from painting over native chrome.
+
+Input received while waiting for frame RELEASE is buffered in a bounded FIFO and
+returned by `poll_event` in order. Pointer press/release and focus transitions
+are preserved. Capacity is 64 events; overflow returns `Error::Unavailable`
+rather than silently dropping a transition.

@@ -50,3 +50,12 @@ class DeferredWorkers:
             self.started = True
             for worker in self.workers:
                 worker.start()
+
+
+def launchers(disk):
+    """Map executable names to DE launcher x coordinates in FAT insertion order."""
+    import subprocess
+    listing = subprocess.check_output(['mdir', '-b', '-i', f'{disk}@@1048576', '::/BIN'])
+    names = [Path(p).stem.upper() for p in listing.decode().splitlines()
+             if p.upper().endswith('.BIN') and Path(p).stem.upper() not in ('WM', 'DE')]
+    return {name: 50 + 100 * index for index, name in enumerate(names[:16])}

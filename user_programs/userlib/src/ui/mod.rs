@@ -4,7 +4,11 @@
 //! content-local pixels and keep submitted pixels unchanged until RELEASE.
 pub mod declarative;
 pub mod desktop_protocol;
+mod events;
 mod input;
+pub use events::Event;
+#[cfg(feature = "alloc")]
+pub mod text_input;
 pub use declarative::{Style, View};
 pub mod protocol;
 pub mod raster;
@@ -31,14 +35,6 @@ pub enum Error {
     Timeout,
     Rejected,
     Closed,
-}
-
-/// Content-local input and window lifecycle events.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Event {
-    Pointer { x: i32, y: i32, buttons: u8 },
-    Focus(bool),
-    CloseRequested,
 }
 
 /// Requested properties. The WM chooses placement and draws decorations.
@@ -82,6 +78,7 @@ pub struct Window {
     rejected: bool,
     input: Input,
     desktop: bool,
+    events: events::Pending,
 }
 impl Window {
     /// Connects to the WM and negotiates content geometry. No raw pointers escape.
@@ -144,6 +141,7 @@ impl Window {
             rejected: false,
             input: Input::default(),
             desktop,
+            events: events::Pending::new(),
         };
         send(if desktop {
             desktop_protocol::DESKTOP
@@ -174,6 +172,12 @@ impl Window {
     }
     /// Receives an event without blocking. Frame acknowledgements are internal.
     pub fn poll_event(&mut self) -> Result<Option<Event>, Error> {
+        if let Some(event) = self.events.pop() {
+            return Ok(Some(event));
+        }
+        self.receive_event()
+    }
+    fn receive_event(&mut self) -> Result<Option<Event>, Error> {
         let Some((sender, message)) = sys::receive_message().map_err(|_| Error::Unavailable)?
         else {
             return Ok(None);
@@ -215,7 +219,9 @@ impl Window {
         let start = sys::ticks();
         while !self.accepted || (released && self.pending.is_some()) {
             for _ in 0..16 {
-                self.poll_event()?;
+                if let Some(event) = self.receive_event()? {
+                    self.events.push(event).map_err(|_| Error::Unavailable)?;
+                }
             }
             if self.rejected {
                 return Err(Error::Rejected);

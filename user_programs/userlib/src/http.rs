@@ -131,3 +131,14 @@ fn tls_error(error: crate::tls::Error) -> Error {
         _ => Error::Tls,
     }
 }
+
+/// GET with an observer for the final URL (including followed redirects).
+/// The observer runs on success after the request socket has been closed.
+pub fn get_with_url(
+    url: &str,
+    options: Options,
+    body: impl FnMut(&[u8]) -> Result<(), Error>,
+    effective: impl FnMut(&str),
+) -> Result<Response, Error> {
+    rustos_http::get_with_url(&mut Sockets::default(), url, options, body, effective)
+}

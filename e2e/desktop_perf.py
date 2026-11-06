@@ -15,7 +15,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode=True
 sys.path.insert(0,str(ROOT/'tools'))
 from qemu_platform import arguments as platform_arguments
-from qemu_test import disk_image, copy_disk
+from qemu_test import launchers, disk_image, copy_disk
 
 
 def cpu_seconds(pid):
@@ -106,7 +106,7 @@ def main():
                     print(f'{name} CPU: {usage:.1%} of one host core', flush=True)
                     assert usage < budget, f'{name} burns {usage:.1%} CPU (budget {budget:.0%})'
 
-                click(350, 65)
+                click(launchers(disk)['PORTAL'], 65)
                 end = time.monotonic() + 10
                 while 'self_rust_os forge v1.0' not in log.read_text(errors='replace'):
                     assert time.monotonic() < end, 'terminal launch timeout'

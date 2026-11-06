@@ -19,7 +19,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / 'tools'))
 from qemu_platform import arguments
 from qemu_network import arguments as network_arguments
-from qemu_test import connect, copy_disk, disk_image
+from qemu_test import launchers, connect, copy_disk, disk_image
 
 
 def main():
@@ -101,7 +101,7 @@ def main():
                     pointer(*point)
                 for terminal in range(2):
                     start = time.monotonic()
-                    click(350, 65)
+                    click(launchers(disk)['PORTAL'], 65)
                     # Exercise the compositor while disk loading and process
                     # construction proceed; do not wait for the shell first.
                     for x, y in [(1500, 700), (1800, 850), (1400, 650)]:
