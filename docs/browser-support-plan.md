@@ -295,6 +295,9 @@ manual listening check; framebuffer video alone does not establish host sound.
 
 ### P7 — Real YouTube video
 
+Initial prerequisite: [validated media byte ranges](browser-youtube-p7.md). This
+is tested HTTP/HTTPS transport support, not a YouTube playback pass.
+
 Use a normal public unencrypted video and the real watch/player UI. Implement
 missing general language, DOM, media, capability-reporting and request behavior
 from actual playback. A thumbnail, saved stream in a host player or a blocked
