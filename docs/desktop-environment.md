@@ -4,8 +4,11 @@ The desktop consists of two Ring 3 programs:
 
 | Program | Owns |
 | --- | --- |
-| `/BIN/WM.BIN`, PID 0 | Display presentation, window placement/stacking/decorations, focus and input routing, cached surfaces, glass effects |
+| `/BIN/WM.BIN`, PID 0 | Display presentation, window placement/stacking/decorations, resize/maximize/restore, focus and input routing, cached surfaces, glass effects |
 | `/BIN/DE.BIN` | Wallpaper, panel geometry/content, launchers, application discovery, executable launch policy |
+
+Window geometry and the expand/restore control live in the compositor. The DE
+only supplies work-area reservations; see [resizing](window-resize.md).
 
 The kernel still boots the initial WM; the compositor then spawns the DE once.
 This fixed path and PID 0 display authority are explicit bootstrap exceptions,

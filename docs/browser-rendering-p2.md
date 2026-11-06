@@ -92,7 +92,9 @@ HTML5 tree construction/encoding/base URL behavior, complete CSS box model,
 positioning/stacking/overflow, flex/grid/media queries/variables/units, baseline
 alignment/kerning/shaping/bidi, downloadable fonts/fallback, JPEG/WebP/SVG and
 animation, complete forms, focus/Tab/IME/selection/clipboard, upload/download,
-fragments/zoom/resize/fullscreen and reference-browser comparisons remain open.
+fragments/zoom/borderless fullscreen and reference-browser comparisons remain open.
+[Later compositor work](window-resize.md) adds edge resize/maximize/restore and
+browser reflow; its evidence is recorded separately.
 The current integer metrics are not a typography conformance claim. Chrome and
 form editing still use the bitmap SDK text path. QMP injection does not verify
 manual host GUI/input capture. Google results, Facebook and YouTube remain

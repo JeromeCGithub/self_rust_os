@@ -41,9 +41,11 @@ origin storage, media and a production browser security model.
 
 Measure these constraints before selecting dependencies:
 
-- The [window protocol](../user_programs/userlib/src/ui/protocol.rs) caps native
-  content at 640 by 400 with fixed geometry. Larger windows, resize and fullscreen
-  need coordinated SDK/WM and potentially surface-mapping changes.
+- The [window protocol](../user_programs/userlib/src/ui/protocol.rs) now supports
+  workspace-sized native content, edge resize and maximize/restore through the
+  [SDK/compositor resize work](window-resize.md). The default1920×1080 DE profile
+  permits1920×992 content after panels/titlebar. Older version-1 clients remain
+  fixed-size. Borderless fullscreen and dynamic display modes remain separate.
 - The browser caps HTML at 256 KiB/4096 nodes; the script prototype caps aggregate
   source at 32 KiB and tokens at 8192. These are prototype budgets, not practical
   modern-site capacity targets. Documents are currently buffered before layout.
@@ -324,7 +326,8 @@ needs; none is automatically required by every ordinary page.
 
 ## Test and delivery contract
 
-Everything above remains planned unless identified as baseline or P0 evidence. Follow the
+Capabilities remain planned unless a linked implementation states otherwise.
+P0/P1, initial P2/P3 support and native window resizing have separate executed evidence. Follow the
 [repository TDD/testing contract](testing.md): failing observable behavior,
 small implementation, green checks, then refactor. Never loosen site assertions
 because the server returned a challenge, error or placeholder.

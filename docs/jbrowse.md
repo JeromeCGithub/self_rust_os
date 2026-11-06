@@ -22,6 +22,8 @@ check and the remaining JavaScript-gated results limitation. The < and > buttons
 Stop cancels a load, including the first request. Up/Down scroll;
 click the document and use j/k or Space to scroll with the keyboard. Escape
 selects the address again. Backspace edits it. There is one tab; history refetches up to 32 destinations per direction.
+Drag a native window edge/corner to resize, or click the top-right square beside
+Close to expand/restore. The page reflows and form edits survive resizing.
 
 ## A real website to try
 
