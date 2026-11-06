@@ -1,0 +1,15 @@
+[package]
+name = "rustos-quickjs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Restricted QuickJS feasibility adapter for Ring 3"
+
+[features]
+freestanding = []
+
+[dependencies]
+libm = { version = "=0.2.16", default-features = false }
+
+[dev-dependencies]
+rustos-script = { path = "../script" }
