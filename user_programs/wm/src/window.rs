@@ -14,6 +14,12 @@ pub(super) struct Window {
     pub(super) height: usize,
     pub(super) title: [u8; protocol::TITLE_BYTES],
     pub(super) native: bool,
+    pub(super) resizable: bool,
+    pub(super) minimum: (usize, usize),
+    pub(super) expansion: crate::geometry::Expansion,
+    pub(super) requested: Option<crate::geometry::Bounds>,
+    pub(super) offered: Option<crate::geometry::Bounds>,
+    pub(super) resize_sent: bool,
     pub(super) material: Material,
     pub(super) commit: Option<u32>,
     pub(super) reply: Option<u32>,
@@ -44,11 +50,28 @@ pub(super) fn new_window(pid: u32, cache_slot: usize, index: usize) -> Window {
         height: 288,
         title,
         native: false,
+        resizable: false,
+        minimum: (160, 96),
+        expansion: crate::geometry::Expansion::default(),
+        requested: None,
+        offered: None,
+        resize_sent: false,
         material: Material::Glass,
         commit: None,
         reply: None,
         pointer: None,
         closing: None,
         focus_event: None,
+    }
+}
+
+impl Window {
+    pub(super) fn bounds(&self) -> crate::geometry::Bounds {
+        crate::geometry::Bounds {
+            x: self.x,
+            y: self.y,
+            width: self.width,
+            height: self.height,
+        }
     }
 }

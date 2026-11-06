@@ -10,6 +10,7 @@ pub struct Loaded {
     pub url: String,
     pub title: String,
     pub page: Page,
+    pub document: Document,
     pub status: u16,
     pub script_errors: usize,
     pub image_errors: usize,
@@ -128,12 +129,14 @@ pub fn load(
     let mut page = doc.layout_with(640, fonts);
     if script_errors > 0 && page.is_empty() {
         userlib::println!("[jbrowse] unsupported script page");
-        page=Document::parse("<h1>Page needs more JavaScript support</h1><p>The request succeeded, but this browser cannot display this page yet.</p><p>The current native DOM bindings do not run full web applications.</p><p>You can edit the address to visit another page.</p>").map_err(|_|"Could not create error page".to_string())?.layout_with(640,fonts);
+        doc=Document::parse("<h1>Page needs more JavaScript support</h1><p>The request succeeded, but this browser cannot display this page yet.</p><p>The current native DOM bindings do not run full web applications.</p><p>You can edit the address to visit another page.</p>").map_err(|_|"Could not create error page".to_string())?;
+        page = doc.layout_with(640, fonts);
     }
     Ok(Loaded {
         url,
         title,
         page,
+        document: doc,
         status: response.status,
         script_errors,
         image_errors,

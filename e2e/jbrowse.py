@@ -56,8 +56,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             '/dir/index.html': b"<title>Browser fixture</title><link rel='stylesheet' href='theme.css'><div id='banner'><a href='next.html'>Follow link</a></div><p>HTML &amp; CSS from a real socket</p>" + b'<p>Scroll content</p>' * 40,
             '/dir/theme.css': b'body { background-color: #f5f0df; } #banner {background-color:#2468ac; padding:12px} a {color:white}',
             '/dir/next.html': b"<title>Second page</title><style>body {background:#d4edda}</style><h1>Navigation works</h1>",
-            '/after-cancel': b'<title>HTTP cancellation recovered</title><style>body {background:#e2f3e4}</style><h1>HTTP cancellation recovered</h1>',
+            '/after-cancel': b"<title>HTTP cancellation recovered</title><style>body {background:#e2f3e4}</style><a href='/after-tls'>Recover TLS navigation</a><h1>HTTP cancellation recovered</h1>",
             '/after-tls': b'<title>TLS cancellation recovered</title><style>body {background:#dbf0fa}</style><h1>TLS cancellation recovered</h1>',
+            '/lifecycle': b"<title>Cancellation controls</title><a href='/stalled'>Start stalled request</a><br><a href='/after-cancel'>Cancel by navigating</a>",
             '/big': b'x' * 262145,
             '/pixels.png': (ROOT/'crates/web-image/tests/fixtures/two-pixels.png').read_bytes(),
             '/image': b"<title>Image fixture</title><a href='/dir/next.html'><img src='/pixels.png' width=120 alt='Image fallback'></a>",
@@ -237,6 +238,25 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         assert '/dir/theme.css' in requests, requests
         pixel((ox+500,oy+200),(245,240,223),'html-css')
         pixel((ox+12,oy+76),(36,104,172),'html-css')
+        if os.environ.get('RUSTOS_JBROWSE_RESIZE') == '1':
+            # The expander fills the DE work area, keeping both panels visible.
+            click(ox+640-51,128+14)
+            image=pixel((1800,900),(245,240,223),'maximized-browser')
+            assert image.getpixel((1919,0))==(17,29,48), 'maximize covered top panel'
+            assert image.getpixel((1919,1079))==(16,28,46), 'maximize covered bottom panel'
+            pixel((1902,42),(255,107,121),'maximized-browser')
+            mark=len(output());click(1836,98);wait('[jbrowse] loaded: Browser fixture',mark)
+            click(1869,42)
+            pixel((ox+622,142),(255,107,121),'restored-browser')
+            pixel((ox+500,oy+200),(245,240,223),'restored-browser')
+            move(ox+639,oy+399);hmp('mouse_button 1');time.sleep(.15)
+            move(ox+959,oy+599);hmp('mouse_button 0')
+            pixel((ox+900,oy+500),(245,240,223),'resized-browser')
+            pixel((ox+942,142),(255,107,121),'resized-browser')
+            move(ox+959,oy+599);hmp('mouse_button 1');time.sleep(.15)
+            move(ox+639,oy+399);hmp('mouse_button 0')
+            pixel((ox+622,142),(255,107,121),'resize-back')
+            print('PASS: maximize/restore, DE panel reservations, pointer coordinates beyond 1023 and edge resize with client redraw')
         # Release inside an anchor navigates relative to the redirect target.
         click(ox+40,oy+90)
         wait('[jbrowse] loaded: Second page')
@@ -254,12 +274,20 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         pixel((ox+500,oy+200),(212,237,218),'recovered')
         navigate('/form');wait('[jbrowse] loaded: Search fixture')
         # Entry x=8,y=8 in document coordinates; submit is on the next row.
-        click(ox+100,oy+84);type_text('rust os');key('ret')
+        click(ox+100,oy+84)
+        pixel((ox+8,oy+80),(57,122,192),'form-focus')
+        type_text('rust os')
+        if os.environ.get('RUSTOS_JBROWSE_RESIZE') == '1':
+            click(ox+589,142);pixel((1902,42),(255,107,121),'maximized-form')
+            click(1869,42);pixel((ox+622,142),(255,107,121),'restored-form')
+        key('ret')
         wait('[jbrowse] loaded: Search results')
         assert '/find?hl=en&q=rust+os' in requests,requests
         pixel((ox+500,oy+200),(221,243,255),'form-search')
         navigate('/form');wait('[jbrowse] loaded: Search fixture')
-        click(ox+100,oy+84);type_text('browser');click(ox+40,oy+118)
+        click(ox+100,oy+84)
+        pixel((ox+8,oy+80),(57,122,192),'form-focus')
+        type_text('browser');click(ox+40,oy+118)
         wait('[jbrowse] loaded: Search results')
         assert '/find?hl=en&q=browser&btnG=Search' in requests,requests
         pixel((ox+500,oy+200),(221,243,255),'form-button')
@@ -294,6 +322,12 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
             # Real page text occupies the document area; toolbar is excluded.
             colors=image.crop((ox,oy+64,ox+640,oy+200)).getcolors(640*136)
             assert sum(count for count,color in colors if color != (255,255,255)) > 100, 'public page has no rendered text'
+            if os.environ.get('RUSTOS_JBROWSE_RESIZE') == '1':
+                click(ox+589,142)
+                pixel((1800,900),(255,255,255),'cern-maximized')
+                pixel((1902,42),(255,107,121),'cern-maximized')
+                click(1869,42);pixel((ox+622,142),(255,107,121),'cern-restored')
+
         if os.environ.get('RUSTOS_JBROWSE_IMAGES') == '1':
             navigate('/image');wait('[jbrowse] loaded: Image fixture')
             pixel((ox+20,oy+84),(255,0,0),'decoded-image')
@@ -325,17 +359,21 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
             print('PASS: native proportional antialiased fonts, CSS families and Unicode fixture')
         if os.environ.get('RUSTOS_JBROWSE_LIFECYCLE') == '1':
             stalled_started.clear();stalled_closed.clear()
-            navigate('/stalled')
+            navigate('/lifecycle');wait('[jbrowse] loaded: Cancellation controls')
+            pixel((ox+500,oy+200),(255,255,255),'cancellation-controls')
+            click(ox+20,oy+80)
             assert stalled_started.wait(5), 'stalled HTTP fixture not requested'
             began=time.monotonic()
-            navigate('/after-cancel');wait('[jbrowse] loaded: HTTP cancellation recovered')
+            last_navigation=len(output());click(ox+20,oy+100)
+            wait('[jbrowse] loaded: HTTP cancellation recovered')
             assert stalled_closed.wait(.5), 'superseded request socket stayed open'
             assert time.monotonic()-began<5, 'navigation waited for old connection timeout'
             pixel((ox+500,oy+200),(226,243,228),'cancelled-navigation')
             click(ox+120,oy+42);type_text(f'https://10.0.2.2:{tls_listener.getsockname()[1]}/');key('ret')
             assert tls_started.wait(5), 'TLS fixture did not receive handshake bytes'
             began=time.monotonic()
-            navigate('/after-tls');wait('[jbrowse] loaded: TLS cancellation recovered')
+            last_navigation=len(output());click(ox+20,oy+80)
+            wait('[jbrowse] loaded: TLS cancellation recovered')
             assert tls_closed.wait(.5), 'cancelled TLS handshake socket stayed open'
             assert time.monotonic()-began<5, 'navigation waited for old TLS timeout'
             pixel((ox+500,oy+200),(219,240,250),'cancelled-tls')

@@ -1,9 +1,18 @@
 //! Ordered delivery of events received during an internal frame wait.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
-    Pointer { x: i32, y: i32, buttons: u8 },
+    Pointer {
+        x: i32,
+        y: i32,
+        buttons: u8,
+    },
     Focus(bool),
     CloseRequested,
+    /// New content dimensions; safe drawing uses them immediately.
+    Resized {
+        width: u32,
+        height: u32,
+    },
 }
 pub(super) struct Pending {
     events: [Option<Event>; 64],
@@ -54,6 +63,10 @@ mod tests {
                 buttons: 0,
             },
             Event::Focus(false),
+            Event::Resized {
+                width: 1920,
+                height: 992,
+            },
             Event::CloseRequested,
         ];
         for event in events {
