@@ -1,0 +1,6 @@
+qemu-system-x86_64: terminating on signal 15 from pid 368218 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 221, in <module>
+    assert '[jbrowse] unsupported script page' not in output()[mark:], 'Google results remain blocked by unsupported JavaScript'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Google results remain blocked by unsupported JavaScript
