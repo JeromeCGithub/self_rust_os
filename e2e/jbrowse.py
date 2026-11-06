@@ -27,11 +27,24 @@ if os.environ.get('RUSTOS_JBROWSE_REQUIRE_GOOGLE_RESULTS') == '1':
     os.environ['RUSTOS_JBROWSE_GOOGLE']='1'
 
 requests = []
+posts = []
 stalled_started=threading.Event()
 stalled_closed=threading.Event()
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
+    def do_POST(self):
+        length=int(self.headers.get('Content-Length','0'))
+        assert 0 <= length <= 16384
+        data=self.rfile.read(length)
+        posts.append((self.path,self.headers.get('Content-Type'),data))
+        if self.path == '/login?flow=1':
+            self.send_response(303)
+            self.send_header('Location','/post-result')
+            self.send_header('Content-Length','0')
+            self.end_headers()
+            return
+        self.send_response(400);self.send_header('Content-Length','0');self.end_headers()
     def do_GET(self):
         requests.append(self.path)
         if self.path == '/stalled':
@@ -70,6 +83,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             '/native-script': b"<title>Before native</title><p id='result'>Waiting</p><script>class Counter {#n=40;next(){return ++this.#n}} const c=new Counter(); const p=document.getElementById('result'); if(p!==document.getElementById('result') || typeof os!=='undefined' || typeof __rustosHost!=='undefined')throw Error('boundary'); p.style.color='#0c5a42'; Promise.resolve([c.next(),c.next()].map(x=>x*2)).then(xs=>{p.textContent='Native functions: '+xs.join(',');document.body.style.backgroundColor='#c9eaff';document.title='Native engine ready';}); ({toString(){throw Error('unused completion')}});</script>",
             '/native-queue': b"<title>Native queue bounded</title><style>body {background:#fff0dd}</style><p>Still readable after a microtask loop</p><script>function again(){Promise.resolve().then(again)};again()</script>",
             '/native-attributes': b"<title>Before attributes</title><style>.ready{background:#b4e9d2;color:#163e72;padding:12px}</style><a id='result' style='display:none' href='/wrong'>Scripted destination</a><script>const a=document.getElementById('result');a.setAttribute('CLASS','ready');a.removeAttribute('style');a.setAttribute('href',atob('L2Rpci9uZXh0Lmh0bWw='));if(a.getAttribute('style')!==null || a.className!=='ready')throw Error('attributes');document.body.setAttribute('style','background:#edf6ff');document.title=atob(btoa('Native attributes ready'));</script>",
+            '/login-form': b"<title>Disposable POST fixture</title><form method=post action='/login?flow=1'><input name=user value=guest><input type=password name=password placeholder=Password><input value='********' readonly><input type=hidden name=csrf value=fake-token><button name=action value=login>Login</button></form>",
+            '/post-result': b"<title>POST redirect ready</title><style>body{background:#e0f4d6}</style><h1>Disposable form accepted</h1>",
             '/blank-script': b"<title>Blank script</title><script>while(true) {}</script>",
             '/bad-script': b"<title>Unsupported script</title><style>body {background:#fce8e6}</style><script>while(true) {}</script><p>Still readable</p>",
         }
@@ -234,6 +249,26 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
             pixel((ox+500,oy+200),(255,240,221),'native-queue')
             assert '[jbrowse] script errors: 1' in output()[last_navigation:], 'unbounded microtask queue was not rejected'
             print('PASS: native restricted QuickJS, classes/functions/promises, DOM pixels and bounded microtask recovery')
+        if os.environ.get('RUSTOS_JBROWSE_P5') == '1':
+            navigate('/login-form');wait('[jbrowse] loaded: Disposable POST fixture')
+            click(ox+100,oy+118)
+            pixel((ox+8,oy+112),(57,122,192),'password-focus')
+            type_text('testpass')
+            click(ox+100,oy+84)
+            image=pixel((ox+8,oy+80),(57,122,192),'password-mask')
+            masked=image.crop((ox+14,oy+113,ox+78,oy+125)).tobytes()
+            reference=image.crop((ox+14,oy+147,ox+78,oy+159)).tobytes()
+            assert masked==reference, 'password pixels differ from the eight-star reference'
+            assert len(set(masked))>1, 'password mask is blank'
+            mark=len(output());click(ox+40,oy+186);wait('[jbrowse] loaded: POST redirect ready',mark)
+            pixel((ox+500,oy+200),(224,244,214),'post-redirect')
+            assert posts==[('/login?flow=1','application/x-www-form-urlencoded',b'user=guest&password=testpass&csrf=fake-token&action=login')], 'unexpected disposable form request'
+            assert '/post-result' in requests, '303 did not become GET'
+            before_posts=len(posts)
+            mark=len(output());click(ox+608,oy+42);wait('[jbrowse] loaded: POST redirect ready',mark)
+            assert len(posts)==before_posts, 'reload unexpectedly replayed POST'
+            assert 'testpass' not in output(), 'form value leaked to serial diagnostics'
+            print('PASS: password pixels/editing, exact POST body, 303-to-GET redirect and reload without POST replay')
         if os.environ.get('RUSTOS_JBROWSE_P4') == '1':
             navigate('/native-attributes');wait('[jbrowse] loaded: Native attributes ready')
             pixel((ox+500,oy+200),(237,246,255),'native-attributes')
