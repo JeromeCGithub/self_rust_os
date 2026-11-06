@@ -7,4 +7,4 @@ description = "Shared font metrics and bounded native TrueType glyphs"
 [features]
 truetype = ["dep:fontdue"]
 [dependencies]
-fontdue = { version = "=0.9.3", optional = true, default-features = false, features = ["hashbrown"] }
+fontdue = { path = "../../third_party/fontdue", version = "=0.9.3", optional = true, default-features = false, features = ["hashbrown"] }

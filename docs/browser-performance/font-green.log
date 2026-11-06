@@ -1,0 +1,37 @@
+   Compiling rustos-text v0.1.0 (/home/jay/personal/os/jbrowse/crates/text)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (/home/jay/personal/os/jbrowse/crates/text/target/x86_64-unknown-linux-gnu/debug/deps/rustos_text-b46e8571fb365cd9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fonts.rs (/home/jay/personal/os/jbrowse/crates/text/target/x86_64-unknown-linux-gnu/debug/deps/fonts-a927939208d817b7)
+
+running 3 tests
+test invalid_font_data_and_unbounded_sizes_are_rejected ... ok
+test bold_serif_and_monospace_use_their_own_real_outlines ... ok
+test proportional_unicode_glyphs_have_real_coverage_and_matching_metrics ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/parity.rs (/home/jay/personal/os/jbrowse/crates/text/target/x86_64-unknown-linux-gnu/debug/deps/parity-f33eb1659acf01c2)
+
+running 1 test
+test on_demand_faces_preserve_existing_unicode_metrics_and_exact_coverage ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+     Running tests/startup.rs (/home/jay/personal/os/jbrowse/crates/text/target/x86_64-unknown-linux-gnu/debug/deps/startup-95ecacbbeae4ab75)
+
+running 1 test
+test constructing_embedded_faces_does_not_compile_or_allocate_every_glyph ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustos_text
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
