@@ -1,0 +1,14 @@
+F......
+======================================================================
+FAIL: test_new_raw_diagnostics_do_not_move_old_console_messages_past_a_mark (test_qemu_test.ConsoleObservation.test_new_raw_diagnostics_do_not_move_old_console_messages_past_a_mark)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/tools/tests/test_qemu_test.py", line 84, in test_new_raw_diagnostics_do_not_move_old_console_messages_past_a_mark
+    self.assertNotIn('old page',monitor.console_text(later)[mark:])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'old page' unexpectedly found in ' sys_write: "Loading..."\nold pageLoading...'
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.053s
+
+FAILED (failures=1)

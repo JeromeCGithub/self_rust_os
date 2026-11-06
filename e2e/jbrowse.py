@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import socket
 import sys
 import tempfile
 import threading
@@ -18,7 +19,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / 'tools'))
-from qemu_test import launchers, connect, copy_disk, disk_image
+from qemu_test import launchers, connect, copy_disk, disk_image, console_text
 from qemu_network import arguments as network_arguments
 from qemu_platform import arguments as platform_arguments
 
@@ -26,11 +27,25 @@ if os.environ.get('RUSTOS_JBROWSE_REQUIRE_GOOGLE_RESULTS') == '1':
     os.environ['RUSTOS_JBROWSE_GOOGLE']='1'
 
 requests = []
+stalled_started=threading.Event()
+stalled_closed=threading.Event()
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
     def do_GET(self):
         requests.append(self.path)
+        if self.path == '/stalled':
+            self.send_response(200)
+            self.send_header('Content-Length', '100')
+            self.end_headers()
+            self.wfile.flush()
+            stalled_started.set()
+            self.connection.settimeout(5)
+            try:
+                if self.connection.recv(1) == b'': stalled_closed.set()
+            except ConnectionResetError: stalled_closed.set()
+            except TimeoutError: pass
+            return
         if self.path == '/start':
             self.send_response(302)
             self.send_header('Location', '/dir/index.html')
@@ -41,6 +56,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             '/dir/index.html': b"<title>Browser fixture</title><link rel='stylesheet' href='theme.css'><div id='banner'><a href='next.html'>Follow link</a></div><p>HTML &amp; CSS from a real socket</p>" + b'<p>Scroll content</p>' * 40,
             '/dir/theme.css': b'body { background-color: #f5f0df; } #banner {background-color:#2468ac; padding:12px} a {color:white}',
             '/dir/next.html': b"<title>Second page</title><style>body {background:#d4edda}</style><h1>Navigation works</h1>",
+            '/after-cancel': b'<title>HTTP cancellation recovered</title><style>body {background:#e2f3e4}</style><h1>HTTP cancellation recovered</h1>',
+            '/after-tls': b'<title>TLS cancellation recovered</title><style>body {background:#dbf0fa}</style><h1>TLS cancellation recovered</h1>',
             '/big': b'x' * 262145,
             '/form': b"<title>Search fixture</title><form action='/find'><input type=hidden name=hl value=en><input name=q title='Search'><input type=submit name=btnG value=Search></form>",
             '/script': b"<title>Before script</title><p id='result'>Waiting</p><script>const n=6*7; document.getElementById('result').textContent='Answer: '+n; document.getElementById('result').style.color='#123456'; document.body.style.backgroundColor='#e8dcff'; document.title='Script ready';</script>",
@@ -62,13 +79,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 out = ROOT / 'target/jbrowse-e2e'
 out.mkdir(parents=True, exist_ok=True)
+tls_started=threading.Event();tls_closed=threading.Event()
+tls_listener=None
+tls_connections=[]
+if os.environ.get('RUSTOS_JBROWSE_LIFECYCLE') == '1':
+    tls_listener=socket.socket()
+    tls_listener.bind(('127.0.0.1',0));tls_listener.listen(1);tls_listener.settimeout(.2)
+    def stalled_tls():
+        while tls_listener.fileno()>=0:
+            try: connection,_=tls_listener.accept()
+            except socket.timeout: continue
+            except OSError: return
+            tls_connections.append(connection)
+            with connection:
+                connection.settimeout(5)
+                try:
+                    if connection.recv(16384): tls_started.set()
+                    while connection.recv(16384): pass
+                    tls_closed.set()
+                except ConnectionResetError: tls_closed.set()
+                except (TimeoutError,OSError): pass
+            return
+    threading.Thread(target=stalled_tls,daemon=True).start()
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
     tmp = Path(tmp)
     disk = copy_disk(disk_image(ROOT), tmp)
     terminal_x = launchers(disk)['PORTAL']
-    serial = out / 'serial.log'
+    descriptor, serial_path = tempfile.mkstemp(prefix='serial-', suffix='.log', dir=out)
+    os.close(descriptor)
+    serial = Path(serial_path)
     qemu = subprocess.Popen(['qemu-system-x86_64', '-drive', f'format=raw,file={disk}', '-machine', 'pc,i8042=on,vmport=on', '-vga','std','-serial',f'file:{serial}','-display','none','-no-reboot','-qmp',f'unix:{tmp}/qmp,server,nowait'] + platform_arguments() + network_arguments())
     try:
         qmp = connect(tmp/'qmp', time.monotonic()+60, qemu)
@@ -90,7 +131,7 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
             return command('human-monitor-command', {'command-line':text})
         def output():
             raw = serial.read_text(errors='replace')
-            return raw + ''.join(re.findall(r'\[kernel\] sys_write: "(.*?)"\n', raw, re.S))
+            return console_text(raw)
         last_navigation=0
         def wait(value, after=None):
             if after is None: after=last_navigation
@@ -223,6 +264,22 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
             # Real page text occupies the document area; toolbar is excluded.
             colors=image.crop((ox,oy+64,ox+640,oy+200)).getcolors(640*136)
             assert sum(count for count,color in colors if color != (255,255,255)) > 100, 'public page has no rendered text'
+        if os.environ.get('RUSTOS_JBROWSE_LIFECYCLE') == '1':
+            navigate('/stalled')
+            assert stalled_started.wait(5), 'stalled HTTP fixture not requested'
+            began=time.monotonic()
+            navigate('/after-cancel');wait('[jbrowse] loaded: HTTP cancellation recovered')
+            assert stalled_closed.wait(.5), 'superseded request socket stayed open'
+            assert time.monotonic()-began<5, 'navigation waited for old connection timeout'
+            pixel((ox+500,oy+200),(226,243,228),'cancelled-navigation')
+            click(ox+120,oy+42);type_text(f'https://10.0.2.2:{tls_listener.getsockname()[1]}/');key('ret')
+            assert tls_started.wait(5), 'TLS fixture did not receive handshake bytes'
+            began=time.monotonic()
+            navigate('/after-tls');wait('[jbrowse] loaded: TLS cancellation recovered')
+            assert tls_closed.wait(.5), 'cancelled TLS handshake socket stayed open'
+            assert time.monotonic()-began<5, 'navigation waited for old TLS timeout'
+            pixel((ox+500,oy+200),(219,240,250),'cancelled-tls')
+            print('PASS: stalled HTTP/TLS cancellation, fresh destinations and framebuffer commits')
         # Close, return to the independently running terminal, then relaunch.
         click(ox+622,128+14)
         time.sleep(.5)
@@ -240,3 +297,5 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         except subprocess.TimeoutExpired:
             qemu.kill();qemu.wait()
         server.shutdown();server.server_close()
+        if tls_listener is not None: tls_listener.close()
+        for connection in tls_connections: connection.close()

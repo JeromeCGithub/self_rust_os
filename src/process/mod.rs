@@ -73,6 +73,8 @@ pub struct Process {
     pub(crate) pointer_seen: u64,
     pub(crate) files: crate::fs::handles::Files,
     pub(crate) heap_break: u64,
+    /// None for ordinary apps; Some is an irreversible connected-worker principal.
+    pub(crate) worker_heap_limit: Option<u64>,
     pub(crate) tls: Option<TlsImage>,
 }
 pub(crate) struct UserStack {

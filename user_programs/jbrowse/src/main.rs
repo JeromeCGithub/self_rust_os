@@ -1,6 +1,7 @@
 // jbrowse is an ordinary Ring 3 application. The OS supplies mechanisms only.
 extern crate alloc;
 mod loader;
+mod navigation;
 use alloc::{
     format,
     string::{String, ToString},
@@ -15,7 +16,8 @@ use userlib::{
 };
 
 struct Shared {
-    request: Option<(u64, String)>,
+    request: Option<(u64, String, userlib::io::Cancellation)>,
+    active: Option<userlib::io::Cancellation>,
     result: Option<(u64, Result<loader::Loaded, String>)>,
 }
 struct Browser {
@@ -62,7 +64,12 @@ impl Browser {
                 self.loading = true;
                 // One worker, one replaceable request and one result. No app lock
                 // is held across network I/O or canvas publication.
-                shared.lock().request = Some((self.generation, url));
+                let cancel = userlib::io::Cancellation::new();
+                let mut shared = shared.lock();
+                if let Some(previous) = shared.active.replace(cancel.clone()) {
+                    previous.cancel();
+                }
+                shared.request = Some((self.generation, url, cancel));
             }
             Err(_) => {
                 self.status = "Invalid address; use HTTP or HTTPS".into();
@@ -276,12 +283,13 @@ fn main(_argc: usize, argv: &[&str]) {
     let shared = Arc::new(Mutex::new(Shared {
         request: None,
         result: None,
+        active: None,
     }));
     let transport = Arc::clone(&shared);
     let _worker = match thread::Builder::new().spawn(move || loop {
         let request = transport.lock().request.take();
-        if let Some((generation, url)) = request {
-            let loaded = loader::load(&url);
+        if let Some((generation, url, cancel)) = request {
+            let loaded = loader::load(&url, &cancel);
             transport.lock().result = Some((generation, loaded));
         } else {
             let _ = sys::sleep_ticks(1);
@@ -303,7 +311,12 @@ fn main(_argc: usize, argv: &[&str]) {
         let mut dirty = false;
         for _ in 0..32 {
             match window.poll_event().expect("browser events") {
-                Some(Event::CloseRequested) => return,
+                Some(Event::CloseRequested) => {
+                    if let Some(active) = shared.lock().active.take() {
+                        active.cancel();
+                    }
+                    return;
+                }
                 Some(Event::Focus(false)) => {
                     browser.pressed = None;
                 }
@@ -362,7 +375,11 @@ fn main(_argc: usize, argv: &[&str]) {
                 match result {
                     Ok(loaded) => {
                         browser.current = loaded.url;
-                        browser.address.set(&browser.current);
+                        navigation::commit_address(
+                            &mut browser.address,
+                            browser.editing,
+                            &browser.current,
+                        );
                         browser.title = loaded.title;
                         browser.page = loaded.page;
                         browser.scroll = 0;

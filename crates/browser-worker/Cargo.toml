@@ -1,0 +1,8 @@
+[package]
+name = "rustos-browser-worker"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Bounded browser worker wire protocol and cancellation ownership"
+[target.'cfg(target_os = "none")'.dependencies]
+userlib = { path = "../../user_programs/userlib" }

@@ -1,0 +1,42 @@
+   Compiling heapless v0.8.0
+   Compiling byteorder v1.5.0
+   Compiling smoltcp v0.12.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling bitflags v1.3.2
+   Compiling managed v0.8.0
+   Compiling cfg-if v1.0.5
+   Compiling rustos-net-abi v0.1.0 (/home/jay/personal/os/jbrowse/crates/net-abi)
+   Compiling hash32 v0.3.1
+   Compiling rustos-net-stack v0.1.0 (/home/jay/personal/os/jbrowse/crates/net-stack)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.91s
+     Running unittests src/lib.rs (rustos-p1-net/x86_64-unknown-linux-gnu/debug/deps/rustos_net_stack-28c820a1cf39011a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/stack.rs (rustos-p1-net/x86_64-unknown-linux-gnu/debug/deps/stack-3b1862faa2c5dd9d)
+
+running 6 tests
+test remote_ip_uses_gateway_arp_and_ingress_is_bounded ... ok
+test validates_destinations_payloads_and_unconnected_operations ... ok
+test e1000_tcp_advertises_a_useful_window_within_dma_capacity ... ok
+test pending_tcp_handshake_is_not_eof ... ok
+test tcp_close_and_process_cleanup_emit_reset_before_releasing_the_endpoint ... FAILED
+test quotas_foreign_stale_handles_and_cleanup ... ok
+
+failures:
+
+---- tcp_close_and_process_cleanup_emit_reset_before_releasing_the_endpoint stdout ----
+
+thread 'tcp_close_and_process_cleanup_emit_reset_before_releasing_the_endpoint' panicked at tests/stack.rs:191:9:
+TCP reset must reach the device before socket removal, cleanup=false
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tcp_close_and_process_cleanup_emit_reset_before_releasing_the_endpoint
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test stack`

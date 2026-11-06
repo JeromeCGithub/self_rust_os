@@ -1,0 +1,14 @@
+F
+======================================================================
+FAIL: test_browser_and_service_do_not_redirect_terminal_or_probe_launches (test_network_launchers.NetworkLaunchers.test_browser_and_service_do_not_redirect_terminal_or_probe_launches)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/tools/tests/test_network_launchers.py", line 15, in test_browser_and_service_do_not_redirect_terminal_or_probe_launches
+    self.assertEqual(NETWORK.launcher_x('private.img','PORTAL'),450)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 350 != 450
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+FAILED (failures=1)

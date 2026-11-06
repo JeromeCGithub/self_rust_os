@@ -43,6 +43,7 @@ pub struct Network<D: Device> {
     sockets: SocketSet<'static>,
     slots: [Option<Slot>; SLOTS],
     generation: u32,
+    last_poll: Instant,
 }
 
 impl<D: Device> Network<D> {
@@ -75,6 +76,7 @@ impl<D: Device> Network<D> {
             sockets: SocketSet::new(Vec::with_capacity(SLOTS)),
             slots: core::array::from_fn(|_| None),
             generation: 0,
+            last_poll: Instant::from_millis(0),
         }
     }
 
@@ -375,32 +377,54 @@ impl<D: Device> Network<D> {
             | if eof { EOF } else { 0 })
     }
 
-    /// Close an endpoint immediately, dropping queues. TCP connection
-    /// state is discarded immediately; a graceful FIN API is not exposed yet.
+    /// Release an endpoint immediately. For TCP, attempt a bounded reset dispatch
+    /// before removal; no graceful FIN or peer acknowledgement is promised.
     pub fn close(&mut self, pid: u32, handle: u64) -> Result<(), Error> {
         let index = self.index(pid, handle)?;
         let slot = self.slots[index].take().ok_or(Error::BadHandle)?;
         if slot.kind == Kind::Tcp {
             self.sockets.get_mut::<tcp::Socket>(slot.socket).abort();
+            // abort queues a reset in smoltcp; removing first would discard it.
+            // One egress pass is bounded by the fixed socket/device capacities.
+            self.iface
+                .poll_egress(self.last_poll, &mut self.device, &mut self.sockets);
         }
         self.sockets.remove(slot.socket);
         Ok(())
     }
 
-    /// Drop every endpoint owned by a dead process without allocating.
+    /// Release dead-process endpoints without allocation. Attempt TCP resets in
+    /// one bounded egress pass; device backpressure/loss cannot delay reclamation.
     pub fn cleanup(&mut self, pid: u32) {
-        for index in 0..SLOTS {
-            if self.slots[index].as_ref().is_some_and(|s| s.owner == pid) {
+        let mut closing = [None; SLOTS];
+        for (index, destination) in closing.iter_mut().enumerate() {
+            if self.slots[index]
+                .as_ref()
+                .is_some_and(|slot| slot.owner == pid)
+            {
                 if let Some(slot) = self.slots[index].take() {
-                    self.sockets.remove(slot.socket);
+                    if slot.kind == Kind::Tcp {
+                        self.sockets.get_mut::<tcp::Socket>(slot.socket).abort();
+                        *destination = Some(slot.socket);
+                    } else {
+                        self.sockets.remove(slot.socket);
+                    }
                 }
             }
+        }
+        if closing.iter().any(Option::is_some) {
+            self.iface
+                .poll_egress(self.last_poll, &mut self.device, &mut self.sockets);
+        }
+        for socket in closing.into_iter().flatten() {
+            self.sockets.remove(socket);
         }
     }
 
     /// Service at most eight received frames and one bounded egress pass.
     pub fn progress(&mut self, millis: i64) {
         let now = Instant::from_millis(millis.max(0));
+        self.last_poll = now;
         for _ in 0..8 {
             if self
                 .iface

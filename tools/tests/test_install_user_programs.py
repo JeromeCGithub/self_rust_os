@@ -27,3 +27,14 @@ class InstallUserProgramsTests(unittest.TestCase):
             run.assert_called_once_with(
                 ['mcopy', '-i', 'disposable.img@@1048576',
                  str(root / 'hello/hello.bin'), '::/BIN/HELLO.BIN'], check=True)
+
+    def test_services_are_installed_without_desktop_bin_extension(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = root / 'jworker'
+            service.mkdir()
+            (service / 'jworker.bin').write_bytes(b'ELF fixture')
+            (service / '.service').write_text('Private execution service')
+            with patch.object(INSTALLER.subprocess, 'run') as run:
+                INSTALLER.install(root, 'disposable.img@@1048576')
+            self.assertEqual(run.call_args.args[0][-1], '::/BIN/JWORKER.SVC')

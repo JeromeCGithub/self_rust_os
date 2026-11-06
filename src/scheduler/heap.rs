@@ -23,7 +23,9 @@ pub fn program_break(request: u64) -> u64 {
     if request == 0 {
         return old;
     }
-    let limit = crate::userspace::USER_STACK_BOTTOM - 4096;
+    let limit = process
+        .worker_heap_limit
+        .unwrap_or(crate::userspace::USER_STACK_BOTTOM - 4096);
     if request < rustos_thread_abi::HEAP_BASE || request > limit {
         return old;
     }

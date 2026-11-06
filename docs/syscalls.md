@@ -59,6 +59,7 @@ Unused arguments are zero in SDK wrappers. `ptr` means a user virtual address.
 | 31 | `brk` (unsafe SDK primitive) | requested break, zero, zero | Zero request queries; success returns requested break, failure returns old break |
 | 32 | `arch_prctl` / `fs_base`, `set_fs_base` | operation, address/output ptr, zero | Linux operation values `0x1002` SET_FS and `0x1003` GET_FS; zero on success |
 | 33 | `fs::read_dir` | path ptr, output ptr, capacity bytes | Capacity zero queries required bytes; otherwise complete full-name records or error |
+| 34 | `process::restrict_worker` | profile (1), heap bytes, zero | Irreversible restricted connected-child principal; see below |
 
 Operations 14–16 currently appear as numeric dispatcher arms and numeric SDK calls.
 Do not assume the named `SYS_*` constants above operation 13 are a complete ABI inventory.
@@ -371,3 +372,29 @@ Pointer readiness compares a complete driver sample's published revision with th
 display owner's last mouse read. Only PID 0 can select this bit. The existing
 mouse syscall's packed return format is unchanged. IRQs publish complete samples
 and send at most one idle-CPU doorbell; ordinary kernel entry performs wakeups.
+
+
+## Restricted worker principal
+
+Syscall 34 takes profile `1`, a page-aligned heap budget from 64 KiB through
+64 MiB, and a zero reserved word. It returns zero or `SYSCALL_ERROR`. Only a
+single-threaded non-PID-0 process with the **child** side of an existing connected
+stdio endpoint may enter it. A repeat transition, invalid budget/profile/flags,
+or a budget below the current break fails without changing state. The budget is
+relative to `HEAP_BASE`; it bounds complete brk pages, including rejected growth
+rollback. Initial image/stack/surface/table allocations are separate.
+
+Enforcement occurs before dispatch/usercopy for every syscall and thread. Allowed
+numbers: 0, 3, 17, 22, 31, 32, 80, 81, 96, 97, 102, 103; syscall 109 allows only
+nonzero combinations of stdio readiness bits 2/4. Other operations, including
+unknown future numbers, return `SYSCALL_ERROR`. Thus existing endpoint ownership
+remains authoritative; a worker cannot choose another peer, spawn descendants,
+create threads, open files/sockets, access input/display or relax the profile.
+
+`userlib::process::restrict_worker(heap_bytes)` is the typed wrapper. Call it from
+trusted bootstrap before accepting untrusted bytes. It is a restricted-worker
+mechanism, not origin isolation, JIT protection, a total-memory accounting ABI or
+a promise that arbitrary existing resources are revoked/closed. Ordinary apps'
+rights are unchanged. The native service bootstraps with an empty environment and
+no pre-opened resources beyond its private endpoint. See
+[P1 design and executed validation](browser-runtime-p1.md).

@@ -147,6 +147,11 @@ failed feasibility result with a revised plan. A host-only build is insufficient
 
 ### P1 — Native runtime, lifecycle and isolation
 
+Implementation: [P1 runtime and evidence](browser-runtime-p1.md) provides a
+restricted language service, owned IPC, engine/page limits and navigation
+cancellation. Full renderer/service separation and origin policy remain explicit
+follow-up work; browser DOM integration is P3.
+
 - Supply measured requirements for allocation, virtual memory, guarded stacks,
   threads, synchronization, TLS, clocks and event readiness. Distinguish wall-clock
   certificate time from monotonic scheduling/media time.

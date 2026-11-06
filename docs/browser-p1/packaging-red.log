@@ -1,0 +1,19 @@
+.F
+======================================================================
+FAIL: test_services_are_installed_without_desktop_bin_extension (test_install_user_programs.InstallUserProgramsTests.test_services_are_installed_without_desktop_bin_extension)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/tools/tests/test_install_user_programs.py", line 40, in test_services_are_installed_without_desktop_bin_extension
+    self.assertEqual(run.call_args.args[0][-1], '::/BIN/JWORKER.SVC')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '::/BIN/JWORKER.BIN' != '::/BIN/JWORKER.SVC'
+- ::/BIN/JWORKER.BIN
+?                ^^^
++ ::/BIN/JWORKER.SVC
+?                ^^^
+
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.001s
+
+FAILED (failures=1)

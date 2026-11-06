@@ -153,3 +153,45 @@ fn e1000_tcp_advertises_a_useful_window_within_dma_capacity() {
     assert!(advertised>=32768,"TCP advertised only {advertised} bytes despite a 32-descriptor DMA ring");
     assert!(advertised<=(e1000_caps::COUNT-1)*(e1000_caps::FRAME_BYTES-54),"peer burst must fit usable DMA descriptors");
 }
+
+#[test]
+fn tcp_close_and_process_cleanup_emit_reset_before_releasing_the_endpoint() {
+    use smoltcp::wire::{EthernetFrame,Ipv4Packet,IpProtocol,Ipv4Address,IpAddress,TcpPacket,TcpSeqNumber};
+    for cleanup in [false,true] {
+        let mock=Mock::default();let mac=[2,1,2,3,4,5];let peer=[2,0,0,0,0,2];
+        let mut net=Network::new(mock.clone(),mac);
+        let handle=net.open(1,Kind::Tcp).unwrap();net.connect(1,handle,[10,0,2,2],80).unwrap();net.progress(0);
+        let mut arp=vec![];arp.extend_from_slice(&mac);arp.extend_from_slice(&peer);
+        arp.extend_from_slice(&[8,6,0,1,8,0,6,4,0,2]);arp.extend_from_slice(&peer);arp.extend_from_slice(&[10,0,2,2]);
+        arp.extend_from_slice(&mac);arp.extend_from_slice(&[10,0,2,15]);
+        mock.0.borrow_mut().rx.push_back(arp);net.progress(1);
+        let frame=mock.0.borrow().tx.iter().find(|frame|frame.get(23)==Some(&6)).unwrap().clone();
+        let ether=EthernetFrame::new_checked(&frame[..]).unwrap();
+        let ip=Ipv4Packet::new_checked(ether.payload()).unwrap();
+        let syn=TcpPacket::new_checked(ip.payload()).unwrap();
+        let mut response=vec![0u8;54];response[..6].copy_from_slice(&mac);response[6..12].copy_from_slice(&peer);response[12..14].copy_from_slice(&[8,0]);
+        let peer_ip=Ipv4Address::new(10,0,2,2);let local_ip=Ipv4Address::new(10,0,2,15);
+        {
+            let mut ip=Ipv4Packet::new_unchecked(&mut response[14..]);
+            ip.set_version(4);ip.set_header_len(20);ip.set_total_len(40);ip.set_hop_limit(64);ip.set_next_header(IpProtocol::Tcp);ip.set_src_addr(peer_ip);ip.set_dst_addr(local_ip);ip.fill_checksum();
+        }
+        {
+            let mut tcp=TcpPacket::new_unchecked(&mut response[34..]);
+            tcp.set_src_port(80);tcp.set_dst_port(syn.src_port());tcp.set_header_len(20);tcp.set_seq_number(TcpSeqNumber(500));tcp.set_ack_number(syn.seq_number()+1);tcp.set_syn(true);tcp.set_ack(true);tcp.set_window_len(65535);
+            tcp.fill_checksum(&IpAddress::Ipv4(peer_ip),&IpAddress::Ipv4(local_ip));
+        }
+        mock.0.borrow_mut().rx.push_back(response);net.progress(2);
+        assert_ne!(net.poll(1,handle).unwrap()&rustos_net_abi::CONNECTED,0,"fixture established TCP");
+        mock.0.borrow_mut().tx.clear();
+        assert_eq!(net.close(2,handle),Err(Error::BadHandle));
+        if cleanup {net.cleanup(1)} else {net.close(1,handle).unwrap()}
+        net.progress(3);
+        assert_eq!(net.count(),0);
+        let queues=mock.0.borrow();
+        assert!(queues.tx.iter().any(|frame| {
+            if frame.get(23)!=Some(&6){return false}
+            let ip=Ipv4Packet::new_checked(&frame[14..]).unwrap();
+            TcpPacket::new_checked(ip.payload()).unwrap().rst()
+        }),"TCP reset must reach the device before socket removal, cleanup={}",cleanup);
+    }
+}

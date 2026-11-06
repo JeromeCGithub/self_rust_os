@@ -4,6 +4,7 @@ use rustos_net_abi::{Error as SocketError, Kind, Packet};
 /// Request failure; a body callback may already have received partial output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
+    Cancelled,
     InvalidUrl,
     UnsupportedScheme,
     Protocol,
@@ -23,6 +24,10 @@ pub enum Error {
 /// Process socket adapter. Calls are nonblocking; sleep yields until a later tick.
 /// Receive writes into reusable initialized storage, avoiding full-record copies.
 pub trait Transport {
+    /// Cooperative cancellation, checked through DNS/connect/framing progress.
+    fn cancelled(&self) -> bool {
+        false
+    }
     fn open(&mut self, kind: Kind) -> Result<u64, SocketError>;
     fn connect(&mut self, handle: u64, address: [u8; 4], port: u16) -> Result<(), SocketError>;
     fn send(&mut self, handle: u64, data: &[u8]) -> Result<usize, SocketError>;
@@ -120,8 +125,14 @@ pub fn get_with_url(
     if options.timeout_ticks == 0 || options.dns_port == 0 {
         return Err(Error::InvalidUrl);
     }
+    if t.cancelled() {
+        return Err(Error::Cancelled);
+    }
     let mut url = url::Url::parse(url)?;
     for redirect in 0..=options.redirects {
+        if t.cancelled() {
+            return Err(Error::Cancelled);
+        }
         let ip = dns::resolve(t, url.host.as_str(), options)?;
         let handle = t.open(Kind::Tcp).map_err(Error::Socket)?;
         let mut location = url::Text::<{ limits::TARGET }>::new();
@@ -164,6 +175,9 @@ fn exchange(
     let start = t.ticks();
     t.connect(handle, ip, url.port).map_err(Error::Socket)?;
     loop {
+        if t.cancelled() {
+            return Err(Error::Cancelled);
+        }
         if t.ticks().wrapping_sub(start) >= options.timeout_ticks {
             return Err(Error::Timeout);
         }
@@ -216,6 +230,9 @@ fn send_request(
     let bytes = request.as_str().as_bytes();
     let mut sent = 0;
     while sent < bytes.len() {
+        if t.cancelled() {
+            return Err(Error::Cancelled);
+        }
         if t.ticks().wrapping_sub(start) >= options.timeout_ticks {
             return Err(Error::Timeout);
         }

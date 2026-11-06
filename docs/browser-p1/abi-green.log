@@ -1,0 +1,20 @@
+   Compiling rustos-process-abi v0.1.0 (/home/jay/personal/os/jbrowse/crates/process-abi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running unittests src/lib.rs (rustos-p1-abi/x86_64-unknown-linux-gnu/debug/deps/rustos_process_abi-1f6defbf3d55da58)
+
+running 7 tests
+test environment_tests::startup_environment_preserves_strings_and_null_sentinels ... ok
+test isolation::tests::budget_bounds_and_page_units_are_explicit ... ok
+test isolation::tests::private_transport_and_progress_do_not_grant_ambient_authority ... ok
+test tests::rejects_version_count_missing_nul_and_invalid_utf8 ... ok
+test tests::round_trip_preserves_argv0_empty_spaces_and_unicode ... ok
+test tests::accepts_exact_limits_rejects_overflow_and_embedded_nul ... ok
+test tests::startup_stack_has_private_pointers_null_sentinel_and_c_alignment ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustos_process_abi
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

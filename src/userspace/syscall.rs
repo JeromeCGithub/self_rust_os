@@ -100,10 +100,16 @@ const SYSCALL_ERROR: u64 = u64::MAX - 1;
 /// The syscall return value, or [`PROCESS_EXIT_SENTINEL`] to signal process exit.
 pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
     crate::scheduler::reap_retired();
+    if !crate::scheduler::syscall_permitted(num, arg1) {
+        return SYSCALL_ERROR;
+    }
     if (96..=109).contains(&num) {
         return thread_dispatch(num, arg1, arg2, arg3);
     }
     match num {
+        rustos_process_abi::isolation::SYS_RESTRICT => {
+            crate::scheduler::restrict_worker(arg1, arg2, arg3)
+        }
         SYS_EXIT => {
             crate::scheduler::exit_current(arg1);
             PROCESS_EXIT_SENTINEL
