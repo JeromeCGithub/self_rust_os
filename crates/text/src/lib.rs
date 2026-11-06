@@ -55,19 +55,24 @@ pub struct Glyph {
 }
 #[cfg(feature = "truetype")]
 pub struct FontSet {
-    fonts: [fontdue::Font; 4],
-    extra_bold: Option<[fontdue::Font; 2]>,
+    fonts: [fontdue::LazyFont<'static>; 4],
+    extra_bold: Option<[fontdue::LazyFont<'static>; 2]>,
 }
 #[cfg(feature = "truetype")]
 impl FontSet {
     /// Load trusted application font assets. Web fonts require separate isolation
     /// and compiled-outline budgets, beyond this initial embedded-font profile.
-    pub fn load(sans: &[u8], bold: &[u8], serif: &[u8], mono: &[u8]) -> Result<Self, Error> {
-        fn load(bytes: &[u8]) -> Result<fontdue::Font, Error> {
+    pub fn load(
+        sans: &'static [u8],
+        bold: &'static [u8],
+        serif: &'static [u8],
+        mono: &'static [u8],
+    ) -> Result<Self, Error> {
+        fn load(bytes: &'static [u8]) -> Result<fontdue::LazyFont<'static>, Error> {
             if bytes.len() > 2 * 1024 * 1024 {
                 return Err(Error::Limit);
             }
-            fontdue::Font::from_bytes(
+            fontdue::LazyFont::from_bytes(
                 bytes,
                 fontdue::FontSettings {
                     load_substitutions: false,
@@ -82,12 +87,16 @@ impl FontSet {
         })
     }
     /// Add matching bold serif/monospace faces before sharing the immutable set.
-    pub fn with_bold_faces(mut self, serif: &[u8], mono: &[u8]) -> Result<Self, Error> {
-        let load = |bytes: &[u8]| {
+    pub fn with_bold_faces(
+        mut self,
+        serif: &'static [u8],
+        mono: &'static [u8],
+    ) -> Result<Self, Error> {
+        let load = |bytes: &'static [u8]| {
             if bytes.len() > 2 * 1024 * 1024 {
                 return Err(Error::Limit);
             }
-            fontdue::Font::from_bytes(
+            fontdue::LazyFont::from_bytes(
                 bytes,
                 fontdue::FontSettings {
                     load_substitutions: false,
@@ -99,7 +108,7 @@ impl FontSet {
         self.extra_bold = Some([load(serif)?, load(mono)?]);
         Ok(self)
     }
-    fn select(&self, ch: char, style: Style) -> &fontdue::Font {
+    fn select(&self, ch: char, style: Style) -> &fontdue::LazyFont<'static> {
         let index = match style.family {
             Family::Sans => usize::from(style.bold),
             Family::Serif => 2,
@@ -160,8 +169,7 @@ impl Metrics for FontSet {
         }
         ceil(
             self.select(ch, style)
-                .metrics(ch, f32::from(style.size))
-                .advance_width,
+                .advance_width(ch, f32::from(style.size)),
         )
     }
     fn line_height(&self, style: Style) -> u32 {
