@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 #[derive(Default)]
 struct Mock {
     time: u64,
+    cancel_at: Option<u64>,
     opened: usize,
     closed: usize,
     sent: Vec<u8>,
@@ -16,6 +17,9 @@ struct Mock {
     ports: Vec<u16>,
 }
 impl Transport for Mock {
+    fn cancelled(&self) -> bool {
+        self.cancel_at.is_some_and(|at| self.time >= at)
+    }
     fn start_tls(&mut self, _: u64, host: &str, _: u64, _: Option<&str>) -> Result<(), Error> {
         self.tls_calls.push(host.to_owned());
         if self.tls {
@@ -620,4 +624,41 @@ fn response_reports_declared_charset_for_browser_decoding() {
         assert_eq!(response.unwrap().charset, Some(expected));
         assert_eq!(mock.opened, mock.closed);
     }
+}
+
+#[test]
+fn cancellation_before_open_and_during_headers_closes_only_owned_sockets() {
+    let mut before = Mock {
+        cancel_at: Some(0),
+        ..Mock::default()
+    };
+    assert_eq!(
+        get(
+            &mut before,
+            "http://127.0.0.1/",
+            Options::default(),
+            |_| Ok(())
+        ),
+        Err(Error::Cancelled)
+    );
+    assert_eq!((before.opened, before.closed), (0, 0));
+    let mut blocked = Mock {
+        cancel_at: Some(2),
+        no_data: true,
+        ..Mock::default()
+    };
+    assert_eq!(
+        get(
+            &mut blocked,
+            "http://127.0.0.1/",
+            Options::default(),
+            |_| Ok(())
+        ),
+        Err(Error::Cancelled)
+    );
+    assert_eq!((blocked.opened, blocked.closed), (1, 1));
+    assert_eq!(
+        blocked.time, 2,
+        "cancellation observed before ordinary request deadline"
+    );
 }

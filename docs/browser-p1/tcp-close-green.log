@@ -1,0 +1,25 @@
+   Compiling rustos-net-stack v0.1.0 (/home/jay/personal/os/jbrowse/crates/net-stack)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src/lib.rs (rustos-p1-net/x86_64-unknown-linux-gnu/debug/deps/rustos_net_stack-28c820a1cf39011a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/stack.rs (rustos-p1-net/x86_64-unknown-linux-gnu/debug/deps/stack-3b1862faa2c5dd9d)
+
+running 6 tests
+test remote_ip_uses_gateway_arp_and_ingress_is_bounded ... ok
+test validates_destinations_payloads_and_unconnected_operations ... ok
+test e1000_tcp_advertises_a_useful_window_within_dma_capacity ... ok
+test pending_tcp_handshake_is_not_eof ... ok
+test tcp_close_and_process_cleanup_emit_reset_before_releasing_the_endpoint ... ok
+test quotas_foreign_stale_handles_and_cleanup ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustos_net_stack
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

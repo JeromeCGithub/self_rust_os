@@ -494,6 +494,7 @@ fn spawn_process_inner(
         pointer_seen: crate::drivers::input::mouse::revision(),
         files: crate::fs::handles::Files::new(cwd),
         heap_break: rustos_thread_abi::HEAP_BASE,
+        worker_heap_limit: None,
         tls: tls_image,
     };
     let mut thread = make_thread(
@@ -1414,4 +1415,53 @@ pub(crate) fn save_extended_state() {
             }
         }
     }
+}
+
+/// Irreversibly restrict a connected child before processing untrusted input.
+/// Entry gate + scheduler lock serialize the principal against every syscall.
+pub fn restrict_worker(profile: u64, bytes: u64, reserved: u64) -> u64 {
+    use rustos_process_abi::isolation as abi;
+    if profile != abi::WORKER || reserved != 0 || !abi::valid_budget(bytes) {
+        return ERROR;
+    }
+    let mut scheduler = SCHEDULER.lock();
+    let Some(pid) = scheduler.current_pid() else {
+        return ERROR;
+    };
+    if pid == 0
+        || scheduler
+            .threads
+            .iter()
+            .flatten()
+            .filter(|t| t.pid == pid)
+            .count()
+            != 1
+    {
+        return ERROR;
+    }
+    let Some(process) = scheduler
+        .processes
+        .get_mut(pid as usize)
+        .and_then(Option::as_mut)
+    else {
+        return ERROR;
+    };
+    if process.worker_heap_limit.is_some()
+        || !process.io_peer.is_some_and(|(_, child)| child)
+        || process.heap_break > rustos_thread_abi::HEAP_BASE + bytes
+    {
+        return ERROR;
+    }
+    process.worker_heap_limit = Some(rustos_thread_abi::HEAP_BASE + bytes);
+    0
+}
+/// Check process authority before syscall-specific copying, allocation or I/O.
+pub(crate) fn syscall_permitted(number: u64, first: u64) -> bool {
+    let scheduler = SCHEDULER.lock();
+    let restricted = scheduler
+        .current_pid()
+        .and_then(|pid| scheduler.processes.get(pid as usize))
+        .and_then(Option::as_ref)
+        .is_some_and(|p| p.worker_heap_limit.is_some());
+    !restricted || rustos_process_abi::isolation::permits(number, first)
 }

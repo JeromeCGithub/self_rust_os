@@ -25,6 +25,9 @@ impl<'a, T: Transport> Reader<'a, T> {
         }
     }
     pub fn deadline(&self) -> Result<(), Error> {
+        if self.t.cancelled() {
+            return Err(Error::Cancelled);
+        }
         if self.t.ticks().wrapping_sub(self.start) >= self.options.timeout_ticks {
             Err(Error::Timeout)
         } else {
@@ -32,6 +35,9 @@ impl<'a, T: Transport> Reader<'a, T> {
         }
     }
     pub fn read(&mut self, out: &mut [u8]) -> Result<usize, Error> {
+        if self.t.cancelled() {
+            return Err(Error::Cancelled);
+        }
         if out.is_empty() {
             return Ok(0);
         }

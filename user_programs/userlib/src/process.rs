@@ -135,3 +135,26 @@ pub(crate) fn read(bytes: &mut [u8], blocking: bool) -> usize {
         }
     }
 }
+
+/// Irreversibly drop filesystem/network/process/display authority for this
+/// connected, single-threaded child. Call before accepting untrusted input.
+/// Only the existing endpoint, heap budget, clocks/entropy and progress remain.
+/// Initial image/stack/surface mappings are unchanged; no new threads are allowed.
+pub fn restrict_worker(heap_bytes: usize) -> Result<(), ()> {
+    let abi_profile = rustos_process_abi::isolation::WORKER;
+    // SAFETY: Register-only profile/budget; kernel validates all scalar fields and
+    // atomically changes only the caller's process-wide principal.
+    let result = unsafe {
+        sys::syscall(
+            rustos_process_abi::isolation::SYS_RESTRICT,
+            abi_profile,
+            heap_bytes as u64,
+            0,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(())
+    }
+}

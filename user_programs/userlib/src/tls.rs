@@ -12,6 +12,7 @@ getrandom::register_custom_getrandom!(random);
 
 struct Raw {
     handle: u64,
+    cancel: Option<crate::io::Cancellation>,
     start: u64,
     timeout: u64,
     packet: net::Packet,
@@ -20,6 +21,13 @@ struct Raw {
 }
 impl rustos_tls::Io for Raw {
     fn check_deadline(&self) -> Result<(), Error> {
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+        {
+            return Err(Error::Cancelled);
+        }
         if sys::ticks().wrapping_sub(self.start) >= self.timeout {
             Err(Error::Timeout)
         } else {
@@ -83,6 +91,29 @@ impl Connection {
         timeout: u64,
         ca_file: Option<&str>,
     ) -> Result<Self, Error> {
+        Self::upgrade_inner(handle, host, timeout, ca_file, None)
+    }
+    /// Upgrade with cancellation checked during raw reads/writes and handshake.
+    pub fn upgrade_cancellable(
+        handle: u64,
+        host: &str,
+        timeout: u64,
+        ca_file: Option<&str>,
+        cancel: crate::io::Cancellation,
+    ) -> Result<Self, Error> {
+        Self::upgrade_inner(handle, host, timeout, ca_file, Some(cancel))
+    }
+    #[inline(never)]
+    fn upgrade_inner(
+        handle: u64,
+        host: &str,
+        timeout: u64,
+        ca_file: Option<&str>,
+        cancel: Option<crate::io::Cancellation>,
+    ) -> Result<Self, Error> {
+        if cancel.as_ref().is_some_and(|token| token.is_cancelled()) {
+            return Err(Error::Cancelled);
+        }
         let now = system::unix_time().map_err(|_| Error::Clock)?;
         system::random_bytes(&mut [0; 32]).map_err(|_| Error::Entropy)?;
         let mut ca = Vec::new();
@@ -97,6 +128,7 @@ impl Connection {
             session: Box::new(session),
             raw: Raw {
                 handle,
+                cancel,
                 start: sys::ticks(),
                 timeout,
                 packet: net::Packet::empty(),

@@ -13,14 +13,18 @@ pub struct Loaded {
     pub status: u16,
     pub script_errors: usize,
 }
-fn fetch(url: &str, limit: usize) -> Result<(String, Vec<u8>, http::Response), String> {
+fn fetch(
+    url: &str,
+    limit: usize,
+    cancel: &userlib::io::Cancellation,
+) -> Result<(String, Vec<u8>, http::Response), String> {
     let mut bytes = Vec::new();
     let mut effective = String::new();
     let options = http::Options {
         max_body: limit,
         ..http::Options::default()
     };
-    let response = http::get_with_url(
+    let response = http::get_cancellable(
         url,
         options,
         |part| {
@@ -31,12 +35,13 @@ fn fetch(url: &str, limit: usize) -> Result<(String, Vec<u8>, http::Response), S
             Ok(())
         },
         |url| effective = url.to_string(),
+        cancel.clone(),
     )
     .map_err(|e| http::error_message(e).to_string())?;
     Ok((effective, bytes, response))
 }
-pub fn load(url: &str) -> Result<Loaded, String> {
-    let (url, bytes, response) = fetch(url, MAX_HTML)?;
+pub fn load(url: &str, cancel: &userlib::io::Cancellation) -> Result<Loaded, String> {
+    let (url, bytes, response) = fetch(url, MAX_HTML, cancel)?;
     let encoding = match response.charset {
         Some(http::Charset::Utf8) => Some(Encoding::Utf8),
         Some(http::Charset::Windows1252) => Some(Encoding::Windows1252),
@@ -50,7 +55,7 @@ pub fn load(url: &str) -> Result<Loaded, String> {
     // Unsupported/failed optional sheets leave a readable HTML fallback.
     for sheet in doc.stylesheets.clone() {
         if let Ok(sheet) = resolve(&url, &sheet) {
-            if let Ok((_, bytes, response)) = fetch(&sheet, 32 * 1024) {
+            if let Ok((_, bytes, response)) = fetch(&sheet, 32 * 1024, cancel) {
                 if response.status != 200 {
                     continue;
                 }
@@ -59,6 +64,9 @@ pub fn load(url: &str) -> Result<Loaded, String> {
                 }
             }
         }
+    }
+    if cancel.is_cancelled() {
+        return Err("request cancelled".to_string());
     }
     let scripts = doc.run_scripts();
     let script_errors = scripts.failures.len();

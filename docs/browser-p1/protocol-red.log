@@ -1,0 +1,64 @@
+    Updating crates.io index
+     Locking 9 packages to latest compatible versions
+   Compiling rustos-browser-worker v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser-worker)
+warning: unused import: `vec::Vec`
+ --> src/lib.rs:4:29
+  |
+4 | use alloc::{string::String, vec::Vec};
+  |                             ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: fields `endpoint` and `generation` are never read
+  --> src/lib.rs:30:33
+   |
+30 | pub struct Session<E:Endpoint> {endpoint:Option<E>,generation:u64}
+   |            -------              ^^^^^^^^           ^^^^^^^^^^
+   |            |
+   |            fields in this struct
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `rustos-browser-worker` (lib) generated 2 warnings (run `cargo fix --lib -p rustos-browser-worker` to apply 1 suggestion)
+warning: `rustos-browser-worker` (lib test) generated 2 warnings (2 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running unittests src/lib.rs (rustos-p1-worker/x86_64-unknown-linux-gnu/debug/deps/rustos_browser_worker-462275c70492cca7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/protocol.rs (rustos-p1-worker/x86_64-unknown-linux-gnu/debug/deps/protocol-d5ac08dd6c9e8ba8)
+
+running 3 tests
+test copied_results_cancel_and_stale_replies_obey_session_ownership ... FAILED
+test missing_worker_response_is_bounded_and_freed ... FAILED
+test framing_rejects_ambient_handles_lengths_reserved_bytes_and_wrong_versions ... FAILED
+
+failures:
+
+---- copied_results_cancel_and_stale_replies_obey_session_ownership stdout ----
+
+thread 'copied_results_cancel_and_stale_replies_obey_session_ownership' panicked at tests/protocol.rs:26:50:
+called `Result::unwrap()` on an `Err` value: Protocol
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- missing_worker_response_is_bounded_and_freed stdout ----
+
+thread 'missing_worker_response_is_bounded_and_freed' panicked at tests/protocol.rs:43:2:
+assertion failed: matches!(Session::connect(endpoint,||false),Err(Error::Deadline))
+
+---- framing_rejects_ambient_handles_lengths_reserved_bytes_and_wrong_versions stdout ----
+
+thread 'framing_rejects_ambient_handles_lengths_reserved_bytes_and_wrong_versions' panicked at tests/protocol.rs:7:26:
+valid frame: Protocol
+
+
+failures:
+    copied_results_cancel_and_stale_replies_obey_session_ownership
+    framing_rejects_ambient_handles_lengths_reserved_bytes_and_wrong_versions
+    missing_worker_response_is_bounded_and_freed
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test protocol`

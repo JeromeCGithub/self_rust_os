@@ -25,6 +25,7 @@ current behavior; architecture targets are not evidence of implemented features.
 | [Network performance](network-performance.md) | TCP window optimization, DMA, measurements and future event delivery |
 | [Networking validation](networking-validation.md) | Red/green evidence, packet captures and remaining limits |
 | [Ethernet networking plan](networking-plan.md) | Delivered ping/client sockets and roadmap toward DNS, HTTP and TLS |
+| [Browser P1 runtime](browser-runtime-p1.md) | Restricted native worker, framed IPC, heap limits, cancellation and navigation/resource recovery |
 | [Browser P0 engine decision](browser-engine-p0.md) | Native QuickJS feasibility, ownership, full-engine investigation and remaining platform work |
 | [Browser P0 validation](browser-p0-validation.md) | Red/green evidence, fixed fixture comparison, guest results and preserved site gaps |
 | [Complete browser roadmap](browser-support-plan.md) | Phased plan and acceptance gates for classic browsing, Google results, YouTube, Facebook and broader compatibility |
