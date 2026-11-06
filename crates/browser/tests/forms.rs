@@ -89,3 +89,80 @@ fn google_short_hex_colors_and_script_only_pages_have_correct_visual_state() {
         .layout(640)
         .is_empty());
 }
+
+#[test]
+fn password_controls_are_editable_but_only_paint_a_mask() {
+    let doc=Document::parse("<form method=post><input name=user><input type=password name=password value='café!'><input type=submit value=Login></form>").unwrap();
+    assert_eq!(doc.forms[0].fields.len(), 3, "password field is retained");
+    let field = &doc.forms[0].fields[1];
+    assert!(field.kind.is_text());
+    assert_eq!(field.display_value(), "*****");
+    assert!(
+        !format!("{field:?}").contains("café!"),
+        "diagnostics redact passwords"
+    );
+    let page = doc.layout(640);
+    assert_eq!(page.controls.len(), 3);
+    assert_eq!(page.controls[0].width, page.controls[1].width);
+    assert!(page.controls[1].y > page.controls[0].y);
+    assert!(!page.items.iter().any(|item| item.text.contains("café!")));
+}
+
+#[test]
+fn post_form_request_preserves_action_query_and_encodes_only_successful_controls() {
+    use rustos_browser::Submission;
+    let doc=Document::parse("<form method=POST action='/login?flow=1#done'><input name=user value='jane doe'><input type=password name=password value='café&amp;?'><input type=hidden name=csrf value='fake-token'><input disabled name=omit value=x><button name=action value=login>Login</button></form>").unwrap();
+    assert_eq!(
+        doc.forms[0]
+            .submission("https://example.test/home", Some(4))
+            .unwrap(),
+        Submission::Post {
+            url: "https://example.test/login?flow=1#done".into(),
+            body: "user=jane+doe&password=caf%C3%A9%26%3F&csrf=fake-token&action=login".into(),
+        }
+    );
+    assert!(!doc.forms[0]
+        .submission("https://example.test/", None)
+        .unwrap()
+        .url()
+        .contains("password"));
+    assert!(
+        doc.forms[0].submit("https://example.test/", None).is_err(),
+        "legacy GET helper cannot leak POST values into a URL"
+    );
+}
+
+#[test]
+fn form_post_limits_methods_and_encodings_fail_without_partial_submission() {
+    use rustos_browser::Submission;
+    let doc=Document::parse("<form method=post enctype='multipart/form-data'><input name=q></form><form method=dialog></form><form method=post action='javascript:bad()'></form><form method=post><input name=q value=ok></form>").unwrap();
+    assert_eq!(
+        doc.forms[0].submission("https://example.test/", None),
+        Err(Error::UnsupportedForm)
+    );
+    assert_eq!(
+        doc.forms[1].submission("https://example.test/", None),
+        Err(Error::UnsupportedForm)
+    );
+    assert_eq!(
+        doc.forms[2].submission("https://example.test/", None),
+        Err(Error::InvalidUrl)
+    );
+    let mut form = doc.forms[3].clone();
+    form.fields[0].value = "a".repeat(2048);
+    form.fields = vec![form.fields[0].clone(); 7];
+    assert!(matches!(
+        form.submission("https://example.test/", None),
+        Ok(Submission::Post { .. })
+    ));
+    form.fields = vec![form.fields[0].clone(); 9];
+    assert_eq!(
+        form.submission("https://example.test/", None),
+        Err(Error::Limit)
+    );
+    form.fields[0].value = "x".repeat(2049);
+    assert_eq!(
+        form.submission("https://example.test/", None),
+        Err(Error::Limit)
+    );
+}

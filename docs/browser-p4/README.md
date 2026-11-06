@@ -11,8 +11,9 @@ native/host results, not a completed Google or general website milestone.
   binary-string base64, invalid-input recovery and existing CPU/effect quotas.
 - [Freestanding green](freestanding-green.log): same seven tests through the
   freestanding QuickJS C/platform adapter on the host, not a guest substitute.
-- [Browser green](browser-green.log): all browser parser/layout/form/script/effect
+- [Browser green](browser-green.log): default-feature parser/layout/form/effect
   suites, including bounded attribute wire round-trip and whole-batch rollback.
+  The optional prototype scripting host suite was not run for this P4 increment.
 - [Worker protocol](protocol-green.log): framed IPC validation/cleanup regressions.
 
 The first native pixel probe intersected an antialiased glyph rather than a blank

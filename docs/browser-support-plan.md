@@ -4,7 +4,9 @@ Status: implementation started with [P0 native engine feasibility](browser-engin
 2026-11-05; [P1 runtime](browser-runtime-p1.md) is implemented and
 [P2 presentation](browser-rendering-p2.md) and
 [P3 native JavaScript](browser-javascript-p3.md) are in progress.
-[P4 attributes/base64](browser-google-p4.md) has started; its Google results gate remains open. Baseline: browser commit
+[P4 attributes/base64](browser-google-p4.md) and
+[P5 password/POST forms](browser-sessions-p5.md) have started; their Google results
+and authenticated-session gates remain open. Baseline: browser commit
 `b44a83a`. This is a plan for missing capabilities, not a claim of new support.
 See the [browser guide](jbrowse.md), [Google status](jbrowse-google.md), and
 [JavaScript prototype](jbrowse-javascript.md) for current behavior and evidence.

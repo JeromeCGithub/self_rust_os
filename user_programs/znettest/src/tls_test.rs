@@ -101,6 +101,7 @@ pub fn run(config: [u8; 12]) -> ! {
     for _ in 0..2 {
         for (server, host, path, trusted, expected) in [
             (0, "fixture.test", "/", true, None),
+            (0, "fixture.test", "/post", true, None),
             (3, "fixture.test", "/", true, None),
             (0, "fixture.test", "/large", true, None),
             (0, "fixture.test", "/chunked", true, None),
@@ -153,8 +154,13 @@ pub fn run(config: [u8; 12]) -> ! {
             let mut output = [0; 32];
             let mut length = 0;
             let mut sum = 0u64;
-            let result = http::get_with(
+            let result = http::request_with_url(
                 url.text(),
+                if path == "/post" {
+                    http::Request::FormPost(b"user=guest&password=testpass")
+                } else {
+                    http::Request::Get
+                },
                 http::Options {
                     tls_ca_file: if trusted { options.tls_ca_file } else { None },
                     ..options
@@ -169,6 +175,7 @@ pub fn run(config: [u8; 12]) -> ! {
                     length += bytes.len();
                     Ok(())
                 },
+                |_| {},
             );
             if let Some(error) = expected {
                 assert_eq!(

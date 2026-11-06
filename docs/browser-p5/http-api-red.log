@@ -1,0 +1,47 @@
+   Compiling rustos-net-abi v0.1.0 (/home/jay/personal/os/jbrowse/crates/net-abi)
+   Compiling rustos-http v0.1.0 (/home/jay/personal/os/jbrowse/crates/http)
+error[E0432]: unresolved imports `rustos_http::request_with_url`, `rustos_http::Request`
+   --> tests/client.rs:108:23
+    |
+108 |     use rustos_http::{request_with_url, Request};
+    |                       ^^^^^^^^^^^^^^^^  ^^^^^^^ no `Request` in the root
+    |                       |
+    |                       no `request_with_url` in the root
+    |                       help: a similar name exists in the module: `get_with_url`
+    |
+    = help: consider importing this struct instead:
+            std::error::Request
+
+error[E0432]: unresolved imports `rustos_http::request_with_url`, `rustos_http::Request`
+   --> tests/client.rs:124:23
+    |
+124 |     use rustos_http::{request_with_url,Request};
+    |                       ^^^^^^^^^^^^^^^^ ^^^^^^^ no `Request` in the root
+    |                       |
+    |                       no `request_with_url` in the root
+    |                       help: a similar name exists in the module: `get_with_url`
+    |
+    = help: consider importing this struct instead:
+            std::error::Request
+
+error[E0432]: unresolved imports `rustos_http::request_with_url`, `rustos_http::Request`
+   --> tests/client.rs:140:23
+    |
+140 |     use rustos_http::{request_with_url,Request};
+    |                       ^^^^^^^^^^^^^^^^ ^^^^^^^ no `Request` in the root
+    |                       |
+    |                       no `request_with_url` in the root
+    |                       help: a similar name exists in the module: `get_with_url`
+    |
+    = help: consider importing this struct instead:
+            std::error::Request
+
+error[E0599]: no variant or associated item named `CrossOriginRedirect` found for enum `rustos_http::Error` in the current scope
+   --> tests/client.rs:144:146
+    |
+144 | ...lt(),|_|Ok(()),|_|{}),Err(Error::CrossOriginRedirect));
+    |                                     ^^^^^^^^^^^^^^^^^^^ variant or associated item not found in `Error`
+
+Some errors have detailed explanations: E0432, E0599.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `rustos-http` (test "client") due to 4 previous errors

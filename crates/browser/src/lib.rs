@@ -5,7 +5,7 @@ mod css;
 mod encoding;
 mod forms;
 pub use encoding::{decode_html, Encoding};
-pub use forms::{Control, Field, FieldKind, Form};
+pub use forms::{Control, Field, FieldKind, Form, Submission};
 mod html;
 mod layout;
 mod url;

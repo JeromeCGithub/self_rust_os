@@ -6,7 +6,7 @@ use alloc::{
     format,
     string::{String, ToString},
 };
-use rustos_browser::{address, resolve, FieldKind, Page};
+use rustos_browser::{address, resolve, FieldKind, Page, Submission};
 const HOME_PAGE: &str = "https://www.google.com/";
 use userlib::{
     println,
@@ -16,7 +16,7 @@ use userlib::{
 };
 
 struct Shared {
-    request: Option<(u64, String, userlib::io::Cancellation)>,
+    request: Option<(u64, Submission, userlib::io::Cancellation)>,
     active: Option<userlib::io::Cancellation>,
     result: Option<(u64, Result<loader::Loaded, String>)>,
 }
@@ -86,21 +86,7 @@ impl Browser {
     fn navigate(&mut self, shared: &Mutex<Shared>, input: &str) {
         match address(input) {
             Ok(url) => {
-                self.history_mode = navigation::Mode::Push;
-                self.generation = self.generation.wrapping_add(1);
-                self.address.set(&url);
-                self.editing = false;
-                self.active_field = None;
-                self.status = "Loading...".into();
-                self.loading = true;
-                // One worker, one replaceable request and one result. No app lock
-                // is held across network I/O or canvas publication.
-                let cancel = userlib::io::Cancellation::new();
-                let mut shared = shared.lock();
-                if let Some(previous) = shared.active.replace(cancel.clone()) {
-                    previous.cancel();
-                }
-                shared.request = Some((self.generation, url, cancel));
+                self.begin_navigation(shared, Submission::Get(url));
             }
             Err(_) => {
                 self.status = "Invalid address; use HTTP or HTTPS".into();
@@ -108,9 +94,41 @@ impl Browser {
             }
         }
     }
+    fn begin_navigation(&mut self, shared: &Mutex<Shared>, submission: Submission) {
+        self.history_mode = navigation::Mode::Push;
+        self.generation = self.generation.wrapping_add(1);
+        self.address.set(submission.url());
+        self.editing = false;
+        self.active_field = None;
+        self.status = "Loading...".into();
+        self.loading = true;
+        // One worker, one replaceable request and one result. No app lock
+        // is held across network I/O or canvas publication.
+        let cancel = userlib::io::Cancellation::new();
+        let mut shared = shared.lock();
+        if let Some(previous) = shared.active.replace(cancel.clone()) {
+            previous.cancel();
+        }
+        shared.request = Some((self.generation, submission, cancel));
+    }
     fn submit_form(&mut self, shared: &Mutex<Shared>, form: usize, submitter: Option<usize>) {
-        match self.page.forms[form].submit(&self.current, submitter) {
-            Ok(url) => self.navigate(shared, &url),
+        match self.page.forms[form].submission(&self.current, submitter) {
+            Ok(submission) => {
+                self.begin_navigation(shared, submission);
+                self.field_editor.set("");
+                // Do not keep submitted password values in the displayed page
+                // or its reflow copy. The queued request alone owns the body.
+                for fields in [
+                    &mut self.page.forms[form].fields,
+                    &mut self.document.forms[form].fields,
+                ] {
+                    for field in fields {
+                        if field.kind == FieldKind::Password {
+                            field.value.clear();
+                        }
+                    }
+                }
+            }
             Err(_) => self.status = "Unsupported form or search URL too long".into(),
         }
     }
@@ -142,7 +160,7 @@ impl Browser {
                     return;
                 }
                 match data.kind {
-                    FieldKind::Text if !data.readonly => {
+                    kind if kind.is_text() && !data.readonly => {
                         self.field_editor.set(&data.value);
                         self.field_editor.select_all();
                         self.active_field = Some((form, field));
@@ -315,7 +333,7 @@ impl Browser {
                     Rect::new(control.x, y, control.width, control.height),
                     Color::rgb(border),
                 );
-                let fill = if field.kind == FieldKind::Text {
+                let fill = if field.kind.is_text() {
                     0xf7fbff
                 } else {
                     0xe3edf9
@@ -334,11 +352,7 @@ impl Browser {
                 // Keep the complete control visible area inside the page viewport.
                 if y >= 0 && y + control.height as i32 <= view_height as i32 && width > 0 {
                     if let Some(mut input) = viewport.viewport(Rect::new(left, y + 7, width, 12)) {
-                        let label = if field.value.is_empty() {
-                            &field.label
-                        } else {
-                            &field.value
-                        };
+                        let label = field.display_value();
                         if active && self.field_editor.is_selected() {
                             input.clear(Color::rgb(0xc2d8f5));
                         }
@@ -346,7 +360,7 @@ impl Browser {
                             &mut input,
                             0,
                             1,
-                            label,
+                            &label,
                             Color::rgb(if field.disabled { 0x8a8a8a } else { 0x172b43 }),
                             1,
                         );

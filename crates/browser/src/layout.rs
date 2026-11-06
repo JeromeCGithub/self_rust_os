@@ -309,11 +309,11 @@ fn node(
         if data.kind == FieldKind::Hidden {
             return;
         }
-        if data.kind == FieldKind::Text {
+        if data.kind.is_text() {
             flow.flush();
         }
         let available = (flow.right - flow.left).max(0) as u32;
-        let width = if data.kind == FieldKind::Text {
+        let width = if data.kind.is_text() {
             400.min(available)
         } else {
             (data.value.len().max(6) as u32 * 8 + 20).min(available)
@@ -331,7 +331,7 @@ fn node(
         });
         flow.x += width as i32 + 8;
         flow.line = flow.line.max(34);
-        if data.kind == FieldKind::Text {
+        if data.kind.is_text() {
             flow.newline();
         }
         return;

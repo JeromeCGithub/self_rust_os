@@ -3,7 +3,7 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use rustos_browser::{decode_html, resolve, Document, Encoding, Page, MAX_HTML};
+use rustos_browser::{decode_html, resolve, Document, Encoding, Page, Submission, MAX_HTML};
 use userlib::http;
 
 pub struct Loaded {
@@ -20,14 +20,23 @@ fn fetch(
     limit: usize,
     cancel: &userlib::io::Cancellation,
 ) -> Result<(String, Vec<u8>, http::Response), String> {
+    fetch_request(url, http::Request::Get, limit, cancel)
+}
+fn fetch_request(
+    url: &str,
+    request: http::Request<'_>,
+    limit: usize,
+    cancel: &userlib::io::Cancellation,
+) -> Result<(String, Vec<u8>, http::Response), String> {
     let mut bytes = Vec::new();
     let mut effective = String::new();
     let options = http::Options {
         max_body: limit,
         ..http::Options::default()
     };
-    let response = http::get_cancellable(
+    let response = http::request_cancellable(
         url,
+        request,
         options,
         |part| {
             bytes
@@ -43,11 +52,15 @@ fn fetch(
     Ok((effective, bytes, response))
 }
 pub fn load(
-    url: &str,
+    submission: &Submission,
     cancel: &userlib::io::Cancellation,
     fonts: &userlib::ui::font::FontSet,
 ) -> Result<Loaded, String> {
-    let (url, bytes, response) = fetch(url, MAX_HTML, cancel)?;
+    let request = match submission {
+        Submission::Get(_) => http::Request::Get,
+        Submission::Post { body, .. } => http::Request::FormPost(body.as_bytes()),
+    };
+    let (url, bytes, response) = fetch_request(submission.url(), request, MAX_HTML, cancel)?;
     let encoding = match response.charset {
         Some(http::Charset::Utf8) => Some(Encoding::Utf8),
         Some(http::Charset::Windows1252) => Some(Encoding::Windows1252),

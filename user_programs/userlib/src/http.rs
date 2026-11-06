@@ -1,8 +1,8 @@
-//! Streaming HTTP and HTTPS GET requests. URL parsing, DNS and HTTP run in Ring 3.
+//! Streaming HTTP and HTTPS requests. URL parsing, DNS and HTTP run in Ring 3.
 //! The callback receives decoded body bytes; sockets close on success or error.
 //! HTTPS uses the optional TLS feature, verified certificates and platform time/RNG.
 use crate::{net, sys};
-pub use rustos_http::{Charset, Error, Options, Response};
+pub use rustos_http::{Charset, Error, Options, Request, Response};
 
 #[derive(Default)]
 struct Sockets {
@@ -124,6 +124,7 @@ pub fn error_message(error: Error) -> &'static str {
         Error::Entropy => "secure randomness unavailable",
         Error::Clock => "UTC clock unavailable",
         Error::InsecureRedirect => "HTTPS downgrade refused",
+        Error::CrossOriginRedirect => "POST redirect to another origin refused",
         Error::InvalidUrl => "invalid HTTP or HTTPS URL",
         Error::Dns => "DNS lookup failed",
         Error::Timeout => "request timed out",
@@ -172,9 +173,41 @@ pub fn get_cancellable(
     effective: impl FnMut(&str),
     cancel: crate::io::Cancellation,
 ) -> Result<Response, Error> {
+    request_cancellable(url, Request::Get, options, body, effective, cancel)
+}
+
+/// GET or bounded form POST with the same certificate, cancellation and cleanup
+/// policy as GET. Body data remains borrowed only for this synchronous call.
+#[cfg(feature = "alloc")]
+pub fn request_cancellable(
+    url: &str,
+    request: Request<'_>,
+    options: Options,
+    body: impl FnMut(&[u8]) -> Result<(), Error>,
+    effective: impl FnMut(&str),
+    cancel: crate::io::Cancellation,
+) -> Result<Response, Error> {
     let mut sockets = Sockets {
         cancel: Some(cancel),
         ..Sockets::default()
     };
-    rustos_http::get_with_url(&mut sockets, url, options, body, effective)
+    rustos_http::request_with_url(&mut sockets, url, request, options, body, effective)
+}
+
+/// Borrowed GET/form POST for clients that do not need an allocated cancel token.
+pub fn request_with_url(
+    url: &str,
+    request: Request<'_>,
+    options: Options,
+    body: impl FnMut(&[u8]) -> Result<(), Error>,
+    effective: impl FnMut(&str),
+) -> Result<Response, Error> {
+    rustos_http::request_with_url(
+        &mut Sockets::default(),
+        url,
+        request,
+        options,
+        body,
+        effective,
+    )
 }
