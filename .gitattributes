@@ -1,3 +1,8 @@
 
 # P6 stores raw RGB bytes; never normalize or review it as prose.
 user_programs/de/wallpaper.ppm binary
+
+# Preserve hash-pinned upstream bytes, including its existing end-of-line spaces.
+# Local engine adapters keep the repository's normal whitespace checks.
+third_party/quickjs/upstream/* linguist-vendored whitespace=-blank-at-eol
+third_party/quickjs/nanoprintf.h linguist-vendored
