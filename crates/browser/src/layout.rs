@@ -267,6 +267,9 @@ fn node(
             text(page, flow, alt, &style, link);
         }
     }
+    if !n.text.is_empty() {
+        text(page, flow, &n.text, &style, link);
+    }
     for &child in &n.children {
         node(doc, child, &style, link, flow, page);
     }

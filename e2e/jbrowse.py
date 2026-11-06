@@ -39,6 +39,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             '/dir/theme.css': b'body { background-color: #f5f0df; } #banner {background-color:#2468ac; padding:12px} a {color:white}',
             '/dir/next.html': b"<title>Second page</title><style>body {background:#d4edda}</style><h1>Navigation works</h1>",
             '/big': b'x' * 262145,
+            '/script': b"<title>Before script</title><p id='result'>Waiting</p><script>const n=6*7; document.getElementById('result').textContent='Answer: '+n; document.getElementById('result').style.color='#123456'; document.body.style.backgroundColor='#e8dcff'; document.title='Script ready';</script>",
+            '/bad-script': b"<title>Unsupported script</title><style>body {background:#fce8e6}</style><script>while(true) {}</script><p>Still readable</p>",
         }
         body = pages.get(self.path, b'<h1>Missing page</h1>')
         self.send_response(200 if self.path in pages else 404)
@@ -146,6 +148,16 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         navigate('/big');wait('[jbrowse] error: response or URL exceeds limits')
         navigate('/dir/next.html');wait('[jbrowse] loaded: Second page')
         pixel((ox+500,oy+200),(212,237,218),'recovered')
+        if os.environ.get('RUSTOS_JBROWSE_SCRIPTS') == '1':
+            navigate('/script');wait('[jbrowse] loaded: Script ready')
+            image=pixel((ox+500,oy+200),(232,220,255),'scripted-page')
+            colors=image.crop((ox,oy+64,ox+320,oy+150)).getcolors(320*86)
+            assert any(color==(18,52,86) and count>20 for count,color in colors), 'scripted text color absent'
+            navigate('/bad-script');wait('[jbrowse] loaded: Unsupported script')
+            pixel((ox+500,oy+200),(252,232,230),'unsupported-script')
+            # The bounded interpreter must reject loops and return to navigation.
+            navigate('/dir/next.html');wait('[jbrowse] loaded: Second page')
+            pixel((ox+500,oy+200),(212,237,218),'script-recovery')
         if os.environ.get('RUSTOS_JBROWSE_PUBLIC') == '1':
             click(ox+120,oy+42)
             type_text('http://info.cern.ch/hypertext/WWW/TheProject.html')

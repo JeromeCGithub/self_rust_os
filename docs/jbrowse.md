@@ -81,8 +81,9 @@ and connection deadlines and verified TLS; HTTPS downgrades are refused by the
 transport. Network failure leaves the previous page readable and shows an error.
 
 There is no image decoding, forms, cookies, storage, downloads, tabs/history,
-flex/grid, responsive media queries, browser-compatible font metrics, or JavaScript
-in this branch. Only HTTP(S) navigation is accepted; file/data/javascript links
+flex/grid, responsive media queries, or browser-compatible font metrics.
+The [inline scripting prototype](jbrowse-javascript.md) adds a bounded JavaScript
+subset; it does not support modern JavaScript applications. Only HTTP(S) navigation is accepted; file/data/javascript links
 are rejected. HTTPS capability does not imply support for arbitrary modern sites.
 UTF-8 is required; legacy character encodings are rejected. Allocation failure
 can still terminate the application through the SDK allocator. This is an early

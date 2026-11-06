@@ -11,6 +11,7 @@ pub struct Loaded {
     pub title: String,
     pub page: Page,
     pub status: u16,
+    pub script_errors: usize,
 }
 fn fetch(url: &str, limit: usize) -> Result<(String, Vec<u8>, u16), String> {
     let mut bytes = Vec::new();
@@ -49,6 +50,11 @@ pub fn load(url: &str) -> Result<Loaded, String> {
             }
         }
     }
+    let scripts = doc.run_scripts();
+    let script_errors = scripts.failures.len();
+    if script_errors > 0 {
+        userlib::println!("[jbrowse] script errors: {}", script_errors);
+    }
     let title = if doc.title.is_empty() {
         url.clone()
     } else {
@@ -59,5 +65,6 @@ pub fn load(url: &str) -> Result<Loaded, String> {
         title,
         page: doc.layout(640),
         status,
+        script_errors,
     })
 }

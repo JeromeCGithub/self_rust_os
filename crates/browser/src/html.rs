@@ -191,6 +191,10 @@ pub(crate) fn parse(source: &str) -> Result<Document, Error> {
                     let marker = alloc::format!("</{tag}");
                     let end = lower.find(&marker).unwrap_or(rest.len());
                     let raw = &rest[..end];
+                    #[cfg(feature = "javascript")]
+                    if tag == "script" {
+                        doc.nodes[id].text = raw.to_string();
+                    }
                     if tag == "style" {
                         doc.add_css(raw)?;
                     }

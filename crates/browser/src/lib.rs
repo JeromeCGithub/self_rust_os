@@ -69,3 +69,8 @@ impl Document {
         layout::layout(self, width)
     }
 }
+
+#[cfg(feature = "javascript")]
+mod script;
+#[cfg(feature = "javascript")]
+pub use script::{ScriptError, ScriptReport};

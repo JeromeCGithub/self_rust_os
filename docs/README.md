@@ -25,6 +25,7 @@ current behavior; architecture targets are not evidence of implemented features.
 | [Network performance](network-performance.md) | TCP window optimization, DMA, measurements and future event delivery |
 | [Networking validation](networking-validation.md) | Red/green evidence, packet captures and remaining limits |
 | [Ethernet networking plan](networking-plan.md) | Delivered ping/client sockets and roadmap toward DNS, HTTP and TLS |
+| [jbrowse scripting prototype](jbrowse-javascript.md) | Bounded inline JavaScript subset, typed DOM capabilities, engine research and limits |
 | [jbrowse browser](jbrowse.md) | Native Ring 3 HTML/CSS browser, supported subset, limits and real-site testing |
 | [Window and UI toolkit](ui.md) | Native window API, canvas/widgets, glass materials and protocol |
 | [Expanded native capabilities](capabilities-validation.md) | Growable heap, larger images, offset writes, VFAT, environment and FP/compiler TLS evidence |

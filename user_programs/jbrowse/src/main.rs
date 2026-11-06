@@ -257,6 +257,11 @@ fn main(_argc: usize, argv: &[&str]) {
                                 ""
                             }
                         );
+                        if loaded.script_errors > 0 {
+                            browser
+                                .status
+                                .push_str(&format!(" | {} script errors", loaded.script_errors));
+                        }
                         println!("[jbrowse] loaded: {}", browser.title);
                     }
                     Err(message) => {

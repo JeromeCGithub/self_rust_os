@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><title>Before script</title>
+<style>
+body { background-color: white; color: #243247; padding: 12px; }
+h1 { color: #563d83; }
+</style></head><body>
+<h1>jbrowse scripting</h1>
+<p id="result">Waiting for JavaScript...</p>
+<p>This page uses the supported inline prototype.</p>
+<script>
+const answer = 6 * 7;
+document.getElementById('result').textContent = 'Answer: ' + answer;
+document.getElementById('result').style.color = '#123456';
+document.body.style.backgroundColor = '#e8dcff';
+document.title = 'jbrowse JavaScript';
+</script>
+</body></html>
