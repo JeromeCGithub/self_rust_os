@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""Real Ring 3 browser: local HTTP fixture, QMP input and framebuffer assertions."""
+import sys
+from pathlib import Path
+sys.path = [p for p in sys.path if Path(p or ".").resolve() != Path(__file__).resolve().parent]
+import http.server
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from PIL import Image
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT / 'tools'))
+from qemu_test import launchers, connect, copy_disk, disk_image
+from qemu_network import arguments as network_arguments
+from qemu_platform import arguments as platform_arguments
+
+if os.environ.get('RUSTOS_JBROWSE_REQUIRE_GOOGLE_RESULTS') == '1':
+    os.environ['RUSTOS_JBROWSE_GOOGLE']='1'
+
+requests = []
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+    def do_GET(self):
+        requests.append(self.path)
+        if self.path == '/start':
+            self.send_response(302)
+            self.send_header('Location', '/dir/index.html')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
+        pages = {
+            '/dir/index.html': b"<title>Browser fixture</title><link rel='stylesheet' href='theme.css'><div id='banner'><a href='next.html'>Follow link</a></div><p>HTML &amp; CSS from a real socket</p>" + b'<p>Scroll content</p>' * 40,
+            '/dir/theme.css': b'body { background-color: #f5f0df; } #banner {background-color:#2468ac; padding:12px} a {color:white}',
+            '/dir/next.html': b"<title>Second page</title><style>body {background:#d4edda}</style><h1>Navigation works</h1>",
+            '/big': b'x' * 262145,
+            '/form': b"<title>Search fixture</title><form action='/find'><input type=hidden name=hl value=en><input name=q title='Search'><input type=submit name=btnG value=Search></form>",
+            '/script': b"<title>Before script</title><p id='result'>Waiting</p><script>const n=6*7; document.getElementById('result').textContent='Answer: '+n; document.getElementById('result').style.color='#123456'; document.body.style.backgroundColor='#e8dcff'; document.title='Script ready';</script>",
+            '/blank-script': b"<title>Blank script</title><script>while(true) {}</script>",
+            '/bad-script': b"<title>Unsupported script</title><style>body {background:#fce8e6}</style><script>while(true) {}</script><p>Still readable</p>",
+        }
+        if self.path.startswith('/find?'):
+            from urllib.parse import parse_qs,urlsplit
+            query=parse_qs(urlsplit(self.path).query).get('q',[''])[0]
+            pages[self.path]=("<title>Search results</title><style>body {background:#ddf3ff}</style><h1>Search results</h1><p>"+query+"</p><a href='/dir/next.html'>A matching result</a>").encode()
+        body = pages.get(self.path, b'<h1>Missing page</h1>')
+        self.send_response(200 if self.path in pages else 404)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+out = ROOT / 'target/jbrowse-e2e'
+out.mkdir(parents=True, exist_ok=True)
+server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
+    tmp = Path(tmp)
+    disk = copy_disk(disk_image(ROOT), tmp)
+    terminal_x = launchers(disk)['PORTAL']
+    serial = out / 'serial.log'
+    qemu = subprocess.Popen(['qemu-system-x86_64', '-drive', f'format=raw,file={disk}', '-machine', 'pc,i8042=on,vmport=on', '-vga','std','-serial',f'file:{serial}','-display','none','-no-reboot','-qmp',f'unix:{tmp}/qmp,server,nowait'] + platform_arguments() + network_arguments())
+    try:
+        qmp = connect(tmp/'qmp', time.monotonic()+60, qemu)
+        stream = qmp.makefile('rwb')
+        stream.readline()
+        def command(execute, arguments=None):
+            request = {'execute': execute}
+            if arguments is not None:
+                request['arguments'] = arguments
+            stream.write(json.dumps(request).encode()+b'\n')
+            stream.flush()
+            while True:
+                response = json.loads(stream.readline())
+                assert 'error' not in response, response
+                if 'return' in response:
+                    return response['return']
+        command('qmp_capabilities')
+        def hmp(text):
+            return command('human-monitor-command', {'command-line':text})
+        def output():
+            raw = serial.read_text(errors='replace')
+            return raw + ''.join(re.findall(r'\[kernel\] sys_write: "(.*?)"\n', raw, re.S))
+        last_navigation=0
+        def wait(value, after=None):
+            if after is None: after=last_navigation
+            deadline = time.monotonic()+45
+            while value not in output()[after:]:
+                assert qemu.poll() is None, 'QEMU exited'
+                assert time.monotonic()<deadline, f'missing {value}\n{output()[-5000:]}'
+                time.sleep(.1)
+        def move(x,y):
+            command('input-send-event', {'events':[
+                {'type':'abs','data':{'axis':'x','value':(x*32767+1918)//1919}},
+                {'type':'abs','data':{'axis':'y','value':(y*32767+1078)//1079}}]})
+            time.sleep(.12)
+        def click(x,y):
+            move(x,y)
+            hmp('mouse_button 1');time.sleep(.12)
+            hmp('mouse_button 0');time.sleep(.12)
+        def key(code):
+            hmp('sendkey '+code);time.sleep(.08)
+        def type_text(text):
+            keys={' ':'spc','/':'slash',':':'shift-semicolon','.':'dot','-':'minus','?':'shift-slash','=':'equal'}
+            for c in text:
+                key(keys.get(c, ('shift-'+c.lower()) if c.isupper() else c))
+        def shot(name):
+            command('screendump', {'filename':str(tmp/'frame.ppm')})
+            image = Image.open(tmp/'frame.ppm').convert('RGB')
+            image.save(out/(name+'.png'))
+            return image
+        def pixel(point, color, name):
+            deadline=time.monotonic()+20
+            while True:
+                image=shot(name)
+                if image.getpixel(point)==color:
+                    return image
+                assert time.monotonic()<deadline, f'{point}: {image.getpixel(point)} != {color}'
+                time.sleep(.2)
+        wait('[desktop] ready:')
+        click(terminal_x,65)
+        wait('[portal] shell pid=')
+        type_text('./jbrowse' if os.environ.get('RUSTOS_JBROWSE_GOOGLE') == '1' else f'./jbrowse http://10.0.2.2:{server.server_port}/start')
+        key('ret')
+        wait('[jbrowse] ready')
+        # Second native window: x=92, titlebar y=128, content y=156.
+        ox,oy=92,156
+        if os.environ.get('RUSTOS_JBROWSE_GOOGLE') == '1':
+            wait('[jbrowse] loaded: Google')
+            # Wait for the actual native input rectangle, excluding the loading
+            # placeholder and chrome. The published screenshot must show Google.
+            deadline=time.monotonic()+20
+            entry=None
+            while entry is None:
+                image=shot('google-home')
+                for y in range(oy+65,oy+346):
+                    for x in range(ox+1,ox+239):
+                        if image.getpixel((x,y))==(247,251,255) and image.getpixel((x+180,y))==(247,251,255):
+                            entry=(x+20,y+8);break
+                    if entry is not None:break
+                assert time.monotonic()<deadline,'Google homepage has no rendered search input'
+            click(*entry);type_text('rust operating system')
+            mark=len(output());key('ret')
+            wait('[jbrowse] loaded:',mark)
+            # The current public endpoint may return a JavaScript gate. Capture
+            # the response as evidence; this does not assert usable search results.
+            deadline=time.monotonic()+20
+            while True:
+                image=shot('google-search-response')
+                colors=image.crop((ox,oy+64,ox+640,oy+372)).getcolors(640*308)
+                if not any(color==(247,251,255) and count>100 for count,color in colors):break
+                assert time.monotonic()<deadline,'Google search response did not replace homepage'
+                time.sleep(.1)
+            if os.environ.get('RUSTOS_JBROWSE_REQUIRE_GOOGLE_RESULTS') == '1':
+                assert '[jbrowse] unsupported script page' not in output()[mark:], 'Google results remain blocked by unsupported JavaScript'
+        def navigate(path):
+            global last_navigation
+            last_navigation=len(output())
+            click(ox+120,oy+42)
+            type_text(f'http://10.0.2.2:{server.server_port}{path}')
+            key('ret')
+        navigate('/start')
+        wait('[jbrowse] loaded: Browser fixture')
+        assert '/dir/theme.css' in requests, requests
+        pixel((ox+500,oy+200),(245,240,223),'html-css')
+        pixel((ox+12,oy+76),(36,104,172),'html-css')
+        # Release inside an anchor navigates relative to the redirect target.
+        click(ox+40,oy+90)
+        wait('[jbrowse] loaded: Second page')
+        assert '/dir/next.html' in requests, requests
+        pixel((ox+500,oy+200),(212,237,218),'linked-page')
+        navigate('/start');wait('[jbrowse] loaded: Browser fixture', after=0)
+        pixel((ox+12,oy+76),(36,104,172),'before-scroll')
+        click(ox+606,oy+386)
+        pixel((ox+12,oy+76),(245,240,223),'scrolled')
+        # Invalid schemes and oversized downloads recover without terminating.
+        click(ox+120,oy+42);type_text('file:///etc/passwd');key('ret')
+        wait('[jbrowse] error: invalid address')
+        navigate('/big');wait('[jbrowse] error: response or URL exceeds limits')
+        navigate('/dir/next.html');wait('[jbrowse] loaded: Second page')
+        pixel((ox+500,oy+200),(212,237,218),'recovered')
+        navigate('/form');wait('[jbrowse] loaded: Search fixture')
+        # Entry x=8,y=8 in document coordinates; submit is on the next row.
+        click(ox+100,oy+84);type_text('rust os');key('ret')
+        wait('[jbrowse] loaded: Search results')
+        assert '/find?hl=en&q=rust+os' in requests,requests
+        pixel((ox+500,oy+200),(221,243,255),'form-search')
+        navigate('/form');wait('[jbrowse] loaded: Search fixture')
+        click(ox+100,oy+84);type_text('browser');click(ox+40,oy+118)
+        wait('[jbrowse] loaded: Search results')
+        assert '/find?hl=en&q=browser&btnG=Search' in requests,requests
+        pixel((ox+500,oy+200),(221,243,255),'form-button')
+        if os.environ.get('RUSTOS_JBROWSE_SCRIPTS') == '1':
+            navigate('/script');wait('[jbrowse] loaded: Script ready')
+            image=pixel((ox+500,oy+200),(232,220,255),'scripted-page')
+            colors=image.crop((ox,oy+64,ox+320,oy+150)).getcolors(320*86)
+            assert any(color==(18,52,86) and count>20 for count,color in colors), 'scripted text color absent'
+            navigate('/bad-script');wait('[jbrowse] loaded: Unsupported script')
+            pixel((ox+500,oy+200),(252,232,230),'unsupported-script')
+            navigate('/blank-script');wait('[jbrowse] loaded: Blank script')
+            image=pixel((ox+500,oy+200),(255,255,255),'script-fallback')
+            colors=image.crop((ox,oy+64,ox+640,oy+200)).getcolors(640*136)
+            assert sum(count for count,color in colors if color==(32,33,36))>100,'unsupported-script fallback is blank'
+            # The bounded interpreter must reject loops and return to navigation.
+            navigate('/dir/next.html');wait('[jbrowse] loaded: Second page')
+            pixel((ox+500,oy+200),(212,237,218),'script-recovery')
+        if os.environ.get('RUSTOS_JBROWSE_PUBLIC') == '1':
+            click(ox+120,oy+42)
+            type_text('http://info.cern.ch/hypertext/WWW/TheProject.html')
+            key('ret')
+            wait('[jbrowse] loaded: The World Wide Web project')
+            image=pixel((ox+500,oy+200),(255,255,255),'cern-public')
+            # Real page text occupies the document area; toolbar is excluded.
+            colors=image.crop((ox,oy+64,ox+640,oy+200)).getcolors(640*136)
+            assert sum(count for count,color in colors if color != (255,255,255)) > 100, 'public page has no rendered text'
+        # Close, return to the independently running terminal, then relaunch.
+        click(ox+622,128+14)
+        time.sleep(.5)
+        click(100,180)
+        type_text('echo browser-closed');key('ret')
+        wait('[portal] output: browser-closed')
+        mark=len(output());type_text('./jbrowse');key('ret');wait('[jbrowse] ready',mark)
+        click(ox+622,128+14)
+        print('PASS: HTML/CSS pixels, links, editable GET forms, Enter/button search submission, scrolling, failure recovery, terminal survival and relaunch')
+        (out/'requests.json').write_text(json.dumps(requests,indent=2))
+    finally:
+        qemu.terminate()
+        try:
+            qemu.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            qemu.kill();qemu.wait()
+        server.shutdown();server.server_close()

@@ -2,7 +2,7 @@
 //! The callback receives decoded body bytes; sockets close on success or error.
 //! HTTPS uses the optional TLS feature, verified certificates and platform time/RNG.
 use crate::{net, sys};
-pub use rustos_http::{Error, Options, Response};
+pub use rustos_http::{Charset, Error, Options, Response};
 
 #[derive(Default)]
 struct Sockets {
@@ -130,4 +130,15 @@ fn tls_error(error: crate::tls::Error) -> Error {
         crate::tls::Error::TooLarge | crate::tls::Error::Memory => Error::TooLarge,
         _ => Error::Tls,
     }
+}
+
+/// GET with an observer for the final URL (including followed redirects).
+/// The observer runs on success after the request socket has been closed.
+pub fn get_with_url(
+    url: &str,
+    options: Options,
+    body: impl FnMut(&[u8]) -> Result<(), Error>,
+    effective: impl FnMut(&str),
+) -> Result<Response, Error> {
+    rustos_http::get_with_url(&mut Sockets::default(), url, options, body, effective)
 }

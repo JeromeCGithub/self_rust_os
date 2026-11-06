@@ -18,7 +18,7 @@ sys.dont_write_bytecode=True
 sys.path.insert(0,str(ROOT/'tools'))
 from qemu_network import arguments as network_arguments
 from qemu_platform import arguments as platform_arguments
-from qemu_test import disk_image
+from qemu_test import launchers, disk_image
 
 
 def trace(path):
@@ -154,11 +154,11 @@ def main():
                 def click(x):
                     call('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':x*32767//1919}},{'type':'abs','data':{'axis':'y','value':65*32767//1079}}]});time.sleep(.2)
                     for down in (True,False):call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.2)
-                call('qmp_capabilities');wait('[desktop] ready: 8 applications',30);click(650);wait('[netperf] PASS')
+                call('qmp_capabilities');wait('[desktop] ready: ',30);click(launchers(disk)['ZNETTEST']);wait('[netperf] PASS')
                 flat=text();rounds=[{'bytes':int(n),'ticks':int(t),'sum':int(c)} for n,t,c in re.findall(r'\[netperf\] round=\d+ bytes=(\d+) ticks=(\d+) sum=(\d+)',flat)]
                 assert len(rounds)==2,flat[-3000:]
                 if args.site:
-                    click(350);wait('self_rust_os forge v1.0',30)
+                    click(launchers(disk)['PORTAL']);wait('self_rust_os forge v1.0',30)
                     command='curl '+args.site
                     for char in command:
                         key={' ':'spc','/':'slash',':':'shift-semicolon','.':'dot','-':'minus'}.get(char,char)

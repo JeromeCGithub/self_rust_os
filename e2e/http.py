@@ -18,7 +18,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / 'tools'))
 from qemu_network import arguments as network_arguments
 from qemu_platform import arguments as platform_arguments
-from qemu_test import disk_image
+from qemu_test import launchers, disk_image
 
 
 def main():
@@ -145,9 +145,9 @@ def main():
                         key = {' ':'spc', '.':'dot', '/':'slash', ':':'shift-semicolon', '-':'minus', '\n':'ret'}.get(char,char)
                         call('human-monitor-command', {'command-line':'sendkey '+key});time.sleep(.075)
                 call('qmp_capabilities')
-                wait('[desktop] ready: 8 applications')
-                # Before CURL is installed, Portal is third; afterwards fourth.
-                click(350 if (ROOT/'user_programs/curl/curl.bin').exists() else 250)
+                wait('[desktop] ready: ')
+                # Resolve the installed launcher rather than assuming an app count.
+                click(launchers(disk)['PORTAL'])
                 wait('self_rust_os forge v1.0')
                 mark=log.stat().st_size
                 type_line(f'curl http://10.0.2.2:{port}/chunked')
@@ -166,7 +166,7 @@ def main():
                 mark=log.stat().st_size
                 type_line(f'http://10.0.2.2:{port}/redirect')
                 wait('curl: HTTP 200, 15 bytes',mark)
-                click(650)
+                click(launchers(disk)['ZNETTEST'])
                 wait('[httptest] PASS: DNS HTTP framing redirects errors streaming cleanup')
                 if args.site:
                     # Focus Portal's exposed content before typing another command.

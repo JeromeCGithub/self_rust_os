@@ -1,4 +1,5 @@
 // A complete glass application using only the public Ring 3 UI toolkit.
+extern crate alloc;
 
 use userlib::{
     println, rsx, sys,
@@ -13,7 +14,9 @@ fn main(argc: usize, argv: &[&str]) {
     if argc > 1 {
         println!("[hello] argc={}", argc);
         for (index, argument) in argv.iter().enumerate() {
-            println!("[hello] argv[{}]={}", index, argument);
+            // Keep each diagnostic record in one syscall so concurrent Portal
+            // output cannot split the argument label from its observable value.
+            sys::console_write(alloc::format!("[hello] argv[{}]={}\n", index, argument).as_bytes());
         }
     }
     assert!(matches!(

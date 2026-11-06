@@ -66,3 +66,11 @@ class DeferredFixtureTests(unittest.TestCase):
         deferred.observe('guest: transport ready')
         deferred.observe('guest: transport ready\ncomplete')
         self.assertEqual([w.count for w in workers],[1,1])
+
+
+class LauncherDiscovery(unittest.TestCase):
+    def test_follows_fat_order_filters_system_apps_and_handles_new_browser(self):
+        listing=b"::/BIN/WM.BIN\n::/BIN/CURL.BIN\n::/BIN/DE.BIN\n::/BIN/FORGE.BIN\n::/BIN/HELLO.BIN\n::/BIN/JBROWSE.BIN\n::/BIN/PORTAL.BIN\n::/BIN/README.TXT\n::/BIN/SNAKE.BIN\n"
+        with patch('subprocess.check_output',return_value=listing) as command:
+            self.assertEqual(monitor.launchers('/tmp/private.img'),{'CURL':50,'FORGE':150,'HELLO':250,'JBROWSE':350,'PORTAL':450,'SNAKE':550})
+        command.assert_called_once_with(['mdir','-b','-i','/tmp/private.img@@1048576','::/BIN'])
