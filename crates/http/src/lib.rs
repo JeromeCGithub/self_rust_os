@@ -13,6 +13,8 @@ pub enum Error {
     Entropy,
     Clock,
     InsecureRedirect,
+    /// A method-preserving redirect would forward a POST body to another origin.
+    CrossOriginRedirect,
     Truncated,
     TooLarge,
     Dns,
@@ -52,7 +54,7 @@ pub trait Transport {
     }
 }
 #[derive(Debug, Clone, Copy)]
-/// Resolver, deadline and resource policy for a GET request.
+/// Resolver, deadline and resource policy for an HTTP request.
 pub struct Options {
     /// Recursive IPv4 DNS server (QEMU defaults to 10.0.2.3).
     pub dns_server: [u8; 4],
@@ -95,6 +97,18 @@ pub struct Response {
     pub bytes: usize,
 }
 
+/// Bounded request body owned by the caller for the duration of the exchange.
+/// Form POST fixes the content type; arbitrary header injection is not exposed.
+#[derive(Clone, Copy)]
+pub enum Request<'a> {
+    Get,
+    FormPost(&'a [u8]),
+}
+enum Outcome {
+    Response(Response),
+    Redirect(u16),
+}
+
 mod dns;
 pub mod limits;
 mod url;
@@ -119,6 +133,20 @@ pub fn get_with_url(
     t: &mut impl Transport,
     url: &str,
     options: Options,
+    body: impl FnMut(&[u8]) -> Result<(), Error>,
+    effective: impl FnMut(&str),
+) -> Result<Response, Error> {
+    request_with_url(t, url, Request::Get, options, body, effective)
+}
+
+/// GET or form POST with final-URL observation, bounded short-write progress,
+/// cancellation and socket cleanup. 301/302/303 turn POST into GET; 307/308
+/// replay a body only to the same origin. HTTPS downgrades are always rejected.
+pub fn request_with_url(
+    t: &mut impl Transport,
+    url: &str,
+    mut request: Request<'_>,
+    options: Options,
     mut body: impl FnMut(&[u8]) -> Result<(), Error>,
     mut effective: impl FnMut(&str),
 ) -> Result<Response, Error> {
@@ -128,6 +156,9 @@ pub fn get_with_url(
     if t.cancelled() {
         return Err(Error::Cancelled);
     }
+    if matches!(request,Request::FormPost(data) if data.len()>limits::REQUEST_BODY) {
+        return Err(Error::TooLarge);
+    }
     let mut url = url::Url::parse(url)?;
     for redirect in 0..=options.redirects {
         if t.cancelled() {
@@ -136,23 +167,45 @@ pub fn get_with_url(
         let ip = dns::resolve(t, url.host.as_str(), options)?;
         let handle = t.open(Kind::Tcp).map_err(Error::Socket)?;
         let mut location = url::Text::<{ limits::TARGET }>::new();
-        let outcome = exchange(t, handle, ip, &url, options, &mut location, &mut body)
-            .map_err(|error| t.transport_error().unwrap_or(error));
+        let outcome = exchange(
+            t,
+            handle,
+            ip,
+            &url,
+            request,
+            options,
+            &mut location,
+            &mut body,
+        )
+        .map_err(|error| t.transport_error().unwrap_or(error));
         t.close(handle);
-        if let Some(response) = outcome? {
-            let mut final_url = url::Text::<{ limits::REQUEST }>::new();
-            final_url.push(if url.tls { "https://" } else { "http://" })?;
-            url.authority(&mut final_url)?;
-            final_url.push(url.target.as_str())?;
-            effective(final_url.as_str());
-            return Ok(response);
-        }
+        let status = match outcome? {
+            Outcome::Response(response) => {
+                let mut final_url = url::Text::<{ limits::REQUEST }>::new();
+                final_url.push(if url.tls { "https://" } else { "http://" })?;
+                url.authority(&mut final_url)?;
+                final_url.push(url.target.as_str())?;
+                effective(final_url.as_str());
+                return Ok(response);
+            }
+            Outcome::Redirect(status) => status,
+        };
         if redirect == options.redirects {
             return Err(Error::RedirectLimit);
         }
         let next = url.redirect(location.as_str())?;
         if url.tls && !next.tls {
             return Err(Error::InsecureRedirect);
+        }
+        if matches!(request, Request::FormPost(_)) {
+            if [301, 302, 303].contains(&status) {
+                request = Request::Get;
+            } else if url.tls != next.tls
+                || url.port != next.port
+                || !url.host.as_str().eq_ignore_ascii_case(next.host.as_str())
+            {
+                return Err(Error::CrossOriginRedirect);
+            }
         }
         url = next;
     }
@@ -167,10 +220,11 @@ fn exchange(
     handle: u64,
     ip: [u8; 4],
     url: &url::Url,
+    request: Request<'_>,
     options: Options,
     location: &mut url::Text<{ limits::TARGET }>,
     body: &mut impl FnMut(&[u8]) -> Result<(), Error>,
-) -> Result<Option<Response>, Error> {
+) -> Result<Outcome, Error> {
     use rustos_net_abi::{CONNECTED, EOF};
     let start = t.ticks();
     t.connect(handle, ip, url.port).map_err(Error::Socket)?;
@@ -199,14 +253,14 @@ fn exchange(
         }
         t.start_tls(handle, url.host.as_str(), remaining, options.tls_ca_file)?;
     }
-    send_request(t, handle, url, start, options)?;
+    send_request(t, handle, url, request, start, options)?;
     let mut reader = wire::Reader::new(t, handle, start, options);
     let head = wire::headers(&mut reader, location)?;
     if [301, 302, 303, 307, 308].contains(&head.status) && !location.as_str().is_empty() {
-        return Ok(None);
+        return Ok(Outcome::Redirect(head.status));
     }
     let bytes = wire::body(&mut reader, &head, body)?;
-    Ok(Some(Response {
+    Ok(Outcome::Response(Response {
         status: head.status,
         charset: head.charset,
         bytes,
@@ -218,30 +272,49 @@ fn send_request(
     t: &mut impl Transport,
     handle: u64,
     url: &url::Url,
+    method: Request<'_>,
     start: u64,
     options: Options,
 ) -> Result<(), Error> {
+    use core::fmt::Write;
     let mut request = url::Text::<{ limits::REQUEST }>::new();
-    request.push("GET ")?;
+    request.push(match method {
+        Request::Get => "GET ",
+        Request::FormPost(_) => "POST ",
+    })?;
     request.push(url.target.as_str())?;
     request.push(" HTTP/1.1\r\nHost: ")?;
     url.authority(&mut request)?;
-    request.push("\r\nUser-Agent: RustOS-curl/1\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n")?;
-    let bytes = request.as_str().as_bytes();
-    let mut sent = 0;
-    while sent < bytes.len() {
-        if t.cancelled() {
-            return Err(Error::Cancelled);
+    request.push("\r\nUser-Agent: RustOS-curl/1\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n")?;
+    let data = match method {
+        Request::Get => &[][..],
+        Request::FormPost(data) => {
+            write!(
+                &mut request,
+                "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n",
+                data.len()
+            )
+            .map_err(|_| Error::TooLarge)?;
+            data
         }
-        if t.ticks().wrapping_sub(start) >= options.timeout_ticks {
-            return Err(Error::Timeout);
-        }
-        let chunk = &bytes[sent..bytes.len().min(sent + 1024)];
-        match t.send(handle, chunk) {
-            Ok(n) if n > 0 && n <= chunk.len() => sent += n,
-            Ok(0) | Err(SocketError::WouldBlock) => t.sleep(),
-            Err(e) => return Err(Error::Socket(e)),
-            _ => return Err(Error::Protocol),
+    };
+    request.push("\r\n")?;
+    for bytes in [request.as_str().as_bytes(), data] {
+        let mut sent = 0;
+        while sent < bytes.len() {
+            if t.cancelled() {
+                return Err(Error::Cancelled);
+            }
+            if t.ticks().wrapping_sub(start) >= options.timeout_ticks {
+                return Err(Error::Timeout);
+            }
+            let chunk = &bytes[sent..bytes.len().min(sent + 1024)];
+            match t.send(handle, chunk) {
+                Ok(n) if n > 0 && n <= chunk.len() => sent += n,
+                Ok(0) | Err(SocketError::WouldBlock) => t.sleep(),
+                Err(e) => return Err(Error::Socket(e)),
+                _ => return Err(Error::Protocol),
+            }
         }
     }
     Ok(())

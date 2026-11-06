@@ -40,8 +40,18 @@ def main():
          if not chunk:break
          request+=chunk;assert len(request)<32768
         if not request:continue
-        received.append((kind,request));assert kind in ('valid','rsa'), 'rejected certificate received application data'
         path=request.split(b' ')[1]
+        header,body=request.split(b'\r\n\r\n',1)
+        if path==b'/post':
+         assert header.startswith(b'POST /post HTTP/1.1\r\n')
+         assert b'\r\nContent-Type: application/x-www-form-urlencoded\r\n' in header+b'\r\n'
+         length=int(next(line.split(b':',1)[1] for line in header.split(b'\r\n')[1:] if line.lower().startswith(b'content-length:')))
+         assert length==28
+         while len(body)<length:
+          chunk=stream.recv(length-len(body));assert chunk;body+=chunk
+         assert body==b'user=guest&password=testpass'
+         request=header+b'\r\n\r\n'+body
+        received.append((kind,request));assert kind in ('valid','rsa'), 'rejected certificate received application data'
         if path==b'/large':data=b'HTTP/1.1 200 OK\r\nContent-Length: 65536\r\n\r\n'+b'x'*65536
         elif path==b'/expanded':data=b'HTTP/1.1 200 OK\r\nContent-Length: 17825792\r\n\r\n'+b'x'*17825792
         elif path==b'/headers':data=b'HTTP/1.1 200 OK\r\nContent-Security-Policy: '+b'a'*20000+b'\r\n'+(b'X-Padding: '+b'b'*800+b'\r\n')*200+b'Content-Length: 14\r\n\r\ntls-fixture-ok'
@@ -120,7 +130,9 @@ def main():
     time.sleep(.5)
     call('screendump',{'filename':str(out/'terminal.ppm')})
     assert not errors,errors
-    if not args.no_rng and not args.bad_clock:assert len(received)>=10,received
+    if not args.no_rng and not args.bad_clock:
+     assert len(received)>=10,received
+     assert sum(request.startswith(b'POST /post ') for _,request in received)==2, 'verified TLS POST requests missing'
     else:assert not received,'missing entropy/time must never send HTTP plaintext'
     print('PASS: '+expected,flush=True)
    finally:
