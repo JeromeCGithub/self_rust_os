@@ -1,0 +1,32 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+   Compiling rustos-browser-dom v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser-dom)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running unittests src/lib.rs (/home/jay/personal/os/jbrowse/crates/browser-dom/target/x86_64-unknown-linux-gnu/debug/deps/rustos_browser_dom-f36ea80c32a06b69)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/dom.rs (/home/jay/personal/os/jbrowse/crates/browser-dom/target/x86_64-unknown-linux-gnu/debug/deps/dom-43be67d133b8a8eb)
+
+running 12 tests
+test page_dates_support_utc_expiry_arithmetic_without_other_ambient_capabilities ... ok
+test attribute_failures_leave_previous_value_and_realm_recovery_intact ... ok
+test performance_clock_progresses_and_never_moves_backwards_with_a_coarse_clock ... ok
+test page_rejects_unsafe_navigation_and_recovers_for_a_valid_later_script ... ok
+test browser_base64_uses_binary_strings_and_forgiving_ascii_whitespace ... ok
+test attributes_update_identity_styles_links_and_successful_controls ... ok
+test real_language_and_promises_mutate_live_dom_before_layout ... ok
+test script_order_detached_nodes_literal_text_and_errors_preserve_completed_effects ... ok
+test page_context_cookie_round_trip_and_promise_navigation_stop_old_document_scripts ... ok
+test page_profile_compiles_nested_generated_expressions_and_recovers_at_its_boundary ... ok
+test hostile_loops_values_queues_and_missing_apis_are_bounded_without_ambient_io ... ok
+test effect_budget_is_enforced_before_a_failing_setter_changes_the_document ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests rustos_browser_dom
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

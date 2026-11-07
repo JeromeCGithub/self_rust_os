@@ -1,0 +1,9 @@
+{
+  "headings": 0,
+  "links": 3,
+  "path": "/sorry/index",
+  "http_status": 200,
+  "browser": "143.0.7499.169",
+  "complete_task_verified": false,
+  "note": "Default headless Chromium identity, DOM-content-loaded initial response200, final page /sorry/. The native final response is separately measured as429."
+}

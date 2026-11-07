@@ -246,7 +246,7 @@ fn execute(html: &str, context: Option<Context>) -> Result<PageReply, Error> {
         changes: Changes::default(),
         context,
     };
-    // Page code can contain nested generated expressions. This remains below
+    // Page code can contain nested generated expressions. This remains within
     // the already-supported 128 KiB VM ceiling and the 4 MiB user-thread stack;
     // heap, interrupt and job budgets retain their original limits.
     let mut runtime = Runtime::new(Limits {

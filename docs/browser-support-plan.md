@@ -4,7 +4,8 @@ Status: implementation started with [P0 native engine feasibility](browser-engin
 2026-11-05; [P1 runtime](browser-runtime-p1.md) is implemented and
 [P2 presentation](browser-rendering-p2.md) and
 [P3 native JavaScript](browser-javascript-p3.md) are in progress.
-[P4 attributes/base64](browser-google-p4.md) and
+[P4 attributes/base64](browser-google-p4.md),
+[generated-script/navigation/cookie support](browser-google-navigation.md) and
 [P5 password/POST forms](browser-sessions-p5.md) have started; their Google results
 and authenticated-session gates remain open. Baseline: browser commit
 `b44a83a`. This is a plan for missing capabilities, not a claim of new support.
@@ -21,7 +22,7 @@ Receiving HTTP 200 or displaying a site's title does not establish support.
 | Target | User-visible acceptance | Current baseline |
 | --- | --- | --- |
 | Classic browsing | Styled pages, images/fonts, working forms/links, back/forward, reload, selection, copy/paste and scrolling | Small HTML/CSS subset, GET forms/links, native proportional fonts/static PNG, bounded history/Stop; full P2 gate open |
-| Google Search | Default homepage, query entry, readable result titles/snippets, follow a result, Back and refine the query | Homepage/submission work; usable results still fail after initial native QuickJS/DOM integration |
+| Google Search | Default homepage, query entry, readable result titles/snippets, follow a result, Back and refine the query | Homepage/submission and verification redirect work; current native test receives HTTP429 with zero result headings |
 | YouTube video | Real watch page; play a public unencrypted video with synchronized sound; pause/seek/volume/quality/fullscreen | No browser media pipeline or audio driver in the current driver tree |
 | Facebook | Normal user login/verification, readable feed, scrolling/profile navigation, session persistence and logout | No verified support; complete DOM/events, sessions and storage are missing |
 | Most ordinary websites | Pass a published representative corpus of tasks across documentation, news, forms, commerce and dynamic sites | No measured broad compatibility claim |
@@ -364,7 +365,9 @@ Preserve the existing Google gap reproduction:
 RUSTOS_TEST_DISK=target/jbrowse-google.img RUSTOS_JBROWSE_REQUIRE_GOOGLE_RESULTS=1 python3 -B e2e/jbrowse.py
 ```
 
-The recorded failure is `Google results remain blocked by unsupported JavaScript`.
+The earlier failure was `Google results remain blocked by unsupported JavaScript`.
+The [current follow-up](browser-google-navigation.md) executes the verification
+redirect; the strict gate now fails with HTTP429 and zero linked result headings.
 The ordinary fixture runner's green result does not pass this goal. Future
 conformance/media harnesses do not exist merely because this plan names them.
 Deliver small subsystem changes with ABI/source docs, regenerated artifacts when

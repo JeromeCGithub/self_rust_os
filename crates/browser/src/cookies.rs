@@ -4,7 +4,7 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-/// Maximum serialized Cookie header and number of host-only entries per session.
+/// Aggregate budget for cookie names, values and separators across the session.
 pub const MAX_COOKIE_BYTES: usize = 4096;
 const MAX_COOKIES: usize = 32;
 #[derive(Clone)]
