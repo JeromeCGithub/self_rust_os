@@ -195,6 +195,19 @@ impl<'a> Canvas<'a> {
             .checked_add(start)?;
         Canvas::new(self.pixels.get_mut(start..end)?, width, height, self.stride)
     }
+    /// Noncryptographic RGB24 fingerprint of a contained region in row order.
+    /// Ignores alpha and scanline padding; useful for comparing opaque surfaces
+    /// with display readback. This does not acknowledge frame presentation.
+    pub fn region_digest(&mut self, bounds: Rect) -> Option<u64> {
+        let region = self.viewport(bounds)?;
+        let mut digest = 14695981039346656037u64;
+        for row in 0..region.height {
+            for &pixel in &region.pixels[row * region.stride..row * region.stride + region.width] {
+                digest = (digest ^ u64::from(pixel & 0x00ffffff)).wrapping_mul(1099511628211);
+            }
+        }
+        Some(digest)
+    }
     /// Content width in pixels.
     pub fn width(&self) -> u32 {
         self.width as u32
@@ -399,6 +412,37 @@ mod tests {
 #[cfg(test)]
 mod viewport_tests {
     use super::*;
+    #[test]
+    fn readback_digest_matches_regions_ignores_alpha_padding_and_never_mutates_pixels() {
+        let mut pixels = [
+            0xff112233, 0xaa445566, 0xdeadbeef, 0xcafefeed, 0x00112233, 0xff445566,
+        ];
+        let original = pixels;
+        let mut canvas = Canvas::new(&mut pixels, 2, 2, 4).unwrap();
+        let digest = canvas.region_digest(Rect::new(0, 0, 2, 2)).unwrap();
+        assert_eq!(digest, 0xd04d521e87241a11);
+        let mut packed = [0x00112233, 0xff445566, 0xff112233, 0x00445566];
+        assert_eq!(
+            digest,
+            Canvas::new(&mut packed, 2, 2, 2)
+                .unwrap()
+                .region_digest(Rect::new(0, 0, 2, 2))
+                .unwrap()
+        );
+        let row = canvas.region_digest(Rect::new(0, 1, 2, 1));
+        assert_eq!(
+            row,
+            canvas
+                .viewport(Rect::new(0, 1, 2, 1))
+                .unwrap()
+                .region_digest(Rect::new(0, 0, 2, 1))
+        );
+        assert!(canvas.region_digest(Rect::new(-1, 0, 1, 1)).is_none());
+        assert!(canvas
+            .region_digest(Rect::new(0, 0, u32::MAX, u32::MAX))
+            .is_none());
+        assert_eq!(pixels, original);
+    }
     #[test]
     fn viewport_clips_to_content_preserving_toolbar_pitch_and_guards() {
         let mut pixels = [0x12345678; 36];

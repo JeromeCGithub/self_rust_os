@@ -1,0 +1,32 @@
+/home/jay/personal/os/jbrowse/e2e/jbrowse.py:254: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+  actual_digest=rgb_digest(body.getdata())
+{
+  "url": "http://10.0.2.2:34141/large-document",
+  "title": "Large data document",
+  "load_probe_passed": true,
+  "complete_task_verified": false,
+  "elapsed_seconds": 2.1400013829988893,
+  "budget_seconds": 5,
+  "counters": {
+    "http_status": 200,
+    "items": 2,
+    "links": 0,
+    "controls": 0,
+    "images": 0,
+    "truncated": 0,
+    "script_errors": 0,
+    "digest": 18260974659657978511
+  },
+  "ink_pixels": 1408,
+  "readback_digest": 18260974659657978511,
+  "submitted_digest": 18260974659657978511,
+  "checks": {
+    "title": true,
+    "readable_pixels": true,
+    "rendered_links": true
+  },
+  "error": null,
+  "unsupported_script": false,
+  "build_id": "72ed8e1c60ea8655d0d1a0baf447390521b9f42a63bfc5179a937592ccda8e8d"
+}
+qemu-system-x86_64: terminating on signal 15 from pid 500325 (python3)

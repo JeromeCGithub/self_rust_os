@@ -3,7 +3,9 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use rustos_browser::{decode_html, resolve, Document, Encoding, Page, Submission, MAX_HTML};
+use rustos_browser::{
+    decode_html, resolve, Document, Encoding, Page, ScriptKind, Submission, MAX_HTML,
+};
 use userlib::http;
 
 pub struct Loaded {
@@ -14,6 +16,7 @@ pub struct Loaded {
     pub status: u16,
     pub script_errors: usize,
     pub image_errors: usize,
+    pub stylesheet_errors: usize,
 }
 fn fetch(
     url: &str,
@@ -71,7 +74,7 @@ pub fn load(
         decode_html(&bytes, encoding).map_err(|_| "Page character decoding failed".to_string())?;
     let mut doc = Document::parse(&html).map_err(|_| "HTML resource limit exceeded".to_string())?;
     // Source-order author sheets; resource transport policy stays in the app.
-    let _style_errors = doc.apply_stylesheets(|source| {
+    let stylesheet_errors = doc.apply_stylesheets(|source| {
         let source = resolve(&url, source).ok()?;
         let (_, bytes, response) = fetch(&source, 32 * 1024, cancel).ok()?;
         if response.status != 200 {
@@ -79,25 +82,42 @@ pub fn load(
         }
         core::str::from_utf8(&bytes).ok().map(str::to_string)
     });
+    if stylesheet_errors > 0 {
+        userlib::println!("[jbrowse] stylesheet errors: {}", stylesheet_errors);
+    }
     if cancel.is_cancelled() {
         return Err("request cancelled".to_string());
     }
     // Page scripts execute only in a restricted child. Reply data is validated
     // and committed atomically; no JS engine or native binding lives in this app.
-    let script_errors = if doc.nodes.iter().any(|node| node.tag == "script") {
-        let result = rustos_browser_worker::native::Native::start(|| cancel.is_cancelled())
-            .and_then(|mut worker| worker.render_document(&html, || cancel.is_cancelled()));
-        match result {
-            Ok(bytes) => match rustos_browser::dom::Changes::decode(&bytes) {
-                Ok(changes) if doc.apply_changes(&changes).is_ok() => changes.failures as usize,
-                _ => {
-                    userlib::println!("[jbrowse] native DOM reply rejected");
+    let script_errors = if doc.nodes.iter().any(|node| {
+        matches!(
+            node.script_kind(),
+            Some(ScriptKind::Classic | ScriptKind::Module)
+        )
+    }) {
+        if html.len() > rustos_browser_worker::MAX_SOURCE {
+            userlib::println!(
+                "[jbrowse] script document budget exceeded bytes={} maximum={}",
+                html.len(),
+                rustos_browser_worker::MAX_SOURCE
+            );
+            1
+        } else {
+            let result = rustos_browser_worker::native::Native::start(|| cancel.is_cancelled())
+                .and_then(|mut worker| worker.render_document(&html, || cancel.is_cancelled()));
+            match result {
+                Ok(bytes) => match rustos_browser::dom::Changes::decode(&bytes) {
+                    Ok(changes) if doc.apply_changes(&changes).is_ok() => changes.failures as usize,
+                    _ => {
+                        userlib::println!("[jbrowse] native DOM reply rejected");
+                        1
+                    }
+                },
+                Err(error) => {
+                    userlib::println!("[jbrowse] native worker failure: {:?}", error);
                     1
                 }
-            },
-            Err(error) => {
-                userlib::println!("[jbrowse] native worker failure: {:?}", error);
-                1
             }
         }
     } else {
@@ -153,5 +173,6 @@ pub fn load(
         status: response.status,
         script_errors,
         image_errors,
+        stylesheet_errors,
     })
 }

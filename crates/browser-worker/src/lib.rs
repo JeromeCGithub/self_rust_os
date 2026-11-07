@@ -95,6 +95,14 @@ impl Header {
 /// Endpoint methods are nonblocking. Dropping it kills/reaps its owned worker.
 pub trait Endpoint {
     fn send(&mut self, byte: u8) -> Result<bool, Error>;
+    /// Nonblocking prefix transfer. Zero is backpressure, not EOF. The default
+    /// preserves byte transports; native endpoints use copied three-byte packets.
+    fn send_slice(&mut self, bytes: &[u8]) -> Result<usize, Error> {
+        match bytes.first() {
+            Some(byte) => self.send(*byte).map(usize::from),
+            None => Ok(0),
+        }
+    }
     fn receive(&mut self) -> Result<Option<([u8; 3], usize)>, Error>;
     fn ticks(&self) -> u64;
     fn idle(&mut self);
@@ -211,14 +219,22 @@ impl<E: Endpoint> Session<E> {
         }
         .bytes()?;
         let start = self.endpoint.as_ref().ok_or(Error::Unavailable)?.ticks();
-        for &byte in bytes.iter().chain(source.as_bytes()) {
-            loop {
+        // Keep header/body packet boundaries separate so receivers never need
+        // to retain bytes belonging to a different record or untrusted length.
+        for part in [bytes.as_slice(), source.as_bytes()] {
+            let mut used = 0;
+            while used < part.len() {
                 self.check(start, cancel)?;
                 let endpoint = self.endpoint.as_mut().ok_or(Error::Unavailable)?;
-                if endpoint.send(byte)? {
-                    break;
+                let count = endpoint.send_slice(&part[used..])?;
+                if count > part.len() - used {
+                    return Err(Error::Protocol);
                 }
-                endpoint.idle();
+                if count > 0 {
+                    used += count;
+                } else {
+                    endpoint.idle();
+                }
             }
         }
         let reply = self.header(start, cancel)?;

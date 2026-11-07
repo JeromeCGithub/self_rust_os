@@ -1,0 +1,6 @@
+qemu-system-x86_64: terminating on signal 15 from pid 450238 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 219, in <module>
+    assert qemu.poll() is None and time.monotonic()<deadline,'site outcome watchdog'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: site outcome watchdog

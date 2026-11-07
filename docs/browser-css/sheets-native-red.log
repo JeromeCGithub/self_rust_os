@@ -1,0 +1,8 @@
+/home/jay/personal/os/jbrowse/e2e/jbrowse.py:270: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+  actual_digest=rgb_digest(body.getdata())
+qemu-system-x86_64: terminating on signal 15 from pid 506449 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 287, in <module>
+    assert [p for p in requests if p.startswith('/css-sheet-')]==[f'/css-sheet-{n}.css' for n in range(6)]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

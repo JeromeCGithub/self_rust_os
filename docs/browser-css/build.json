@@ -1,0 +1,10 @@
+{
+  "image_sha256": "b2e547d791121274f671ba0d009079c7b14746e4ff1b834512c4eebfee4f4e72",
+  "toolchain": "[toolchain]\nchannel = \"nightly-2025-01-30\"\n\ncomponents = [\n  \"rust-src\",\n  \"llvm-tools-preview\",\n]\n\nprofile = \"complete\"\n",
+  "performance_record_sha256": "f72259bffa3f817602001e723c581e08e3badaf3e267a82ff3fd24c3107162d0",
+  "binaries": {
+    "user_programs/jbrowse/jbrowse.bin": "7990a1b3b65b882635a39f5a1c370f45f37f60088dd6a8da9102559f9504585e",
+    "user_programs/jworker/jworker.bin": "bbaf4cae3d3ec029f37cabbf70d97f7e7f2f672a04b8a0ad89634d525afc7340",
+    "user_programs/zsandbox/zsandbox.bin": "df27e91b7b2f4a2a7a737c2b6a42a0f71ec7e6189c12218e8cbed35edfffa7a4"
+  }
+}

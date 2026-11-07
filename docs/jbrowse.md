@@ -77,24 +77,31 @@ within their list scope.
 
 CSS supports type, class, ID, compound and descendant selectors, comma lists,
 source order/specificity, inline declarations, inherited color/font size,
-RGB hex/basic named colors, solid backgrounds, integer pixel font sizes,
-uniform margin/padding, width, display:block/inline/none and preformatted
+RGB hex/basic named colors, solid/rounded backgrounds, pixel and relative font
+sizes, font shorthand/line height, four-sided margin/padding, auto horizontal
+margins, width/height/minimum sizes, border-box sizing, text alignment,
+inline blocks, simple horizontal flex rows and preformatted
 whitespace. Linked and embedded sheets retain HTML source order, including supported !important priority.
 Unsupported properties/selectors and at-rules are ignored; external sheet errors
 fall back to readable unstyled HTML. Page text uses embedded proportional DejaVu regular/bold Sans, Serif and Monospace
-faces with shared layout/paint metrics and grayscale antialiasing. Chrome/form
-editing retain bitmap text; shaping, bidi and downloadable fonts remain absent.
+faces with shared layout/paint metrics and grayscale antialiasing. Form text uses
+the same proportional metrics, including CSS-sized fields and cursor placement;
+native chrome retains bitmap text. Shaping, bidi and downloadable fonts remain absent.
 
-Documents are limited to 256 KiB, 4096 arena nodes (including an implied body),
+Documents are limited to2 MiB,4096 arena nodes (including an implied body),
 64 open elements and 64 attributes per element. CSS has a 128 KiB aggregate
-budget, 512 rules and four linked sheets of at most 32 KiB each. Layout limits
+budget,512 rules and sixteen linked sheets of at most32 KiB each. Stylesheet
+load failures are reported while other supported styles remain readable. Layout limits
 paint records to 16384, widths to 16384 pixels, and reports truncation. Address
 input and resolved URLs are bounded to 2048 bytes. HTTP uses existing redirect
 and connection deadlines and verified TLS; HTTPS downgrades are refused by the
 transport. Network failure leaves the previous page readable and shows an error.
 
-There is no JPEG/WebP/SVG, POST forms, cookies, storage, downloads, multiple tabs,
-flex/grid or responsive media queries. See [P2 limits](browser-rendering-p2.md) for
+There is no JPEG/WebP/SVG, cookies, storage, downloads, multiple tabs,
+complete flex layout, grid or responsive media queries. Bounded URL-encoded POST
+forms are supported by [P5](browser-sessions-p5.md). See
+[reference CSS comparisons](browser-css-comparison.md) for the implemented subset
+and the remaining difference from Firefox's modern Google page, and [P2 limits](browser-rendering-p2.md) for
 image/font budgets and remaining classic browsing work.
 The [native JavaScript integration](browser-javascript-p3.md) executes bounded inline
 classic scripts in a restricted QuickJS child, with an initial DOM binding subset

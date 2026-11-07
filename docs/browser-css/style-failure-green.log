@@ -1,0 +1,2 @@
+qemu-system-x86_64: terminating on signal 15 from pid 511660 (python3)
+PASS: missing stylesheet is reported, inline fallback paints and the next six-sheet navigation recovers

@@ -97,6 +97,12 @@ syscall22's owned-child selector, while stdin/stdout still reach its parent.
 Descendant queues remain private and bounded; host teardown stops/reaps its owned
 chain. [P3](browser-javascript-p3.md) uses this generic mechanism for restricted
 script workers. HTML/DOM/JavaScript policy never enters the kernel.
+The host-testable browser library separates CSS computed styles, retained paint/
+hit-test records and bounded inline/flex formatting contexts. Moving a formatting
+fragment translates its pixels and form hit targets together. The application
+owns network/resource budgets; the SDK paints proportional controls and copied
+surfaces. [Reference comparisons](browser-css-comparison.md) describe the current
+subset and its limits.
 
 Blocking reads, waits and sleeps affect the calling thread. Thread states are
 `Ready`, `Running`, `Blocked` and `Zombie`; process lifetime is `Live`/`Zombie`.

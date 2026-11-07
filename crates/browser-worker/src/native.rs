@@ -27,6 +27,13 @@ impl Endpoint for Native {
             Err(_) => Err(Error::Unavailable),
         }
     }
+    fn send_slice(&mut self, bytes: &[u8]) -> Result<usize, Error> {
+        match self.child.write_packet(bytes) {
+            Ok(count) => Ok(count),
+            Err(sys::MessageError::Full) => Ok(0),
+            Err(_) => Err(Error::Unavailable),
+        }
+    }
     fn receive(&mut self) -> Result<Option<([u8; 3], usize)>, Error> {
         self.child.read().map_err(|_| Error::Unavailable)
     }

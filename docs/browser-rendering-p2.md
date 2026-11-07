@@ -5,6 +5,11 @@ it does not satisfy the entire [classic browsing exit gate](browser-support-plan
 The browser remains an ordinary Ring 3 application. There is no kernel, syscall,
 target, compiler, window geometry or privilege change in this phase.
 
+This page records the original P2 increment. Later
+[Firefox/Chromium comparisons](browser-css-comparison.md) add four-sided boxes,
+alignment, inline blocks, bounded flex rows, proportional form controls and a
+larger document envelope; full modern-site rendering remains open.
+
 ## Architecture and supported behavior
 
 - [`rustos-text`](../crates/text/src/lib.rs) shares font styles/metrics between

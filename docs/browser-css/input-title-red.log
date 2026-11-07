@@ -1,0 +1,32 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/forms.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/forms-ace412805b41c38f)
+
+running 9 tests
+test form_controls_are_visible_editable_clipped_and_hidden_controls_do_not_paint ... ok
+test html_decoding_handles_google_latin1_utf8_and_invalid_declared_utf8 ... ok
+test get_forms_encode_successful_controls_and_only_activated_submitter ... ok
+test google_short_hex_colors_and_script_only_pages_have_correct_visual_state ... ok
+test password_controls_are_editable_but_only_paint_a_mask ... ok
+test title_and_accessibility_names_do_not_become_input_placeholder_text ... FAILED
+test post_form_request_preserves_action_query_and_encodes_only_successful_controls ... ok
+test form_submission_rejects_unsupported_methods_active_urls_and_oversized_queries ... ok
+test form_post_limits_methods_and_encodings_fail_without_partial_submission ... ok
+
+failures:
+
+---- title_and_accessibility_names_do_not_become_input_placeholder_text stdout ----
+
+thread 'title_and_accessibility_names_do_not_become_input_placeholder_text' panicked at tests/forms.rs:173:5:
+assertion `left == right` failed
+  left: "Google Search"
+ right: ""
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    title_and_accessibility_names_do_not_become_input_placeholder_text
+
+test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test forms`
