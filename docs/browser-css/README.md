@@ -60,3 +60,9 @@ the18px reference input, allowing the installed outline-face substitution.
 Copied command transcripts normalize trailing horizontal whitespace and final
 blank lines for diff hygiene. Raw serial files, JSON measurements and image pixels
 are preserved. Original command outputs remain in the ignored local test artifacts.
+
+The CI workflow installs Python without Pillow. `tooling-stdlib-red.log` reproduces
+an accidental Pillow import in the new unit fixtures. The fixtures now use a small
+RGB surface double; `python3 -S -B -m unittest discover -s tools/tests` passes all57
+cases in `tooling-stdlib-green.log`. Native QEMU screenshot tests still use actual
+Pillow images; their captured assertions and product code are unchanged.
