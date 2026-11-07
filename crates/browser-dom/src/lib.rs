@@ -106,14 +106,13 @@ pub fn run(html: &str) -> Result<Changes, Error> {
     let scripts: Vec<_> = document
         .nodes
         .iter()
-        .filter(|n| n.tag == "script")
-        .map(|n| {
-            (
-                n.attr("src").is_some(),
-                n.attr("type").unwrap_or("").to_ascii_lowercase(),
-                n.text.clone(),
+        .filter(|n| {
+            matches!(
+                n.script_kind(),
+                Some(rustos_browser::ScriptKind::Classic | rustos_browser::ScriptKind::Module)
             )
         })
+        .map(|n| (n.attr("src").is_some(), n.script_kind(), n.text.clone()))
         .collect();
     let host = Dom {
         document,
@@ -125,12 +124,13 @@ pub fn run(html: &str) -> Result<Changes, Error> {
     let mut executed = 0usize;
     let mut failures = 0u32;
     for (external, kind, source) in scripts {
-        if !["", "text/javascript", "application/javascript", "module"].contains(&kind.as_str()) {
-            continue;
-        }
         executed += 1;
         source_bytes = source_bytes.saturating_add(source.len());
-        if external || kind == "module" || source_bytes > 128 * 1024 || executed > 64 {
+        if external
+            || kind == Some(rustos_browser::ScriptKind::Module)
+            || source_bytes > 128 * 1024
+            || executed > 64
+        {
             failures = failures.saturating_add(1);
             continue;
         }

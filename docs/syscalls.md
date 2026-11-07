@@ -369,7 +369,14 @@ Existing ordinary host/child zero-selector traffic remains covered by regression
 
 Queues are separate from syscalls 20/21 and cannot be addressed by arbitrary PID.
 SDK byte framing uses count bits 24–31 and up to three low bytes in little-endian
-order. Host-to-child packets have count one. Standard console wrappers redirect
+order. Ordinary stdin host-to-child packets have count one. Explicit framed
+protocols may use `Child::write_packet` and `process::read_packet` with canonical
+one-to-three-byte packets. The sender returns a nonblocking prefix count (zero
+for empty input, Full consumes nothing); the receiver distinguishes live-empty
+from EOF and rejects invalid counts/nonzero unused bytes. Header and body packet
+boundaries remain separate in the browser protocol. Ordinary `write_byte`/stdin
+semantics are unchanged; the kernel still treats payloads as opaque words.
+Standard console wrappers redirect
 on the child side; the host uses `process::Child` and keeps ordinary keyboard I/O.
 No new kernel pointer dereference or retained user reference is introduced by
 operation 22. Spawn copies and validates the complete NUL-terminated path

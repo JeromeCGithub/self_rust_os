@@ -596,10 +596,20 @@ fn main(_argc: usize, argv: &[&str]) {
                                 loaded.image_errors
                             ));
                         }
+                        if loaded.stylesheet_errors > 0 {
+                            browser.status.push_str(&format!(
+                                " | {} page styles unavailable",
+                                loaded.stylesheet_errors
+                            ));
+                        }
                         println!("[jbrowse] loaded: {}", browser.title);
                         if argv.contains(&"--diagnostics") {
-                            diagnostic =
-                                Some((browser.page.summary(), loaded.status, loaded.script_errors));
+                            diagnostic = Some((
+                                browser.page.summary(),
+                                loaded.status,
+                                loaded.script_errors,
+                                loaded.stylesheet_errors,
+                            ));
                         }
                     }
                     Err(message) => {
@@ -628,8 +638,8 @@ fn main(_argc: usize, argv: &[&str]) {
                 .expect("browser frame");
         }
         if let Some(digest) = digest {
-            if let Some((summary, status, errors)) = diagnostic {
-                println!("[jbrowse] counters http_status={} items={} links={} controls={} images={} truncated={} script_errors={} digest={}",status,summary.items,summary.links,summary.controls,summary.images,u8::from(summary.truncated),errors,digest);
+            if let Some((summary, status, errors, style_errors)) = diagnostic {
+                println!("[jbrowse] counters http_status={} items={} links={} controls={} images={} truncated={} script_errors={} style_errors={} digest={}",status,summary.items,summary.links,summary.controls,summary.images,u8::from(summary.truncated),errors,style_errors,digest);
             } else if diagnostic_error {
                 println!("[jbrowse] error_frame digest={}", digest);
             }

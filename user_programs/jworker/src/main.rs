@@ -7,11 +7,16 @@ use userlib::{process, sys};
 fn read_exact(bytes: &mut [u8]) {
     let mut used = 0;
     while used < bytes.len() {
-        let n = sys::read(sys::STDIN_FD, &mut bytes[used..]);
-        if n == 0 || n > bytes.len() - used {
-            sys::exit(74)
+        match process::read_packet() {
+            Ok(Some((packet, n))) if n <= bytes.len() - used => {
+                bytes[used..used + n].copy_from_slice(&packet[..n]);
+                used += n;
+            }
+            Ok(None) => {
+                let _ = sys::wait_events(sys::Events::STDIO_READ, 0);
+            }
+            _ => sys::exit(74),
         }
-        used += n;
     }
 }
 fn write(bytes: &[u8]) {

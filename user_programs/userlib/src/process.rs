@@ -1,6 +1,8 @@
 //! Owned child process with a bounded, private standard-I/O connection.
-//! Input packets contain one byte; output packets contain up to three bytes.
+//! Ordinary stdin input uses one-byte packets; explicit framed protocols may
+//! exchange up to three bytes per packet without changing the kernel ABI.
 use crate::sys::{self, MessageError, SYSCALL_ERROR};
+mod packet;
 
 fn operation(op: u64, value: u32) -> u64 {
     selected_operation(op, value, 0)
@@ -81,6 +83,18 @@ impl Child {
     pub fn write_byte(&mut self, byte: u8) -> Result<(), MessageError> {
         send_selected((1 << 24) | u32::from(byte), u64::from(self.pid) + 1)
     }
+    /// Nonblocking copied packet for an explicitly packet-aware child protocol.
+    /// Consumes at most three bytes; Full consumes none. Ordinary stdin clients
+    /// must continue using write_byte, since a one-byte read cannot retain a tail.
+    pub fn write_packet(&mut self, bytes: &[u8]) -> Result<usize, MessageError> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        let packet = packet::Packet::from_bytes(&bytes[..bytes.len().min(3)])
+            .ok_or(MessageError::Unavailable)?;
+        send_selected(packet.word(), u64::from(self.pid) + 1)?;
+        Ok(packet.bytes().len())
+    }
     /// Drain one output packet. None means live but empty; unavailable means EOF.
     pub fn read(&mut self) -> Result<Option<([u8; 3], usize)>, MessageError> {
         let Some(word) = receive_selected(u64::from(self.pid) + 1)? else {
@@ -95,6 +109,17 @@ impl Child {
             count,
         )))
     }
+}
+/// Nonblocking private-stream packet receive for explicitly framed protocols.
+/// Empty and EOF remain distinct. This does not consume keyboard/ambient IPC.
+pub fn read_packet() -> Result<Option<([u8; 3], usize)>, MessageError> {
+    receive()?
+        .map(|word| {
+            packet::Packet::from_word(word)
+                .map(|packet| packet.parts())
+                .ok_or(MessageError::Unavailable)
+        })
+        .transpose()
 }
 impl Drop for Child {
     fn drop(&mut self) {

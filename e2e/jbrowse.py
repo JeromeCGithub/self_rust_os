@@ -24,6 +24,7 @@ from qemu_test import launchers, connect, copy_disk, disk_image, console_text
 from qemu_network import arguments as network_arguments
 from qemu_platform import arguments as platform_arguments
 from browser_probe import rgb_digest
+from browser_css import assert_rectangles, dark_bounds
 
 if os.environ.get('RUSTOS_JBROWSE_REQUIRE_GOOGLE_RESULTS') == '1':
     os.environ['RUSTOS_JBROWSE_GOOGLE']='1'
@@ -49,6 +50,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(400);self.send_header('Content-Length','0');self.end_headers()
     def do_GET(self):
         requests.append(self.path)
+        if self.path == '/css-reference':
+            body=(ROOT/'crates/browser/tests/fixtures/css-layout.html').read_bytes()
+            self.send_response(200)
+            self.send_header('Content-Type','text/html; charset=utf-8')
+            self.send_header('Content-Length',str(len(body)))
+            self.end_headers();self.wfile.write(body)
+            return
+        if self.path == '/large-document':
+            body=b'<title>Large data document</title><script type="application/json">'+b'x'*(1300*1024)+b'</script><style>body{background:#ddf3ff}</style><p>Large data remains readable</p>'
+            self.send_response(200);self.send_header('Content-Length',str(len(body)))
+            self.end_headers();self.wfile.write(body)
+            return
+        if self.path == '/many-sheets':
+            body=('<title>Six stylesheet document</title>'+''.join(f'<link rel=stylesheet href="/css-sheet-{n}.css">' for n in range(6))+'<p>Every stylesheet loaded in source order</p>').encode()
+            self.send_response(200);self.send_header('Content-Length',str(len(body)))
+            self.end_headers();self.wfile.write(body)
+            return
+        if self.path.startswith('/css-sheet-'):
+            index=int(self.path.removeprefix('/css-sheet-').removesuffix('.css'))
+            assert 0<=index<6
+            body=f'body{{background:#{0x60a0c0 if index==5 else index:06x}}}'.encode()
+            self.send_response(200);self.send_header('Content-Length',str(len(body)))
+            self.end_headers();self.wfile.write(body)
+            return
         if self.path == '/stalled':
             self.send_response(200)
             self.send_header('Content-Length', '100')
@@ -74,7 +99,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             '/after-cancel': b"<title>HTTP cancellation recovered</title><style>body {background:#e2f3e4}</style><a href='/after-tls'>Recover TLS navigation</a><h1>HTTP cancellation recovered</h1>",
             '/after-tls': b'<title>TLS cancellation recovered</title><style>body {background:#dbf0fa}</style><h1>TLS cancellation recovered</h1>',
             '/lifecycle': b"<title>Cancellation controls</title><a href='/stalled'>Start stalled request</a><br><a href='/after-cancel'>Cancel by navigating</a>",
-            '/big': b'x' * 262145,
+            '/big': b'x' * (2 * 1024 * 1024 + 1),
             '/pixels.png': (ROOT/'crates/web-image/tests/fixtures/two-pixels.png').read_bytes(),
             '/image': b"<title>Image fixture</title><a href='/dir/next.html'><img src='/pixels.png' width=120 alt='Image fallback'></a>",
             '/bad.png': b'not an image',
@@ -88,6 +113,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             '/login-form': b"<title>Disposable POST fixture</title><form method=post action='/login?flow=1'><input name=user value=guest><input type=password name=password placeholder=Password><input value='********' readonly><input type=hidden name=csrf value=fake-token><button name=action value=login>Login</button></form>",
             '/post-result': b"<title>POST redirect ready</title><style>body{background:#e0f4d6}</style><h1>Disposable form accepted</h1>",
             '/blank-script': b"<title>Blank script</title><script>while(true) {}</script>",
+            '/style-failure': b"<title>Stylesheet failure recovered</title><style>body{background:#c5e5fc}</style><link rel=stylesheet href='/absent-style.css'><p>Readable after a failed optional stylesheet</p>",
             '/bad-script': b"<title>Unsupported script</title><style>body {background:#fce8e6}</style><script>while(true) {}</script><p>Still readable</p>",
         }
         if self.path.startswith('/find?'):
@@ -199,6 +225,18 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         wait('[portal] shell pid=')
         start_path='/stalled' if os.environ.get('RUSTOS_JBROWSE_STOP_STARTUP') == '1' else '/start'
         site=os.environ.get('RUSTOS_JBROWSE_SITE')
+        if os.environ.get('RUSTOS_JBROWSE_CSS') == '1':
+            site=f'http://10.0.2.2:{server.server_port}/css-reference'
+            os.environ['RUSTOS_JBROWSE_SITE_TITLE']='CSS reference layout'
+            os.environ['RUSTOS_JBROWSE_SITE_MIN_LINKS']='0'
+        if os.environ.get('RUSTOS_JBROWSE_LARGE') == '1':
+            site=f'http://10.0.2.2:{server.server_port}/large-document'
+            os.environ['RUSTOS_JBROWSE_SITE_TITLE']='Large data document'
+            os.environ['RUSTOS_JBROWSE_SITE_MIN_LINKS']='0'
+        if os.environ.get('RUSTOS_JBROWSE_SHEETS') == '1':
+            site=f'http://10.0.2.2:{server.server_port}/many-sheets'
+            os.environ['RUSTOS_JBROWSE_SITE_TITLE']='Six stylesheet document'
+            os.environ['RUSTOS_JBROWSE_SITE_MIN_LINKS']='0'
         type_text(f'./jbrowse {site} --diagnostics' if site else './jbrowse' if os.environ.get('RUSTOS_JBROWSE_GOOGLE') == '1' else f'./jbrowse http://10.0.2.2:{server.server_port}{start_path}')
         launch_started=time.monotonic()
         key('ret')
@@ -240,8 +278,21 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
             titles=re.findall(r'\[jbrowse\] loaded: ([^\n]+)',output());title=titles[-1] if titles else ''
             seconds=time.monotonic()-launch_started
             checks=dict(title=os.environ.get('RUSTOS_JBROWSE_SITE_TITLE','').lower() in title.lower(),readable_pixels=ink>=100,rendered_links=bool(counters and counters['links']>=int(os.environ.get('RUSTOS_JBROWSE_SITE_MIN_LINKS','1'))))
-            passed=bool(counters and 200<=counters['http_status']<300 and not counters['truncated'] and counters['script_errors']==0 and all(checks.values()) and seconds<=5)
+            passed=bool(counters and 200<=counters['http_status']<300 and not counters['truncated'] and counters['script_errors']==0 and counters.get('style_errors')==0 and all(checks.values()) and seconds<=5)
             result=dict(url=site,title=title,load_probe_passed=passed,complete_task_verified=False,elapsed_seconds=seconds,budget_seconds=5,counters=counters,ink_pixels=ink,readback_digest=actual_digest,submitted_digest=expected_digest,checks=checks,error=error.group(1) if error else None,unsupported_script='[jbrowse] unsupported script page' in output(),build_id=hashlib.sha256(disk_image(ROOT).read_bytes()).hexdigest())
+            if os.environ.get('RUSTOS_JBROWSE_CSS') == '1':
+                expected=json.loads((ROOT/'crates/browser/tests/fixtures/css-layout-boxes.json').read_text())
+                assert_rectangles(frame.crop((ox,oy+64,ox+640,oy+372)),expected,inset=1)
+                # The real reference uses18px sans-serif. Permit outline-face
+                # substitution, but require glyphs too large for the old8px cells.
+                ink_bounds=dark_bounds(frame.crop((ox+2,oy+64+156,ox+512,oy+64+186)))
+                assert ink_bounds and 54<=ink_bounds[2]<=75 and 13<=ink_bounds[3]<=22, f'CSS field still uses the wrong font: {ink_bounds}'
+                result['field_ink_bounds']=ink_bounds
+                result['reference_rectangles_match']=True
+            if os.environ.get('RUSTOS_JBROWSE_SHEETS') == '1':
+                assert [p for p in requests if p.startswith('/css-sheet-')]==[f'/css-sheet-{n}.css' for n in range(6)]
+                assert frame.getpixel((ox+500,oy+200))==(96,160,192),'last stylesheet did not win'
+                result['all_six_sheets_in_order']=True
             (destination/'probe.json').write_text(json.dumps(result,indent=2)+'\n')
             (destination/'serial.log').write_text(serial.read_text(errors='replace'))
             print(json.dumps(result,indent=2),flush=True)
@@ -285,6 +336,15 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
             click(ox+120,oy+42)
             type_text(f'http://10.0.2.2:{server.server_port}{path}')
             key('ret')
+        if os.environ.get('RUSTOS_JBROWSE_STYLE_FAILURE') == '1':
+            navigate('/style-failure');wait('[jbrowse] loaded: Stylesheet failure recovered')
+            wait('[jbrowse] stylesheet errors: 1',last_navigation)
+            pixel((ox+500,oy+200),(197,229,252),'style-failure-recovered')
+            navigate('/many-sheets');wait('[jbrowse] loaded: Six stylesheet document')
+            pixel((ox+500,oy+200),(96,160,192),'style-failure-next-page')
+            assert '[jbrowse] stylesheet errors:' not in output()[last_navigation:]
+            print('PASS: missing stylesheet is reported, inline fallback paints and the next six-sheet navigation recovers')
+            raise SystemExit(0)
         if os.environ.get('RUSTOS_JBROWSE_NATIVE_SCRIPTS') == '1':
             navigate('/native-script');wait('[jbrowse] loaded: Native engine ready')
             image=pixel((ox+500,oy+200),(201,234,255),'native-script')

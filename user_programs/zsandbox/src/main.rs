@@ -103,7 +103,8 @@ fn main(_: usize, argv: &[&str]) {
         );
         for number in [
             1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 23, 24, 25, 26, 27,
-            28, 29, 30, 33, 64, 65, 66, 67, 68, 69, 70, 82, 83, 84, 85, 98, 100, 101, 104, 105, 106, 107, 108, 110,
+            28, 29, 30, 33, 64, 65, 66, 67, 68, 69, 70, 82, 83, 84, 85, 98, 100, 101, 104, 105,
+            106, 107, 108, 110,
         ] {
             assert_eq!(
                 raw(number, 0, 0, 0),
@@ -137,6 +138,14 @@ fn main(_: usize, argv: &[&str]) {
         userlib::println!("[sandbox] child PASS");
         return;
     }
+    // Allocate the retained upper-bound input before the resource snapshot.
+    // Growing this fixture later would count the parent's retained heap pages
+    // as leaked worker frames, even after the String allocation was freed.
+    let mut large = alloc::string::String::with_capacity(rustos_browser_worker::MAX_SOURCE);
+    large.push_str("/*");
+    large.extend(core::iter::repeat('x').take(rustos_browser_worker::MAX_SOURCE - 6));
+    large.push_str("*/42");
+    assert_eq!(large.len(), rustos_browser_worker::MAX_SOURCE);
     // Establish the parent's allocator before the resource snapshot. Otherwise
     // its first spawn grows its own heap by 16 pages plus two page-table frames.
     let scratch = alloc::vec![0u8;32*1024];
@@ -240,6 +249,8 @@ fn main(_: usize, argv: &[&str]) {
             "worker footprint fits image/stack/surface/heap envelope"
         );
         userlib::println!("[sandbox] active_worker_frames={}", mapped);
+        assert_eq!(worker.eval(&large, || false).unwrap(), "42");
+        userlib::println!("[sandbox] packed_source_bytes={}", large.len());
         assert_eq!(
             worker
                 .eval("class C { n=6; f(){return this.n*7} }; new C().f()", || {

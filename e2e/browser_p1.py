@@ -48,6 +48,7 @@ def main():
                     'panicked', 'panic:', 'Kernel panic',
                 ]), output[-6000:]
                 if '[sandbox] PASS restrictions' in output:
+                    assert output.count('[sandbox] packed_source_bytes=131072')==3,'missing three complete upper-bound packed transfers'
                     assert re.search(r"sys_spawn: '/BIN/ZSANDBOX.BIN' -> pid [1-9][0-9]*", raw)
                     print('PASS: restricted Ring 3 worker and repeated frame recovery; evidence:', log)
                     return

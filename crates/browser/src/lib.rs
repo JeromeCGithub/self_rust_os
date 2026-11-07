@@ -19,8 +19,11 @@ pub struct ImageResource {
 pub use layout::{Item, Page, Summary};
 pub use url::{address, resolve};
 
-pub const MAX_HTML: usize = 256 * 1024;
+/// Decoded document envelope, independent of the much smaller script-worker
+/// source/effect budgets. Nodes, nesting, stylesheets and paint records stay bounded.
+pub const MAX_HTML: usize = 2 * 1024 * 1024;
 pub const MAX_CSS: usize = 128 * 1024;
+pub const MAX_STYLESHEETS: usize = 16;
 pub const MAX_NODES: usize = 4096;
 pub const MAX_DEPTH: usize = 64;
 
@@ -41,7 +44,40 @@ pub struct Node {
     pub parent: Option<usize>,
     pub children: Vec<usize>,
 }
+/// Script scheduling policy shared by the application and isolated native realm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScriptKind {
+    Classic,
+    Module,
+    Data,
+}
 impl Node {
+    pub fn script_kind(&self) -> Option<ScriptKind> {
+        if self.tag != "script" {
+            return None;
+        }
+        let kind = self.attr("type").unwrap_or("").trim();
+        if kind.eq_ignore_ascii_case("module") {
+            return Some(ScriptKind::Module);
+        }
+        let essence = kind.split(';').next().unwrap_or("").trim();
+        Some(
+            if [
+                "",
+                "text/javascript",
+                "application/javascript",
+                "text/ecmascript",
+                "application/ecmascript",
+            ]
+            .iter()
+            .any(|mime| essence.eq_ignore_ascii_case(mime))
+            {
+                ScriptKind::Classic
+            } else {
+                ScriptKind::Data
+            },
+        )
+    }
     pub fn attr(&self, name: &str) -> Option<&str> {
         self.attributes
             .iter()

@@ -23,9 +23,13 @@ fn html_entities_raw_text_and_external_sheets() {
 #[test]
 fn diagnostic_summary_counts_rendered_content_without_exporting_text_or_urls() {
     let doc=Document::parse("<a href='/one'>Repeated wrapped destination with words</a><a href='/one'>Again</a><a href='/two'>Second</a><div style='display:none'><a href='/hidden'>Hidden</a></div><form><input name=q></form>").unwrap();
-    let page=doc.layout(160);let summary=page.summary();
-    assert_eq!(summary.links,2);assert_eq!(summary.controls,1);
-    assert!(summary.items>2);assert_eq!(summary.images,0);assert!(!summary.truncated);
+    let page = doc.layout(160);
+    let summary = page.summary();
+    assert_eq!(summary.links, 2);
+    assert_eq!(summary.controls, 1);
+    assert!(summary.items > 2);
+    assert_eq!(summary.images, 0);
+    assert!(!summary.truncated);
 }
 #[test]
 fn css_cascade_inheritance_background_and_hidden_content() {
@@ -67,7 +71,7 @@ fn flow_wraps_long_words_preserves_pre_and_bounds_geometry() {
 fn malformed_html_recovers_and_limits_are_explicit() {
     assert!(Document::parse("<p>one<p>two<!-- unfinished").is_ok());
     assert_eq!(
-        Document::parse(&"x".repeat(262145)).unwrap_err(),
+        Document::parse(&"x".repeat(rustos_browser::MAX_HTML + 1)).unwrap_err(),
         Error::Limit
     );
     assert_eq!(
@@ -304,4 +308,94 @@ fn image_limits_reject_invalid_buffers_and_keep_previous_resource_on_failure() {
     }
     assert!(doc.set_image(nodes[4], large).is_err());
     assert_eq!(doc.layout(640).images.len(), 4);
+}
+
+#[test]
+fn normal_document_budget_accepts_large_bootstrap_data_but_rejects_the_full_boundary() {
+    let source=format!("<title>Large document</title><script type=application/json>{}</script><p>Still readable</p>","x".repeat(1300*1024));
+    let doc =
+        Document::parse(&source).expect("ordinary modern bootstrap data fits the document budget");
+    assert_eq!(doc.title, "Large document");
+    assert!(doc
+        .layout(640)
+        .items
+        .iter()
+        .any(|item| item.text.contains("Still readable")));
+    assert_eq!(
+        Document::parse(&"x".repeat(rustos_browser::MAX_HTML + 1)).unwrap_err(),
+        Error::Limit
+    );
+}
+#[test]
+fn raw_text_end_tags_require_a_complete_case_insensitive_tag_name() {
+    let doc =
+        Document::parse("<script>const text='</scripture>'; const n=42;</ScRiPt ><p>After</p>")
+            .unwrap();
+    let script = doc.nodes.iter().find(|node| node.tag == "script").unwrap();
+    assert!(script.text.contains("const n=42"));
+    assert!(script.text.contains("</scripture>"));
+    let page = doc.layout(640);
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|item| item.text.as_str())
+            .collect::<String>(),
+        "After"
+    );
+}
+
+#[test]
+fn script_classification_distinguishes_data_from_executable_sources() {
+    use rustos_browser::ScriptKind;
+    let doc=Document::parse("<script type=application/json>{\"value\":42}</script><script type=' Text/JavaScript ; charset=utf-8'>42</script><script type=MODULE src='/app.js'></script><script>42</script>").unwrap();
+    assert_eq!(
+        doc.nodes
+            .iter()
+            .filter_map(|node| node.script_kind())
+            .collect::<Vec<_>>(),
+        [
+            ScriptKind::Data,
+            ScriptKind::Classic,
+            ScriptKind::Module,
+            ScriptKind::Classic
+        ]
+    );
+}
+
+#[test]
+fn ordinary_pages_can_load_six_sheets_in_order_and_keep_a_finite_link_budget() {
+    let source = (0..6)
+        .map(|n| format!("<link rel=stylesheet href='/sheet-{n}.css'>"))
+        .collect::<String>()
+        + "<p>Six sheets</p>";
+    let mut doc =
+        Document::parse(&source).expect("six ordinary stylesheets fit the document profile");
+    let mut fetched = Vec::new();
+    assert_eq!(
+        doc.apply_stylesheets(|url| {
+            fetched.push(url.to_string());
+            Some(format!("p{{color:#{:06x}}}", fetched.len()))
+        }),
+        0
+    );
+    assert_eq!(
+        fetched,
+        (0..6)
+            .map(|n| format!("/sheet-{n}.css"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        doc.layout(640)
+            .items
+            .iter()
+            .find(|item| item.text == "Six sheets")
+            .unwrap()
+            .color,
+        6
+    );
+    assert!(Document::parse(&"<link rel=stylesheet href='/x.css'>".repeat(16)).is_ok());
+    assert_eq!(
+        Document::parse(&"<link rel=stylesheet href='/x.css'>".repeat(17)).unwrap_err(),
+        Error::Limit
+    );
 }

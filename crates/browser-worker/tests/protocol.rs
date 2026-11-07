@@ -130,3 +130,78 @@ fn document_requests_have_a_distinct_kind_and_preserve_binary_effect_records() {
     assert_eq!(session.render_document("x", || true), Err(Error::Cancelled));
     assert_eq!(drops.get(), 1);
 }
+
+struct Packed {
+    inner: Fake,
+    sends: Rc<Cell<usize>>,
+    blocked: bool,
+    overreport: bool,
+}
+impl Drop for Packed {
+    fn drop(&mut self) {
+        if !self.overreport {
+            let mut expected = header(Kind::Eval, 1, 5, 0).bytes().unwrap().to_vec();
+            expected.extend_from_slice(b"6*7+0");
+            assert_eq!(
+                self.inner.sent, expected,
+                "header and the two-byte tail are preserved exactly"
+            );
+        }
+    }
+}
+impl Endpoint for Packed {
+    fn send(&mut self, _: u8) -> Result<bool, Error> {
+        panic!("packed endpoint fell back to byte calls")
+    }
+    fn send_slice(&mut self, bytes: &[u8]) -> Result<usize, Error> {
+        self.sends.set(self.sends.get() + 1);
+        if self.overreport {
+            return Ok(bytes.len() + 1);
+        }
+        if !self.blocked {
+            self.blocked = true;
+            return Ok(0);
+        }
+        let n = bytes.len().min(3);
+        self.inner.sent.extend_from_slice(&bytes[..n]);
+        Ok(n)
+    }
+    fn receive(&mut self) -> Result<Option<([u8; 3], usize)>, Error> {
+        self.inner.receive()
+    }
+    fn ticks(&self) -> u64 {
+        self.inner.ticks()
+    }
+    fn idle(&mut self) {
+        self.inner.idle()
+    }
+}
+#[test]
+fn packed_transfers_preserve_tail_bytes_backpressure_and_endpoint_ownership() {
+    let sends = Rc::new(Cell::new(0));
+    let drops = Rc::new(Cell::new(0));
+    let mut endpoint = Packed {
+        inner: fake(header(Kind::Result, 1, 2, 0), b"42", drops.clone()),
+        sends: sends.clone(),
+        blocked: false,
+        overreport: false,
+    };
+    let mut session = Session::connect(endpoint, || false).unwrap();
+    assert_eq!(session.eval("6*7+0", || false).unwrap(), "42");
+    assert_eq!(
+        sends.get(),
+        11,
+        "8 header packets, two source packets, one full-queue retry"
+    );
+    drop(session);
+    assert_eq!(drops.get(), 1);
+    endpoint = Packed {
+        inner: fake(header(Kind::Result, 1, 2, 0), b"42", drops.clone()),
+        sends,
+        blocked: true,
+        overreport: true,
+    };
+    let mut session = Session::connect(endpoint, || false).unwrap();
+    assert_eq!(session.eval("6*7", || false), Err(Error::Protocol));
+    assert_eq!(drops.get(), 2);
+}
