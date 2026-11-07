@@ -458,13 +458,16 @@ fn main(_argc: usize, argv: &[&str]) {
     }));
     let transport = Arc::clone(&shared);
     let layout_fonts = Arc::clone(&fonts);
-    let _worker = match thread::Builder::new().spawn(move || loop {
-        let request = transport.lock().request.take();
-        if let Some((generation, url, cancel)) = request {
-            let loaded = loader::load(&url, &cancel, layout_fonts.as_ref());
-            transport.lock().result = Some((generation, loaded));
-        } else {
-            let _ = sys::sleep_ticks(1);
+    let _worker = match thread::Builder::new().spawn(move || {
+        let mut session = loader::Session::default();
+        loop {
+            let request = transport.lock().request.take();
+            if let Some((generation, url, cancel)) = request {
+                let loaded = loader::load(&mut session, &url, &cancel, layout_fonts.as_ref());
+                transport.lock().result = Some((generation, loaded));
+            } else {
+                let _ = sys::sleep_ticks(1);
+            }
         }
     }) {
         Ok(worker) => worker,
@@ -609,6 +612,7 @@ fn main(_argc: usize, argv: &[&str]) {
                                 loaded.status,
                                 loaded.script_errors,
                                 loaded.stylesheet_errors,
+                                browser.document.linked_heading_count(&browser.page),
                             ));
                         }
                     }
@@ -638,8 +642,8 @@ fn main(_argc: usize, argv: &[&str]) {
                 .expect("browser frame");
         }
         if let Some(digest) = digest {
-            if let Some((summary, status, errors, style_errors)) = diagnostic {
-                println!("[jbrowse] counters http_status={} items={} links={} controls={} images={} truncated={} script_errors={} style_errors={} digest={}",status,summary.items,summary.links,summary.controls,summary.images,u8::from(summary.truncated),errors,style_errors,digest);
+            if let Some((summary, status, errors, style_errors, linked_headings)) = diagnostic {
+                println!("[jbrowse] counters http_status={} items={} links={} controls={} images={} truncated={} script_errors={} style_errors={} linked_headings={} digest={}",status,summary.items,summary.links,summary.controls,summary.images,u8::from(summary.truncated),errors,style_errors,linked_headings,digest);
             } else if diagnostic_error {
                 println!("[jbrowse] error_frame digest={}", digest);
             }

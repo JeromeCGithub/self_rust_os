@@ -30,6 +30,8 @@ pub enum Kind {
     Result = 2,
     Failure = 3,
     Document = 4,
+    /// JPQ1 page context; reply is JPR1, both with the existing byte budgets.
+    Page = 5,
 }
 /// Explicit-width, little-endian wire fields, validated before allocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,7 +45,7 @@ impl Header {
     fn valid(&self) -> bool {
         match self.kind {
             Kind::Ready => self.generation == 0 && self.length == 0 && self.status == 0,
-            Kind::Eval | Kind::Document => {
+            Kind::Eval | Kind::Document | Kind::Page => {
                 self.generation != 0 && self.length <= MAX_SOURCE && self.status == 0
             }
             Kind::Result => self.generation != 0 && self.length <= MAX_OUTPUT && self.status == 0,
@@ -76,6 +78,7 @@ impl Header {
             2 => Kind::Result,
             3 => Kind::Failure,
             4 => Kind::Document,
+            5 => Kind::Page,
             _ => return Err(Error::Protocol),
         };
         let header = Self {
@@ -174,12 +177,21 @@ impl<E: Endpoint> Session<E> {
         html: &str,
         cancel: impl Fn() -> bool,
     ) -> Result<Vec<u8>, Error> {
-        self.request(Kind::Document, html, &cancel)
+        self.request(Kind::Document, html.as_bytes(), &cancel)
+    }
+    /// Execute an encoded JPQ1 request. Context decoding belongs to the realm;
+    /// the transport validates generations, ownership and complete copied bytes.
+    pub fn render_page(
+        &mut self,
+        context: &[u8],
+        cancel: impl Fn() -> bool,
+    ) -> Result<Vec<u8>, Error> {
+        self.request(Kind::Page, context, &cancel)
     }
     /// Evaluate one bounded script; recoverable engine errors preserve the realm.
     /// Cancellation, EOF, malformed replies and deadlines kill/reap the endpoint.
     pub fn eval(&mut self, source: &str, cancel: impl Fn() -> bool) -> Result<String, Error> {
-        let bytes = self.request(Kind::Eval, source, &cancel)?;
+        let bytes = self.request(Kind::Eval, source.as_bytes(), &cancel)?;
         match String::from_utf8(bytes) {
             Ok(text) => Ok(text),
             Err(_) => {
@@ -191,10 +203,10 @@ impl<E: Endpoint> Session<E> {
     fn request(
         &mut self,
         kind: Kind,
-        source: &str,
+        source: &[u8],
         cancel: &impl Fn() -> bool,
     ) -> Result<Vec<u8>, Error> {
-        if source.len() > MAX_SOURCE || (kind == Kind::Eval && source.as_bytes().contains(&0)) {
+        if source.len() > MAX_SOURCE || (kind == Kind::Eval && source.contains(&0)) {
             return Err(Error::Input);
         }
         let result = self.evaluate(kind, source, cancel);
@@ -206,7 +218,7 @@ impl<E: Endpoint> Session<E> {
     fn evaluate(
         &mut self,
         kind: Kind,
-        source: &str,
+        source: &[u8],
         cancel: &impl Fn() -> bool,
     ) -> Result<Vec<u8>, Error> {
         self.generation = self.generation.checked_add(1).ok_or(Error::Unavailable)?;
@@ -221,7 +233,7 @@ impl<E: Endpoint> Session<E> {
         let start = self.endpoint.as_ref().ok_or(Error::Unavailable)?.ticks();
         // Keep header/body packet boundaries separate so receivers never need
         // to retain bytes belonging to a different record or untrusted length.
-        for part in [bytes.as_slice(), source.as_bytes()] {
+        for part in [bytes.as_slice(), source] {
             let mut used = 0;
             while used < part.len() {
                 self.check(start, cancel)?;

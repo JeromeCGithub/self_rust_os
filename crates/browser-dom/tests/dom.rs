@@ -149,3 +149,125 @@ fn attribute_failures_leave_previous_value_and_realm_recovery_intact() {
     assert_eq!(failures, 0);
     assert_eq!(doc.title, "Recovered");
 }
+
+#[test]
+fn page_profile_compiles_nested_generated_expressions_and_recovers_at_its_boundary() {
+    let expression = format!("{}42{}", "Math.max(".repeat(48), ",0)".repeat(48));
+    let (doc, failures) = render(&format!(
+        "<script>document.title=String({expression})</script>"
+    ));
+    assert_eq!(
+        failures, 0,
+        "bounded ordinary generated expressions must compile"
+    );
+    assert_eq!(doc.title, "42");
+    let excessive = format!("{}42{}", "Math.max(".repeat(256), ",0)".repeat(256));
+    let (doc, failures) = render(&format!(
+        "<p>Readable</p><script>{excessive}</script><script>document.title='Recovered'</script>"
+    ));
+    assert_eq!(failures, 1);
+    assert_eq!(doc.title, "Recovered");
+}
+
+#[test]
+fn page_dates_support_utc_expiry_arithmetic_without_other_ambient_capabilities() {
+    let (doc, failures) = render(
+        r#"<script>
+      const expiry=new Date('2026-11-06T12:00:00Z');
+      expiry.setUTCSeconds(expiry.getUTCSeconds()+300);
+      if(!Number.isFinite(Date.now()) || typeof os!=='undefined' || typeof Atomics!=='undefined')throw Error('profile');
+      document.title=expiry.toUTCString()+'|'+new Date(NaN).toString();
+    </script>"#,
+    );
+    assert_eq!(failures, 0);
+    assert_eq!(doc.title, "Fri, 06 Nov 2026 12:05:00 GMT|Invalid Date");
+}
+
+#[test]
+fn page_context_cookie_round_trip_and_promise_navigation_stop_old_document_scripts() {
+    use rustos_browser::page_context::PageRequest;
+    let html = r#"<script>
+      if(navigator.userAgent!=='RustOS-curl/1' || !navigator.cookieEnabled || navigator.platform!=='RustOS')throw Error('identity');
+      if(location.href!=='https://example.test/search?q=rust#top' || document.URL!==location.href || location.search!=='?q=rust' || location.pathname!=='/search' || location.hostname!=='example.test' || location.protocol!=='https:' || location.hash!=='#top')throw Error('location');
+      if(document.cookie!=='proof=old')throw Error('snapshot');
+      document.cookie='proof=abc; Path=/; Secure; Max-Age=300';
+      document.cookie='scoped=no; Path=/other';
+      document.cookie='evil=no; Domain=test';
+      if(document.cookie!=='proof=abc')throw Error('read your writes');
+      const first=performance.now();if(first<0 || performance.now()<first)throw Error('monotonic');
+      Promise.resolve().then(()=>location.replace('/search?q=rust&verified=1'));
+      document.title='Page context ready';
+    </script><script>document.title='must not run after navigation'</script>"#;
+    let result = rustos_browser_dom::run_page(
+        PageRequest {
+            html,
+            url: "https://example.test/search?q=rust#top",
+            cookie_snapshot: "proof=old; Path=/; Secure",
+            epoch_seconds: 100,
+        },
+        || 500,
+    )
+    .unwrap();
+    assert_eq!(result.dom.failures, 0);
+    assert_eq!(
+        result.cookies,
+        vec![
+            "proof=abc; Path=/; Secure; Max-Age=300",
+            "scoped=no; Path=/other"
+        ]
+    );
+    assert_eq!(
+        result.navigation.as_deref(),
+        Some("https://example.test/search?q=rust&verified=1")
+    );
+    let mut doc = Document::parse(html).unwrap();
+    doc.apply_changes(&result.dom).unwrap();
+    assert_eq!(doc.title, "Page context ready");
+}
+
+#[test]
+fn page_rejects_unsafe_navigation_and_recovers_for_a_valid_later_script() {
+    use rustos_browser::page_context::PageRequest;
+    let html = r#"<script>location.href='javascript:alert(1)'</script><script>location.assign('http://example.test/')</script><script>document.title='Recovered';location.href='/next'</script>"#;
+    let result = rustos_browser_dom::run_page(
+        PageRequest {
+            html,
+            url: "https://example.test/",
+            cookie_snapshot: "",
+            epoch_seconds: 0,
+        },
+        || 0,
+    )
+    .unwrap();
+    assert_eq!(result.dom.failures, 2);
+    assert_eq!(
+        result.navigation.as_deref(),
+        Some("https://example.test/next")
+    );
+    assert!(rustos_browser_dom::run_page(
+        PageRequest {
+            url: "file:///etc/passwd",
+            html,
+            cookie_snapshot: "",
+            epoch_seconds: 0
+        },
+        || 0
+    )
+    .is_err());
+}
+
+#[test]
+fn performance_clock_progresses_and_never_moves_backwards_with_a_coarse_clock() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static CALL: AtomicUsize = AtomicUsize::new(0);
+    fn clock() -> u64 {
+        [100, 125, 120, 140][CALL.fetch_add(1, Ordering::Relaxed).min(3)]
+    }
+    CALL.store(0, Ordering::Relaxed);
+    let result=rustos_browser_dom::run_page(rustos_browser::page_context::PageRequest{html:"<script>document.title=[performance.now(),performance.now(),performance.now(),performance.timeOrigin].join(',')</script>",url:"https://a.test/",cookie_snapshot:"",epoch_seconds:100},clock).unwrap();
+    assert_eq!(result.dom.failures, 0);
+    assert_eq!(
+        result.dom.changes,
+        vec![rustos_browser::dom::Change::Title("25,25,40,100000".into())]
+    );
+}

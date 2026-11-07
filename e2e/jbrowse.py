@@ -31,6 +31,7 @@ if os.environ.get('RUSTOS_JBROWSE_REQUIRE_GOOGLE_RESULTS') == '1':
 
 requests = []
 posts = []
+context_requests = []
 stalled_started=threading.Event()
 stalled_closed=threading.Event()
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -50,6 +51,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(400);self.send_header('Content-Length','0');self.end_headers()
     def do_GET(self):
         requests.append(self.path)
+        if self.path == '/verify-context':
+            expression='Math.max('*48+'42'+',0)'*48
+            body=("<title>Verification fixture</title><script>"
+                  "if(navigator.userAgent!=='RustOS-curl/1')throw Error('identity');"
+                  f"const answer=eval({expression!r});"
+                  "const expiry=new Date();expiry.setUTCSeconds(expiry.getUTCSeconds()+300);"
+                  "document.cookie='proof='+answer+'; Path=/; Expires='+expiry.toUTCString();"
+                  "document.cookie='private=hidden; Path=/else';"
+                  "Promise.resolve().then(()=>location.replace('/verify-results?q=rust+os'));"
+                  "</script><script>document.title='Old document executed'</script>").encode()
+        elif self.path in ['/verify-results?q=rust+os','/verify-again']:
+            cookie=self.headers.get('Cookie','')
+            context_requests.append((self.path,cookie))
+            if cookie!='proof=42':
+                self.send_response(403);self.send_header('Content-Length','0');self.end_headers();return
+            title='Cookie navigation ready' if self.path.startswith('/verify-results') else 'Cookie session ready'
+            body=(f"<title>{title}</title><style>body{{background:#d8f1e4}}</style>"
+                  "<h1>Actual fixture result</h1><p>Snippet fetched with the script cookie.</p>"
+                  "<a href='/verify-again'>Follow verified link</a>"
+                  "<script>if(document.cookie!=='proof=42')throw Error('cookie snapshot');</script>").encode()
+        elif self.path == '/verify-loop':
+            body=b"<script>location.replace('/verify-loop')</script>"
+        else:
+            body=None
+        if body is not None:
+            self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8')
+            self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
         if self.path == '/css-reference':
             body=(ROOT/'crates/browser/tests/fixtures/css-layout.html').read_bytes()
             self.send_response(200)
@@ -237,7 +265,7 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
             site=f'http://10.0.2.2:{server.server_port}/many-sheets'
             os.environ['RUSTOS_JBROWSE_SITE_TITLE']='Six stylesheet document'
             os.environ['RUSTOS_JBROWSE_SITE_MIN_LINKS']='0'
-        type_text(f'./jbrowse {site} --diagnostics' if site else './jbrowse' if os.environ.get('RUSTOS_JBROWSE_GOOGLE') == '1' else f'./jbrowse http://10.0.2.2:{server.server_port}{start_path}')
+        type_text(f'./jbrowse {site} --diagnostics' if site else './jbrowse --diagnostics' if os.environ.get('RUSTOS_JBROWSE_GOOGLE') == '1' else f'./jbrowse http://10.0.2.2:{server.server_port}{start_path}')
         launch_started=time.monotonic()
         key('ret')
         wait('[jbrowse] ready')
@@ -330,12 +358,30 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
                 time.sleep(.1)
             if os.environ.get('RUSTOS_JBROWSE_REQUIRE_GOOGLE_RESULTS') == '1':
                 assert '[jbrowse] unsupported script page' not in output()[mark:], 'Google results remain blocked by unsupported JavaScript'
+                wait('[jbrowse] counters ',mark)
+                records=re.findall(r'\[jbrowse\] counters ([^\n]+)',output()[mark:])
+                counters={name:int(value) for name,value in re.findall(r'(\w+)=(\d+)',records[-1])}
+                assert counters['http_status']==200 and counters['script_errors']==0 and counters['style_errors']==0 and counters['truncated']==0 and counters['linked_headings']>=3 and counters['links']>=3, f'Google did not display a usable result list: {counters}'
         def navigate(path):
             global last_navigation
             last_navigation=len(output())
             click(ox+120,oy+42)
             type_text(f'http://10.0.2.2:{server.server_port}{path}')
             key('ret')
+        if os.environ.get('RUSTOS_JBROWSE_PAGE_CONTEXT') == '1':
+            navigate('/verify-context');wait('[jbrowse] loaded: Cookie navigation ready',last_navigation)
+            pixel((ox+500,oy+200),(216,241,228),'cookie-navigation')
+            assert context_requests==[('/verify-results?q=rust+os','proof=42')]
+            assert '[jbrowse] script errors:' not in output()[last_navigation:]
+            navigate('/verify-again');wait('[jbrowse] loaded: Cookie session ready',last_navigation)
+            pixel((ox+500,oy+200),(216,241,228),'cookie-session')
+            assert context_requests[-1]==('/verify-again','proof=42')
+            navigate('/verify-loop');wait('[jbrowse] error: Script navigation limit exceeded',last_navigation)
+            assert requests.count('/verify-loop')==5,'script redirect loop was not bounded at four follows'
+            navigate('/verify-again');wait('[jbrowse] loaded: Cookie session ready',last_navigation)
+            pixel((ox+500,oy+200),(216,241,228),'cookie-navigation-recovered')
+            print('PASS: native generated script, Date, cookie scope, Promise navigation, persistence and redirect-loop recovery')
+            raise SystemExit(0)
         if os.environ.get('RUSTOS_JBROWSE_STYLE_FAILURE') == '1':
             navigate('/style-failure');wait('[jbrowse] loaded: Stylesheet failure recovered')
             wait('[jbrowse] stylesheet errors: 1',last_navigation)

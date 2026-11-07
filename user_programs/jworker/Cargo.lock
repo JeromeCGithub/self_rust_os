@@ -12,6 +12,7 @@ checksum = "875488b8711a968268c7cf5d139578713097ca4635a76044e8fe8eedf831d07e"
 name = "jworker"
 version = "0.1.0"
 dependencies = [
+ "rustos-browser",
  "rustos-browser-dom",
  "rustos-browser-worker",
  "rustos-quickjs",

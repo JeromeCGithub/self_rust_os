@@ -128,6 +128,10 @@ void *rjs_create(size_t memory, size_t stack, uint64_t budget) {
   }
   return p;
 }
+int rjs_date(void *opaque) {
+  Probe *p = opaque;
+  return JS_AddIntrinsicDate(p->context) ? 3 : 0;
+}
 int rjs_eval(void *opaque, const char *source, size_t length, char *output,
              size_t capacity, size_t *written) {
   Probe *p = opaque;

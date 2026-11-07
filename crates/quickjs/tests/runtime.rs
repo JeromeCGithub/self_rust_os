@@ -70,6 +70,15 @@ fn repeated_runtime_lifecycle_preserves_independent_globals() {
 }
 
 #[cfg(feature = "freestanding")]
+#[test]
+fn opted_in_native_dates_have_a_utc_local_timezone_and_real_epoch_callback() {
+    let mut runtime = Runtime::new(Limits::default()).unwrap();
+    runtime.enable_date().unwrap();
+    assert_eq!(runtime.eval("[Date.now(),new Date(0).getTimezoneOffset(),new Date(0).getHours(),new Date(-1).toISOString()].join('|')").unwrap(),"1000|0|0|1969-12-31T23:59:59.999Z");
+    assert_eq!(runtime.eval("const expiry=new Date('2024-02-28T23:59:59Z');expiry.setSeconds(expiry.getSeconds()+2);expiry.toISOString()").unwrap(),"2024-02-29T00:00:01.000Z");
+}
+
+#[cfg(feature = "freestanding")]
 #[no_mangle]
 extern "C" fn rustos_qjs_epoch_micros() -> u64 {
     1_000_000

@@ -2,7 +2,9 @@
 //! The callback receives decoded body bytes; sockets close on success or error.
 //! HTTPS uses the optional TLS feature, verified certificates and platform time/RNG.
 use crate::{net, sys};
-pub use rustos_http::{ByteRange, Charset, ContentRange, Error, Options, Request, Response};
+pub use rustos_http::{
+    ByteRange, Charset, ContentRange, Error, Options, Request, RequestCookies, Response,
+};
 
 #[derive(Default)]
 struct Sockets {
@@ -194,6 +196,33 @@ pub fn request_cancellable(
         ..Sockets::default()
     };
     rustos_http::request_with_url(&mut sockets, url, request, options, body, effective)
+}
+
+/// Request with an application-owned cookie source. The HTTP client consults it
+/// separately for every redirect URL; it validates and copies header bytes.
+#[cfg(feature = "alloc")]
+pub fn request_cancellable_with_cookies(
+    url: &str,
+    request: Request<'_>,
+    options: Options,
+    body: impl FnMut(&[u8]) -> Result<(), Error>,
+    effective: impl FnMut(&str),
+    cancel: crate::io::Cancellation,
+    cookies: &mut impl RequestCookies,
+) -> Result<Response, Error> {
+    let mut sockets = Sockets {
+        cancel: Some(cancel),
+        ..Sockets::default()
+    };
+    rustos_http::request_with_cookies(
+        &mut sockets,
+        url,
+        request,
+        options,
+        body,
+        effective,
+        cookies,
+    )
 }
 
 /// Borrowed GET/form POST for clients that do not need an allocated cancel token.

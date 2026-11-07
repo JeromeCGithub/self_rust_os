@@ -118,8 +118,7 @@ int rjs_fprintf(FILE *file, const char *format, ...) {
   (void)format;
   return -1;
 }
-/* Used only to seed Math.random; Date is not installed in this probe profile.
- */
+/* UTC callback for Math.random's non-cryptographic seed and opted-in page Date. */
 int rjs_gettimeofday(struct timeval *value, void *zone) {
   (void)zone;
   uint64_t us = rustos_qjs_epoch_micros();
