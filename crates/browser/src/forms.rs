@@ -172,6 +172,11 @@ pub struct Control {
     pub y: i32,
     pub width: u32,
     pub height: u32,
+    pub font: rustos_text::Style,
+    pub color: u32,
+    pub background: Option<u32>,
+    pub border: u32,
+    pub padding: [u32; 4],
 }
 impl Control {
     pub fn contains(&self, x: i32, y: i32) -> bool {
@@ -254,15 +259,7 @@ pub(crate) fn collect(doc: &Document) -> Result<Vec<Form>, Error> {
         }
         let label = node
             .attr("placeholder")
-            .or_else(|| node.attr("title"))
-            .or_else(|| node.attr("aria-label"))
-            .unwrap_or(if kind == FieldKind::Password {
-                "Password"
-            } else if kind == FieldKind::Text {
-                "Text"
-            } else {
-                "Submit"
-            });
+            .unwrap_or(if kind.is_text() { "" } else { "Submit" });
         if label.len() > 2048 {
             return Err(Error::Limit);
         }

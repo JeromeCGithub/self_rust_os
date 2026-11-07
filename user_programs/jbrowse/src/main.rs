@@ -7,6 +7,7 @@ use alloc::{
     string::{String, ToString},
 };
 use rustos_browser::{address, resolve, FieldKind, Page, Submission};
+use userlib::ui::font::Metrics;
 const HOME_PAGE: &str = "https://www.google.com/";
 use userlib::{
     println,
@@ -271,8 +272,9 @@ impl Browser {
                     continue;
                 }
                 if let Some(color) = item.background {
-                    viewport.fill_rect(
+                    viewport.rounded_rect(
                         Rect::new(item.x, y, item.width, item.height),
+                        item.radius,
                         Color::rgb(color),
                     );
                 }
@@ -309,7 +311,7 @@ impl Browser {
                         );
                     }
                 }
-                if item.link.is_some() && item.image.is_none() {
+                if item.underline && item.image.is_none() {
                     viewport.fill_rect(
                         Rect::new(
                             item.x,
@@ -333,44 +335,84 @@ impl Browser {
                     Rect::new(control.x, y, control.width, control.height),
                     Color::rgb(border),
                 );
-                let fill = if field.kind.is_text() {
+                let fill = control.background.unwrap_or(if field.kind.is_text() {
                     0xf7fbff
                 } else {
                     0xe3edf9
-                };
+                });
+                let edge = control
+                    .border
+                    .min(control.width / 2)
+                    .min(control.height / 2);
                 viewport.fill_rect(
                     Rect::new(
-                        control.x + 1,
-                        y + 1,
-                        control.width.saturating_sub(2),
-                        control.height.saturating_sub(2),
+                        control.x + edge as i32,
+                        y + edge as i32,
+                        control.width.saturating_sub(edge * 2),
+                        control.height.saturating_sub(edge * 2),
                     ),
                     Color::rgb(fill),
                 );
-                let left = control.x + 6;
-                let width = control.width.saturating_sub(12);
+                let left = control.x + (edge + control.padding[3].max(2)) as i32;
+                let width = control.width.saturating_sub(
+                    edge * 2 + control.padding[3].max(2) + control.padding[1].max(2),
+                );
+                let height = control
+                    .height
+                    .saturating_sub(edge * 2 + control.padding[0] + control.padding[2]);
+                let line = self.fonts.line_height(control.font);
+                let text_y =
+                    y + (edge + control.padding[0] + height.saturating_sub(line) / 2) as i32;
                 // Keep the complete control visible area inside the page viewport.
-                if y >= 0 && y + control.height as i32 <= view_height as i32 && width > 0 {
-                    if let Some(mut input) = viewport.viewport(Rect::new(left, y + 7, width, 12)) {
+                if y >= 0
+                    && y + control.height as i32 <= view_height as i32
+                    && width > 0
+                    && height > 0
+                {
+                    if let Some(mut input) =
+                        viewport.viewport(Rect::new(left, text_y, width, height.min(line)))
+                    {
                         let label = field.display_value();
                         if active && self.field_editor.is_selected() {
                             input.clear(Color::rgb(0xc2d8f5));
                         }
-                        ui::text(
+                        let label_width = label.chars().fold(0u32, |n, c| {
+                            n.saturating_add(self.fonts.advance(c, control.font))
+                        });
+                        let text_x = if field.kind.is_text() {
+                            0
+                        } else {
+                            width.saturating_sub(label_width) / 2
+                        } as i32;
+                        let _ = self.font_painter.draw(
                             &mut input,
+                            text_x,
                             0,
-                            1,
                             &label,
-                            Color::rgb(if field.disabled { 0x8a8a8a } else { 0x172b43 }),
-                            1,
+                            control.font,
+                            Color::rgb(if field.disabled {
+                                0x8a8a8a
+                            } else {
+                                control.color
+                            }),
                         );
                         if active && !self.field_editor.is_selected() {
-                            let cursor = (self.field_editor.as_str()[..self.field_editor.cursor()]
+                            let characters = self.field_editor.as_str()
+                                [..self.field_editor.cursor()]
                                 .chars()
-                                .count()
-                                .min((width / 8) as usize)
-                                * 8) as i32;
-                            input.fill_rect(Rect::new(cursor, 0, 1, 10), Color::rgb(0x172b43));
+                                .count();
+                            let cursor = label
+                                .chars()
+                                .take(characters)
+                                .fold(0u32, |n, c| {
+                                    n.saturating_add(self.fonts.advance(c, control.font))
+                                })
+                                .min(width.saturating_sub(1))
+                                as i32;
+                            input.fill_rect(
+                                Rect::new(cursor, 0, 1, height.min(line)),
+                                Color::rgb(control.color),
+                            );
                         }
                     }
                 }

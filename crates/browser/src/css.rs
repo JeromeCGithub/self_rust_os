@@ -167,6 +167,82 @@ fn pixels(value: &str) -> Option<u32> {
         .ok()
         .map(|n| n.min(1024))
 }
+#[derive(Clone, Copy, Default, Debug)]
+pub(crate) struct Edges {
+    pub top: u32,
+    pub right: u32,
+    pub bottom: u32,
+    pub left: u32,
+}
+impl Edges {
+    fn all(value: u32) -> Self {
+        Self {
+            top: value,
+            right: value,
+            bottom: value,
+            left: value,
+        }
+    }
+    fn parse(value: &str, auto: bool) -> Option<(Self, bool, bool)> {
+        let parts: Vec<_> = value.split_whitespace().collect();
+        let length = |value: &str| {
+            if auto && value == "auto" {
+                Some(0)
+            } else {
+                pixels(value)
+            }
+        };
+        let (top, right, bottom, left) = match parts.as_slice() {
+            [a] => (*a, *a, *a, *a),
+            [a, b] => (*a, *b, *a, *b),
+            [a, b, c] => (*a, *b, *c, *b),
+            [a, b, c, d] => (*a, *b, *c, *d),
+            _ => return None,
+        };
+        Some((
+            Self {
+                top: length(top)?,
+                right: length(right)?,
+                bottom: length(bottom)?,
+                left: length(left)?,
+            },
+            left == "auto",
+            right == "auto",
+        ))
+    }
+    pub fn horizontal(self) -> u32 {
+        self.left + self.right
+    }
+    pub fn vertical(self) -> u32 {
+        self.top + self.bottom
+    }
+}
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Align {
+    #[default]
+    Start,
+    Center,
+    End,
+}
+fn align(value: &str) -> Option<Align> {
+    Some(match value {
+        "left" | "start" | "flex-start" => Align::Start,
+        "center" => Align::Center,
+        "right" | "end" | "flex-end" => Align::End,
+        _ => return None,
+    })
+}
+fn font_length(value: &str, size: u16) -> Option<u32> {
+    let (number, factor) = if let Some(n) = value.strip_suffix("em") {
+        (n, f32::from(size))
+    } else if let Some(n) = value.strip_suffix('%') {
+        (n, f32::from(size) / 100.0)
+    } else {
+        (value.strip_suffix("px").unwrap_or(value), 1.0)
+    };
+    let value = number.parse::<f32>().ok()? * factor;
+    (value.is_finite() && value >= 0.0).then(|| (value + 0.5).min(1024.0) as u32)
+}
 #[derive(Clone)]
 pub(crate) struct Style {
     pub color: u32,
@@ -176,12 +252,45 @@ pub(crate) struct Style {
     pub block: bool,
     pub hidden: bool,
     pub pre: bool,
-    pub margin: u32,
-    pub padding: u32,
+    pub margin: Edges,
+    pub padding: Edges,
+    pub auto_left: bool,
+    pub auto_right: bool,
+    pub atomic: bool,
+    pub flex: bool,
+    pub table_row: bool,
+    pub float_right: bool,
+    pub align: Align,
+    pub justify: Align,
+    pub cross_align: Align,
+    pub gap: u32,
+    pub line_height: Option<u32>,
+    pub min_width: u32,
+    pub min_height: u32,
+    pub border: u32,
+    pub border_box: bool,
+    pub underline: bool,
+    pub radius: u32,
     pub width: Option<u32>,
     pub height: Option<u32>,
 }
 impl Style {
+    pub fn min_content_width(&self) -> u32 {
+        if self.border_box {
+            self.min_width
+                .saturating_sub(self.padding.horizontal() + self.border * 2)
+        } else {
+            self.min_width
+        }
+    }
+    pub fn min_content_height(&self) -> u32 {
+        if self.border_box {
+            self.min_height
+                .saturating_sub(self.padding.vertical() + self.border * 2)
+        } else {
+            self.min_height
+        }
+    }
     pub fn root() -> Self {
         Self {
             color: 0x202124,
@@ -194,8 +303,25 @@ impl Style {
             block: false,
             hidden: false,
             pre: false,
-            margin: 0,
-            padding: 0,
+            margin: Edges::default(),
+            padding: Edges::default(),
+            auto_left: false,
+            auto_right: false,
+            atomic: false,
+            flex: false,
+            table_row: false,
+            float_right: false,
+            align: Align::Start,
+            justify: Align::Start,
+            cross_align: Align::Start,
+            gap: 0,
+            line_height: None,
+            min_width: 0,
+            min_height: 0,
+            border: 0,
+            border_box: false,
+            underline: false,
+            radius: 0,
             width: None,
             height: None,
         }
@@ -213,10 +339,52 @@ impl Style {
                 }
             }
             "font-size" => {
-                if let Some(n) = pixels(value) {
+                if let Some(n) = font_length(value, self.font.size).or_else(|| match value {
+                    "small" => Some(13),
+                    "medium" => Some(16),
+                    "large" => Some(18),
+                    _ => None,
+                }) {
                     self.scale = ((n + 7) / 8).clamp(1, 4);
                     self.font.size = n.clamp(1, 96) as u16;
                 }
+            }
+            "font" => {
+                let tokens: Vec<_> = value.split_whitespace().collect();
+                if let Some((index, part)) = tokens.iter().enumerate().find(|(_, part)| {
+                    part.split('/')
+                        .next()
+                        .is_some_and(|v| v.ends_with("px") || v.ends_with("em") || v.ends_with('%'))
+                }) {
+                    let (size, line) = part
+                        .split_once('/')
+                        .map_or((*part, None), |(a, b)| (a, Some(b)));
+                    if let Some(size) = font_length(size, self.font.size) {
+                        self.font.bold = tokens[..index]
+                            .iter()
+                            .any(|v| *v == "bold" || v.parse::<u16>().is_ok_and(|n| n >= 600));
+                        self.font.size = size.clamp(1, 96) as u16;
+                        self.scale = size.div_ceil(8).clamp(1, 4);
+                        self.line_height = None;
+                        if let Some(line) = line {
+                            self.apply("line-height", line);
+                        }
+                        self.apply("font-family", &tokens[index + 1..].join(" "));
+                    }
+                }
+            }
+            "line-height" => {
+                self.line_height = if value == "normal" {
+                    None
+                } else if value.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+                    value
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|n| n.is_finite() && *n >= 0.0)
+                        .map(|n| (n * f32::from(self.font.size) + 0.5).min(1024.0) as u32)
+                } else {
+                    font_length(value, self.font.size)
+                };
             }
             "font-family" => {
                 self.font.family = if value.contains("monospace") || value.contains("courier") {
@@ -235,25 +403,133 @@ impl Style {
             "font-weight" => {
                 self.font.bold = value == "bold" || value.parse::<u16>().is_ok_and(|n| n >= 600)
             }
-            "display" => match value {
-                "none" => self.hidden = true,
-                "block" => self.block = true,
-                "inline" => self.block = false,
-                _ => {}
-            },
+            "display" => {
+                if [
+                    "none",
+                    "block",
+                    "inline",
+                    "inline-block",
+                    "flex",
+                    "inline-flex",
+                ]
+                .contains(&value)
+                {
+                    self.hidden = value == "none";
+                    self.block = value == "block" || value == "flex";
+                    self.atomic = value == "inline-block" || value == "inline-flex";
+                    self.flex = value == "flex" || value == "inline-flex";
+                }
+            }
             "white-space" => self.pre = value == "pre" || value == "pre-wrap",
             "margin" => {
-                if let Some(n) = pixels(value) {
-                    self.margin = n;
+                if let Some((edges, left, right)) = Edges::parse(value, true) {
+                    self.margin = edges;
+                    self.auto_left = left;
+                    self.auto_right = right;
                 }
             }
             "padding" => {
+                if let Some((edges, _, _)) = Edges::parse(value, false) {
+                    self.padding = edges;
+                }
+            }
+            "margin-top" => {
                 if let Some(n) = pixels(value) {
-                    self.padding = n;
+                    self.margin.top = n
+                }
+            }
+            "margin-bottom" => {
+                if let Some(n) = pixels(value) {
+                    self.margin.bottom = n
+                }
+            }
+            "margin-left" => {
+                if value == "auto" {
+                    self.auto_left = true;
+                    self.margin.left = 0
+                } else if let Some(n) = pixels(value) {
+                    self.margin.left = n;
+                    self.auto_left = false
+                }
+            }
+            "margin-right" => {
+                if value == "auto" {
+                    self.auto_right = true;
+                    self.margin.right = 0
+                } else if let Some(n) = pixels(value) {
+                    self.margin.right = n;
+                    self.auto_right = false
+                }
+            }
+            "padding-top" => {
+                if let Some(n) = pixels(value) {
+                    self.padding.top = n
+                }
+            }
+            "padding-bottom" => {
+                if let Some(n) = pixels(value) {
+                    self.padding.bottom = n
+                }
+            }
+            "padding-left" => {
+                if let Some(n) = pixels(value) {
+                    self.padding.left = n
+                }
+            }
+            "padding-right" => {
+                if let Some(n) = pixels(value) {
+                    self.padding.right = n
+                }
+            }
+            "min-width" => {
+                if let Some(n) = pixels(value) {
+                    self.min_width = n
+                }
+            }
+            "min-height" => {
+                if let Some(n) = pixels(value) {
+                    self.min_height = n
+                }
+            }
+            "text-align" => {
+                if let Some(n) = align(value) {
+                    self.align = n
+                }
+            }
+            "justify-content" => {
+                if let Some(n) = align(value) {
+                    self.justify = n
+                }
+            }
+            "align-items" => {
+                if let Some(n) = align(value) {
+                    self.cross_align = n
+                }
+            }
+            "gap" | "column-gap" => {
+                if let Some(n) = pixels(value) {
+                    self.gap = n
+                }
+            }
+            "float" => self.float_right = value == "right",
+            "box-sizing" => self.border_box = value == "border-box",
+            "text-decoration" | "text-decoration-line" => {
+                self.underline = value.split_whitespace().any(|v| v == "underline")
+            }
+            "border" | "border-width" => {
+                if value == "none" || value == "0" {
+                    self.border = 0
+                } else if let Some(n) = value.split_whitespace().find_map(pixels) {
+                    self.border = n.min(16)
                 }
             }
             "width" => self.width = pixels(value),
             "height" => self.height = pixels(value),
+            "border-radius" => {
+                if let Some(n) = pixels(value) {
+                    self.radius = n
+                }
+            }
             _ => {}
         }
     }
@@ -265,6 +541,9 @@ pub(crate) fn style(doc: &Document, id: usize, parent: &Style) -> Style {
         scale: parent.scale,
         font: parent.font,
         pre: parent.pre,
+        align: parent.align,
+        line_height: parent.line_height,
+        underline: parent.underline,
         ..Style::root()
     };
     if node.tag.is_empty() {
@@ -296,6 +575,11 @@ pub(crate) fn style(doc: &Document, id: usize, parent: &Style) -> Style {
         "dd",
         "table",
         "tr",
+        "center",
+        "form",
+        "tbody",
+        "thead",
+        "tfoot",
     ]
     .contains(&node.tag.as_str());
     result.hidden = [
@@ -303,14 +587,14 @@ pub(crate) fn style(doc: &Document, id: usize, parent: &Style) -> Style {
     ]
     .contains(&node.tag.as_str());
     if ["p", "h1", "h2", "h3", "ul", "ol", "pre", "blockquote"].contains(&node.tag.as_str()) {
-        result.margin = 8;
+        result.margin = Edges::all(8);
     }
     if ["h1", "h2"].contains(&node.tag.as_str()) {
         result.scale = (parent.scale * 2).min(4);
         result.font.size = parent.font.size.saturating_mul(2).min(96);
     }
     if ["ul", "ol", "blockquote", "dd"].contains(&node.tag.as_str()) {
-        result.padding = 12;
+        result.padding = Edges::all(12);
     }
     if ["pre", "code", "kbd", "samp"].contains(&node.tag.as_str()) {
         result.font.family = rustos_text::Family::Monospace;
@@ -323,6 +607,30 @@ pub(crate) fn style(doc: &Document, id: usize, parent: &Style) -> Style {
     }
     if node.tag == "a" && node.attr("href").is_some() {
         result.color = 0x1a56b0;
+        result.underline = true;
+    }
+    if node.tag == "body" {
+        result.margin = Edges::all(8);
+    }
+    if node.tag == "center" {
+        result.align = Align::Center;
+    }
+    if node.tag == "table" {
+        result.align = Align::Start;
+    }
+    if node.tag == "tr" {
+        result.flex = true;
+        result.table_row = true;
+    }
+    if let Some(value) = node.attr("align").and_then(align) {
+        result.align = value;
+    }
+    if node.tag == "input" || node.tag == "button" || node.tag == "textarea" {
+        result.color = 0;
+        result.font.family = rustos_text::Family::Sans;
+        result.font.size = 13;
+        result.border = 2;
+        result.line_height = None;
     }
     let inline = node.attr("style").map(declarations).unwrap_or_default();
     let mut candidates = Vec::new();
@@ -357,7 +665,16 @@ pub(crate) fn style(doc: &Document, id: usize, parent: &Style) -> Style {
     }
     candidates.sort_by_key(|entry| (entry.0, entry.1, entry.2, entry.3));
     for (_, _, _, _, key, value) in candidates {
-        result.apply(key, value);
+        if value == "inherit" {
+            match key {
+                "color" => result.color = parent.color,
+                "font" => result.font = parent.font,
+                "font-family" => result.font.family = parent.font.family,
+                _ => {}
+            }
+        } else {
+            result.apply(key, value);
+        }
     }
     result
 }

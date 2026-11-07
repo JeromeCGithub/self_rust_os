@@ -166,3 +166,11 @@ fn form_post_limits_methods_and_encodings_fail_without_partial_submission() {
         Err(Error::Limit)
     );
 }
+
+#[test]
+fn title_and_accessibility_names_do_not_become_input_placeholder_text() {
+    let doc=Document::parse("<form><input title='Google Search' aria-label='Search' name=q><input placeholder='Type a query' name=other><input type=password name=password></form>").unwrap();
+    assert_eq!(doc.forms[0].fields[0].display_value(), "");
+    assert_eq!(doc.forms[0].fields[1].display_value(), "Type a query");
+    assert_eq!(doc.forms[0].fields[2].display_value(), "");
+}
