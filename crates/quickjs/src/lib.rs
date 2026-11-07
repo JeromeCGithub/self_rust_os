@@ -47,6 +47,7 @@ pub struct Stats {
 extern "C" {
     fn rjs_create(memory: usize, stack: usize, polls: u64) -> *mut c_void;
     fn rjs_destroy(runtime: *mut c_void);
+    fn rjs_date(runtime: *mut c_void) -> i32;
     fn rjs_eval(
         runtime: *mut c_void,
         source: *const c_char,
@@ -89,6 +90,13 @@ impl Runtime {
             raw,
             _thread: PhantomData,
         })
+    }
+    /// Enable ECMAScript Date for a page realm. The plain evaluator keeps its
+    /// clock-free profile. Freestanding builds use the owner's epoch callback.
+    pub fn enable_date(&mut self) -> Result<(), Error> {
+        // SAFETY: Exclusive self owns a live, thread-confined context. This
+        // intrinsic installation retains no Rust pointer and copies no buffers.
+        status(unsafe { rjs_date(self.raw.as_ptr()) })
     }
     /// Evaluate a bounded UTF-8 classic script and copy its string result.
     /// Poll limits bound engine callbacks, not exact instruction or wall-clock counts.

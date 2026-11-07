@@ -1,0 +1,8 @@
+   Compiling rustos-browser-dom v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser-dom)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/lifecycle.rs (/home/jay/personal/os/jbrowse/crates/browser-dom/target/x86_64-unknown-linux-gnu/debug/deps/lifecycle-99c16c999e3a6e21)
+
+running 1 test
+test native_page_contexts_release_engine_allocations_after_navigation_and_job_failure ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s

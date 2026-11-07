@@ -129,6 +129,61 @@ impl Changes {
     }
 }
 impl Document {
+    /// Count nonempty headings whose destination has a rendered text link.
+    /// This content-free diagnostic distinguishes a result list from an empty
+    /// script/verification response; it is not a site-compatibility claim.
+    pub fn linked_heading_count(&self, page: &Page) -> usize {
+        let rendered: alloc::collections::BTreeSet<_> = page
+            .items
+            .iter()
+            .filter(|item| !item.text.trim().is_empty())
+            .filter_map(|item| item.link.as_deref())
+            .collect();
+        let visible = |id: usize| {
+            self.nodes.get(id).is_some_and(|node| {
+                node.tag == "a"
+                    && node
+                        .attr("href")
+                        .is_some_and(|href| rendered.contains(href))
+            })
+        };
+        self.connected_nodes()
+            .into_iter()
+            .filter(|&id| {
+                let node = &self.nodes[id];
+                if !["h1", "h2", "h3", "h4", "h5", "h6"].contains(&node.tag.as_str())
+                    || self
+                        .text_content(id)
+                        .map_or(true, |text| text.trim().is_empty())
+                {
+                    return false;
+                }
+                let mut parent = Some(id);
+                for _ in 0..=MAX_DEPTH {
+                    let Some(id) = parent else {
+                        break;
+                    };
+                    if visible(id) {
+                        return true;
+                    }
+                    parent = self.nodes.get(id).and_then(|node| node.parent);
+                }
+                let mut todo = node.children.clone();
+                for _ in 0..MAX_NODES {
+                    let Some(id) = todo.pop() else {
+                        break;
+                    };
+                    if visible(id) {
+                        return true;
+                    }
+                    if let Some(node) = self.nodes.get(id) {
+                        todo.extend_from_slice(&node.children);
+                    }
+                }
+                false
+            })
+            .count()
+    }
     /// Validate all effects on a bounded copy before publishing any page mutation.
     pub fn apply_changes(&mut self, changes: &Changes) -> Result<(), Error> {
         changes.encode()?;

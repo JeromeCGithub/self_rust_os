@@ -55,6 +55,17 @@ pub trait Transport {
         None
     }
 }
+/// Application-owned request cookie policy, consulted with the complete effective
+/// URL on every redirect hop. Returned values are copied before the next call.
+/// This interface does not expose response Set-Cookie or implement cookie policy.
+pub trait RequestCookies {
+    fn header(&mut self, url: &str) -> Result<&str, Error>;
+}
+impl RequestCookies for () {
+    fn header(&mut self, _url: &str) -> Result<&str, Error> {
+        Ok("")
+    }
+}
 #[derive(Debug, Clone, Copy)]
 /// Resolver, deadline and resource policy for an HTTP request.
 pub struct Options {
@@ -164,10 +175,22 @@ pub fn get_with_url(
 pub fn request_with_url(
     t: &mut impl Transport,
     url: &str,
+    request: Request<'_>,
+    options: Options,
+    body: impl FnMut(&[u8]) -> Result<(), Error>,
+    effective: impl FnMut(&str),
+) -> Result<Response, Error> {
+    request_with_cookies(t, url, request, options, body, effective, &mut ())
+}
+/// HTTP request with per-hop application cookie selection and normal TLS rules.
+pub fn request_with_cookies(
+    t: &mut impl Transport,
+    url: &str,
     mut request: Request<'_>,
     options: Options,
     mut body: impl FnMut(&[u8]) -> Result<(), Error>,
     mut effective: impl FnMut(&str),
+    cookies: &mut impl RequestCookies,
 ) -> Result<Response, Error> {
     if options.timeout_ticks == 0 || options.dns_port == 0 {
         return Err(Error::InvalidUrl);
@@ -205,6 +228,7 @@ pub fn request_with_url(
             options,
             &mut location,
             &mut body,
+            cookies,
         )
         .map_err(|error| t.transport_error().unwrap_or(error));
         t.close(handle);
@@ -253,6 +277,7 @@ fn exchange(
     options: Options,
     location: &mut url::Text<{ limits::TARGET }>,
     body: &mut impl FnMut(&[u8]) -> Result<(), Error>,
+    cookies: &mut impl RequestCookies,
 ) -> Result<Outcome, Error> {
     use rustos_net_abi::{CONNECTED, EOF};
     let start = t.ticks();
@@ -282,7 +307,19 @@ fn exchange(
         }
         t.start_tls(handle, url.host.as_str(), remaining, options.tls_ca_file)?;
     }
-    send_request(t, handle, url, request, start, options)?;
+    let mut current = url::Text::<{ limits::REQUEST }>::new();
+    current.push(if url.tls { "https://" } else { "http://" })?;
+    url.authority(&mut current)?;
+    current.push(url.target.as_str())?;
+    send_request(
+        t,
+        handle,
+        url,
+        request,
+        start,
+        options,
+        cookies.header(current.as_str())?,
+    )?;
     let mut reader = wire::Reader::new(t, handle, start, options);
     let head = wire::headers(&mut reader, location)?;
     if [301, 302, 303, 307, 308].contains(&head.status) && !location.as_str().is_empty() {
@@ -333,6 +370,7 @@ fn send_request(
     method: Request<'_>,
     start: u64,
     options: Options,
+    cookie: &str,
 ) -> Result<(), Error> {
     use core::fmt::Write;
     let mut request = url::Text::<{ limits::REQUEST }>::new();
@@ -344,6 +382,17 @@ fn send_request(
     request.push(" HTTP/1.1\r\nHost: ")?;
     url.authority(&mut request)?;
     request.push("\r\nUser-Agent: RustOS-curl/1\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n")?;
+    if cookie.len() > 4096 {
+        return Err(Error::TooLarge);
+    }
+    if !cookie.is_ascii() || cookie.bytes().any(|b| !(32..127).contains(&b)) {
+        return Err(Error::Protocol);
+    }
+    if !cookie.is_empty() {
+        request.push("Cookie: ")?;
+        request.push(cookie)?;
+        request.push("\r\n")?;
+    }
     if let Request::GetRange(range) = method {
         write!(
             &mut request,

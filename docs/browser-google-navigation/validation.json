@@ -1,0 +1,26 @@
+{
+  "base_commit": "31329ad",
+  "image_sha256": "c95e5c2bd64b7c2397c9cdaffa44dfc688dfd13beae75b0e6444ff991385c804",
+  "cpus": 8,
+  "google_results_passed": false,
+  "native_google": {
+    "http_status": 429,
+    "linked_headings": 0,
+    "links": 1,
+    "script_errors": 1,
+    "style_errors": 0,
+    "script_navigation_seen": true,
+    "default_home_script_errors": 2
+  },
+  "manual_gui_checked": false,
+  "sources_and_binaries": {
+    "crates/browser-dom/src/lib.rs": "15a379e501bcfdbe12ed89b0f180015c72bcdae4b17f42ad29edd8635248fec3",
+    "crates/browser-dom/src/bindings.js": "121ebdc439c2626ac1a0b1e852314c359e88e331adc956223e49d49922d9a0e2",
+    "crates/browser/src/cookies.rs": "e0643b630f8728b3b447604211ab1e402b717887b3c7e56d46658e36996cf840",
+    "crates/browser/src/page_context.rs": "1a6adf3e3089e5934a7b9c21421f38f02deea44308be1e37fecd7dfb9df05d51",
+    "crates/http/src/lib.rs": "85500d640f70aea8ccecd283392adb7725c3f8f0d351193069198e08ed6535b6",
+    "user_programs/jworker/jworker.bin": "b270ab14742b3b24f83e6c2d35a458b4b3969794da6ad4442dbb35f68e0a41f7",
+    "user_programs/jbrowse/jbrowse.bin": "f35a07462452364299443d2139275c65c3084d3904a8e21d5f07315cecc37a00"
+  },
+  "implementation_commit": "717ff6f"
+}

@@ -112,6 +112,79 @@ fn content_length_and_fragmented_headers_short_writes() {
 }
 
 #[test]
+fn cookies_are_selected_for_each_redirect_url_and_injection_fails_closed() {
+    use rustos_http::{request_with_cookies, Request, RequestCookies};
+    struct Cookies {
+        seen: Vec<String>,
+        bad: bool,
+    }
+    impl RequestCookies for Cookies {
+        fn header(&mut self, url: &str) -> Result<&str, Error> {
+            self.seen.push(url.into());
+            Ok(if self.bad {
+                "x=y\r\nHost: evil"
+            } else if url.starts_with("https://10.0.2.2/") {
+                "proof=abc"
+            } else {
+                ""
+            })
+        }
+    }
+    let mut m = Mock {
+        tls: true,
+        short: 3,
+        ..Mock::default()
+    };
+    m.incoming.push_back(
+        b"HTTP/1.1 302 Found\r\nLocation: https://10.0.2.3/other\r\nContent-Length: 0\r\n\r\n"
+            .to_vec(),
+    );
+    m.incoming
+        .push_back(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec());
+    let mut cookies = Cookies {
+        seen: vec![],
+        bad: false,
+    };
+    request_with_cookies(
+        &mut m,
+        "https://10.0.2.2/search",
+        Request::Get,
+        Options::default(),
+        |_| Ok(()),
+        |_| {},
+        &mut cookies,
+    )
+    .unwrap();
+    let sent = String::from_utf8(m.sent.clone()).unwrap();
+    assert_eq!(sent.matches("Cookie: proof=abc\r\n").count(), 1);
+    assert_eq!(
+        cookies.seen,
+        vec!["https://10.0.2.2/search", "https://10.0.2.3/other"]
+    );
+    assert!(!sent.split("GET /other").nth(1).unwrap().contains("Cookie:"));
+    assert_eq!((m.opened, m.closed), (2, 2));
+    let mut bad = Mock {
+        tls: true,
+        ..Mock::default()
+    };
+    cookies.bad = true;
+    assert_eq!(
+        request_with_cookies(
+            &mut bad,
+            "https://10.0.2.2/",
+            Request::Get,
+            Options::default(),
+            |_| Ok(()),
+            |_| {},
+            &mut cookies
+        ),
+        Err(Error::Protocol)
+    );
+    assert!(bad.sent.is_empty());
+    assert_eq!((bad.opened, bad.closed), (1, 1));
+}
+
+#[test]
 fn ranged_get_validates_coordinates_and_exact_body_before_accepting_a_seek() {
     use rustos_http::{request_with_url, ByteRange, ContentRange, Request};
     for (last, total) in [(7, 100), (7, 8)] {

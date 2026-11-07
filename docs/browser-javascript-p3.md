@@ -6,6 +6,10 @@ classes/private fields, closures/functions, arrays/objects and promises while
 mutating a document through bounded native calls. This is an initial binding
 profile, not completion of the [P3 browser API/session gate](browser-support-plan.md).
 
+The [Google follow-up](browser-google-navigation.md) extends this initial profile
+with page URL/clock metadata, host-only cookies and bounded script navigation.
+The tables below describe the initial P3 scope; the follow-up documents additions.
+
 ## Ownership and execution
 
 [`rustos-browser-dom`](../crates/browser-dom/src/lib.rs) owns one parsed document

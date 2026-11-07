@@ -1,0 +1,22 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running tests/cookies.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/cookies-b8874c8aa3fb170a)
+
+running 1 test
+test insecure_documents_cannot_delete_secure_values_and_snapshots_keep_duplicate_paths ... FAILED
+
+failures:
+
+---- insecure_documents_cannot_delete_secure_values_and_snapshots_keep_duplicate_paths stdout ----
+
+thread 'insecure_documents_cannot_delete_secure_values_and_snapshots_keep_duplicate_paths' panicked at tests/cookies.rs:45:5:
+assertion failed: !jar.set_document("http://a.test/", "proof=gone; Path=/; Max-Age=0", 101)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    insecure_documents_cannot_delete_secure_values_and_snapshots_keep_duplicate_paths
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test cookies`

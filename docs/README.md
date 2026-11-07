@@ -31,6 +31,7 @@ current behavior; architecture targets are not evidence of implemented features.
 | [Browser P6 audio](browser-media-p6.md) | Bounded native PCM, userspace WAV player, pause/seek and captured-sound evidence; video remains open |
 | [Browser performance](browser-performance.md) | Fixed native startup/page/navigation budgets, on-demand font outlines and before/after evidence |
 | [Browser P5 forms](browser-sessions-p5.md) | Masked password controls and bounded POST/redirect foundations; authenticated sessions remain open |
+| [Google navigation and cookies](browser-google-navigation.md) | Generated-script stack fix, bounded page/session effects, native cookie navigation and live HTTP429 failure |
 | [Browser P4 Google gate](browser-google-p4.md) | Native DOM attributes/base64, scripted link navigation and the still-open results gate |
 | [Browser P3 JavaScript](browser-javascript-p3.md) | Restricted QuickJS DOM effects, bounded promise checkpoints, nested owned IPC and open web API gates |
 | [Browser P2 presentation](browser-rendering-p2.md) | Proportional native fonts, bounded PNG, stylesheet order and navigation; remaining classic browsing gates |

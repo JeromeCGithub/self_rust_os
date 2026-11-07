@@ -3,6 +3,11 @@ use rustos_browser::{
     Document,
 };
 #[test]
+fn linked_heading_evidence_requires_rendered_navigation_and_nonempty_text() {
+    let doc=Document::parse("<h3>Unlinked</h3><a href='/one'><h3>First title</h3></a><h2><a href='/two'>Second title</a></h2><a href='/empty'><h3></h3></a><div style='display:none'><a href='/hidden'><h3>Hidden title</h3></a></div>").unwrap();
+    assert_eq!(doc.linked_heading_count(&doc.layout(640)), 2);
+}
+#[test]
 fn bounded_pointer_free_changes_round_trip_and_reject_malformed_input() {
     let changes = Changes {
         failures: 2,

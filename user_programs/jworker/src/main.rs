@@ -57,7 +57,9 @@ fn main() {
             Some(value) => value,
             None => sys::exit(64),
         };
-        if !matches!(header.kind, Kind::Eval | Kind::Document) || header.generation != sequence {
+        if !matches!(header.kind, Kind::Eval | Kind::Document | Kind::Page)
+            || header.generation != sequence
+        {
             sys::exit(64)
         }
         let mut source = Vec::new();
@@ -66,13 +68,20 @@ fn main() {
         }
         source.resize(header.length, 0);
         read_exact(&mut source);
-        let result = match core::str::from_utf8(&source) {
-            Ok(source) if header.kind == Kind::Eval => {
-                runtime.eval(source).map(|text| text.into_bytes())
+        let result = if header.kind == Kind::Page {
+            rustos_browser::page_context::PageRequest::decode(&source)
+                .map_err(|_| Error::InvalidInput)
+                .and_then(|request| rustos_browser_dom::run_page(request, monotonic_millis))
+                .and_then(|reply| reply.encode().map_err(|_| Error::OutputLimit))
+        } else {
+            match core::str::from_utf8(&source) {
+                Ok(source) if header.kind == Kind::Eval => {
+                    runtime.eval(source).map(|text| text.into_bytes())
+                }
+                Ok(html) => rustos_browser_dom::run(html)
+                    .and_then(|changes| changes.encode().map_err(|_| Error::OutputLimit)),
+                Err(_) => Err(Error::InvalidInput),
             }
-            Ok(html) => rustos_browser_dom::run(html)
-                .and_then(|changes| changes.encode().map_err(|_| Error::OutputLimit)),
-            Err(_) => Err(Error::InvalidInput),
         };
         match result {
             Ok(result) => {
@@ -105,11 +114,16 @@ fn main() {
 }
 #[no_mangle]
 extern "C" fn rustos_qjs_epoch_micros() -> u64 {
-    // This is only a non-cryptographic Math.random seed, never certificate time.
+    // Page Date and the non-cryptographic Math.random seed use the same RTC.
+    // The HTTP process independently obtains certificate time from the SDK.
     match userlib::system::unix_time() {
         Ok(seconds) => seconds.saturating_mul(1_000_000),
-        Err(_) => sys::ticks(),
+        Err(_) => sys::exit(78),
     }
+}
+fn monotonic_millis() -> u64 {
+    // PIT divisor 65536 / input 1193182 Hz, as documented by syscall ticks.
+    sys::ticks().saturating_mul(65_536_000) / 1_193_182
 }
 #[no_mangle]
 extern "C" fn rustos_qjs_abort() -> ! {

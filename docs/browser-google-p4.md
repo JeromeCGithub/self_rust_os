@@ -2,7 +2,8 @@
 
 P4 remains **in progress**. Google is still the default start page. This increment
 adds general attribute mutations and browser base64 utilities to the restricted
-native document worker. It does not pass the Google results acceptance gate.
+native document worker. The [navigation/cookie follow-up](browser-google-navigation.md)
+adds page context and fixes the generated-script stack failure. It does not pass the Google results acceptance gate.
 
 ## Ownership and supported behavior
 
@@ -32,8 +33,9 @@ No native pointer or OS authority is transferred. Limits remain256 effects,
 8192 wire bytes,64 attributes per node and128 bytes per attribute name.
 
 Changing an `on*` attribute does not create an event handler. Dynamic script loading,
-events, timers, location/navigation bindings, cookies and external/module scripts
-remain unsupported. Inline stylesheet text mutations do not rebuild stylesheet
+events, timers and external/module scripts remain unsupported. Bounded HTTP(S)
+script navigation and host-only document cookies are now supported by the
+[follow-up](browser-google-navigation.md). Inline stylesheet text mutations do not rebuild stylesheet
 rules. This is a declared subset, not WPT conformance.
 
 ## Public-site diagnosis and next work

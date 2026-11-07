@@ -66,12 +66,39 @@
     get body() { return wrap(call(1, 0, '', '')); },
     get title() { return call(2, 0, '', ''); },
     set title(value) { call(3, 0, String(value), ''); },
-    getElementById(value) { return wrap(call(0, 0, String(value), '')); }
+    getElementById(value) { return wrap(call(0, 0, String(value), '')); },
+    get URL() { return call(11,0,'',''); },
+    get cookie() { return call(12,0,'',''); },
+    set cookie(value) { call(13,0,String(value),''); }
   };
   Object.defineProperty(globalThis, 'document', {value:document});
   Object.defineProperty(globalThis, 'Element', {value:Element});
   globalThis.window = globalThis;
   globalThis.self = globalThis;
+  const pageURL=call(11,0,'','');
+  Object.defineProperty(globalThis,'navigator',{value:{
+    get userAgent(){return 'RustOS-curl/1';},get platform(){return 'RustOS';},
+    get cookieEnabled(){return pageURL!=='';}
+  }});
+  if(pageURL) {
+    const parts=/^(https?):\/\/([^/:?#]+)(?::([0-9]+))?(\/[^?#]*)(\?[^#]*)?(#.*)?$/.exec(pageURL);
+    if(!parts)throw new TypeError('Invalid page URL');
+    const location={
+      get href(){return pageURL;},set href(value){call(14,0,String(value),'');},
+      get protocol(){return parts[1]+':';},get hostname(){return parts[2];},
+      get port(){return parts[3]||'';},get host(){return parts[2]+(parts[3]?':'+parts[3]:'');},
+      get pathname(){return parts[4];},get search(){return parts[5]||'';},get hash(){return parts[6]||'';},
+      assign(value){call(14,0,String(value),'');},replace(value){call(14,0,String(value),'');},
+      toString(){return pageURL;}
+    };
+    for(const object of [globalThis,document]) Object.defineProperty(object,'location',{
+      get(){return location;},set(value){call(14,0,String(value),'');}
+    });
+    Object.defineProperty(globalThis,'performance',{value:Object.freeze({
+      timeOrigin:Number(call(16,0,'',''))*1000,
+      now(){return Number(call(15,0,'',''));}
+    })});
+  }
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
   function invalidBase64() {
     const error = new Error('Invalid base64 binary string');

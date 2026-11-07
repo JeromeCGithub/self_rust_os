@@ -20,6 +20,11 @@ fn framing_rejects_ambient_handles_lengths_reserved_bytes_and_wrong_versions() {
     }
     assert!(header(Kind::Eval, 0, 1, 0).bytes().is_err());
     assert!(header(Kind::Eval, 1, MAX_SOURCE + 1, 0).bytes().is_err());
+    assert!(header(Kind::Page, 1, MAX_SOURCE + 1, 0).bytes().is_err());
+    assert_eq!(
+        Header::parse(header(Kind::Page, 1, 24, 0).bytes().unwrap()),
+        Ok(header(Kind::Page, 1, 24, 0))
+    );
     assert!(header(Kind::Failure, 1, 1, 3).bytes().is_err());
     assert!(header(Kind::Ready, 1, 0, 0).bytes().is_err());
     assert!(header(Kind::Result, 1, 8193, 0).bytes().is_err());
@@ -93,6 +98,20 @@ fn copied_results_cancel_and_stale_replies_obey_session_ownership() {
     .unwrap();
     assert_eq!(cancel.eval("6*7", || true), Err(Error::Cancelled));
     assert_eq!(drops.get(), 3);
+}
+
+#[test]
+fn page_context_requests_preserve_binary_fields_and_normal_cancellation_cleanup() {
+    let drops = Rc::new(Cell::new(0));
+    let input = b"JPQ1\0\0\0\0context";
+    let mut session = Session::connect(
+        fake(header(Kind::Result, 1, 4, 0), b"JPR1", drops.clone()),
+        || false,
+    )
+    .unwrap();
+    assert_eq!(session.render_page(input, || false), Ok(b"JPR1".to_vec()));
+    assert_eq!(session.render_page(input, || true), Err(Error::Cancelled));
+    assert_eq!(drops.get(), 1);
 }
 #[test]
 fn missing_worker_response_is_bounded_and_freed() {
