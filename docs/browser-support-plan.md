@@ -323,6 +323,7 @@ of ordinary unencrypted playback.
 Initial implementation: [pinned native task corpus and displayed-page probes](browser-compatibility-p8.md).
 The initial assessment fails; Google, YouTube, Facebook and broad compatibility
 remain open. Loading placeholders and HTTP200 responses are not task passes.
+Follow-up: [real-browser CSS comparisons, bounded larger documents and packed worker transfers](browser-css-comparison.md).
 
 Publish a versioned corpus before claiming “most”: proposed initial scope is 30
 sites/tasks spanning static documentation, encyclopedia/news, responsive images,

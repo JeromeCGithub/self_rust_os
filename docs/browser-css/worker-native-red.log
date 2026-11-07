@@ -1,0 +1,9 @@
+qemu-system-x86_64: terminating on signal 15 from pid 495883 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/browser_p1.py", line 69, in <module>
+    main()
+    ~~~~^^
+  File "/home/jay/personal/os/jbrowse/e2e/browser_p1.py", line 51, in main
+    assert output.count('[sandbox] packed_source_bytes=131072')==3,'missing three complete upper-bound packed transfers'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: missing three complete upper-bound packed transfers

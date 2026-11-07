@@ -1,0 +1,13 @@
+E..
+======================================================================
+ERROR: test_control_ink_bounds_distinguish_missing_or_small_glyphs (test_browser_css.NativeCSSReadback.test_control_ink_bounds_distinguish_missing_or_small_glyphs)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/tools/tests/test_browser_css.py", line 28, in test_control_ink_bounds_distinguish_missing_or_small_glyphs
+    from browser_css import dark_bounds
+ImportError: cannot import name 'dark_bounds' from 'browser_css' (/home/jay/personal/os/jbrowse/tools/browser_css.py)
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.012s
+
+FAILED (errors=1)

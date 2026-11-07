@@ -67,8 +67,10 @@ The P1 wire adds `Document=4`; header/version/sequence/reserved/status checks st
 in place. Document input is at most128 KiB, replies at most8192 bytes and256 effects.
 `JDM1` records contain a magic, u32 failure count, u16 effect count, zero u16 reserved,
 then operation/u32 node/u16 property length/u16 value length and UTF-8 strings.
-The application retains the existing256 KiB static HTML limit; larger pages can
-render static content but native script requests above128 KiB fail explicitly.
+P3 initially used a256 KiB static HTML limit. The current
+[document envelope](browser-css-comparison.md) is2 MiB; executable-document
+requests above128 KiB still fail the worker profile explicitly. Non-executable
+data-script blocks do not start a worker merely because they contain large data.
 At most64 inline scripts/128 KiB aggregate source execute per request. Each engine
 uses4 MiB/64 KiB stack/100 interrupt polls; checkpoints allow128 jobs. The worker
 process keeps its P1 16 MiB heap cap and180-tick total transport deadline. Outer

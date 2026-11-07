@@ -1,0 +1,11 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+error[E0609]: no field `radius` on type `&Item`
+  --> tests/css_layout.rs:74:43
+   |
+74 |     assert_eq!(background(&page,0x0000ff).radius,100);
+   |                                           ^^^^^^ unknown field
+   |
+   = note: available fields are: `x`, `y`, `width`, `height`, `text` ... and 7 others
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `rustos-browser` (test "css_layout") due to 1 previous error

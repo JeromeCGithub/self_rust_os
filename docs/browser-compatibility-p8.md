@@ -8,6 +8,10 @@ Changing a URL/check/profile invalidates the report's canonical manifest digest.
 Reports bind evidence to a SHA256 of the tested disk image. The assessor checks
 reporting discipline and evidence files; it cannot authenticate an invented report.
 
+This page records the initial probe baseline. The subsequent
+[CSS/reference and transfer work](browser-css-comparison.md) has its own tested
+build/evidence and assessment; it does not turn the initial failures into passes.
+
 The [initial partial assessment](browser-p8/assessment.json) **fails**:1/27
 ordinary tasks, all three mandatory gates open, one partial run rather than three
 scheduled runs. [Observations](browser-p8/report.json) retain every unrun task.

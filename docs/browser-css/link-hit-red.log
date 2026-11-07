@@ -1,0 +1,33 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/css_layout.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/css_layout-c4394b0bd75838cb)
+
+running 10 tests
+test background_radius_is_retained_for_the_native_painter ... ok
+test border_box_minimums_include_padding_and_color_decorations_follow_the_cascade ... ok
+test fixed_height_flex_centers_an_item_whose_margin_box_overflows ... ok
+test malformed_sides_are_ignored_atomically_and_display_can_override_display_none ... ok
+test inline_box_padding_remains_a_link_hit_target ... FAILED
+test authored_control_dimensions_and_fonts_reach_the_renderer ... ok
+test css_auto_margins_center_a_fixed_width_box ... ok
+test css_four_sided_boxes_have_browser_content_and_border_geometry ... ok
+test inline_blocks_share_a_centered_line_instead_of_full_width_backgrounds ... ok
+test flex_rows_respect_gap_and_cross_axis_centering ... ok
+
+failures:
+
+---- inline_box_padding_remains_a_link_hit_target stdout ----
+
+thread 'inline_box_padding_remains_a_link_hit_target' panicked at tests/css_layout.rs:88:5:
+assertion `left == right` failed
+  left: None
+ right: Some("/next")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    inline_box_padding_remains_a_link_hit_target
+
+test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test css_layout`

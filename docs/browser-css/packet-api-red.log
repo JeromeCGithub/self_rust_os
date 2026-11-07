@@ -1,0 +1,7 @@
+error: couldn't read `user_programs/userlib/src/process/packet.rs`: No such file or directory (os error 2)
+ --> user_programs/userlib/src/process/packet_tests.rs:1:21
+  |
+1 | #[path="packet.rs"] mod packet;
+  |                     ^^^^^^^^^^^
+
+error: aborting due to 1 previous error

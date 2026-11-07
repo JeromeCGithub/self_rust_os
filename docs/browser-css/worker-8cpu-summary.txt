@@ -1,0 +1,7 @@
+[sandbox] active_worker_frames=3354
+[sandbox] packed_source_bytes=131072
+[sandbox] active_worker_frames=3354
+[sandbox] packed_source_bytes=131072
+[sandbox] active_worker_frames=3354
+[sandbox] packed_source_bytes=131072
+[sandbox] PASS restrictions, engine recovery, cancellation, crash, deadline, malformed IPC and frame recovery

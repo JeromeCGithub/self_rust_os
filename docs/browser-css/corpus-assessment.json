@@ -1,0 +1,21 @@
+{
+  "passed": false,
+  "required_runs": 3,
+  "recorded_runs": 1,
+  "manifest_sha256": "31f6c2813ffa080dd2681bd8c95fe10f944a43d9255eeb46b845e5b3093c2dbb",
+  "build_id": "b2e547d791121274f671ba0d009079c7b14746e4ff1b834512c4eebfee4f4e72",
+  "runs": [
+    {
+      "id": "native-after-css-and-resource-fixes",
+      "passed": false,
+      "ordinary_passed": 1,
+      "ordinary_total": 27,
+      "mandatory": {
+        "facebook-session": false,
+        "google-search": false,
+        "youtube-video": false
+      },
+      "missing_tasks": []
+    }
+  ]
+}

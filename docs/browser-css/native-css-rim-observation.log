@@ -1,0 +1,11 @@
+/home/jay/personal/os/jbrowse/e2e/jbrowse.py:245: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+  actual_digest=rgb_digest(body.getdata())
+qemu-system-x86_64: terminating on signal 15 from pid 474274 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 259, in <module>
+    assert_rectangles(frame.crop((ox,oy+64,ox+640,oy+372)),expected)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jay/personal/os/jbrowse/tools/browser_css.py", line 13, in assert_rectangles
+    assert actual == item['box'], f'CSS background {color:#08x}: {actual} != {item["box"]}'
+           ^^^^^^^^^^^^^^^^^^^^^
+AssertionError: CSS background 0xaaffaa: [580, 109, 59, 30] != [580, 109, 60, 30]

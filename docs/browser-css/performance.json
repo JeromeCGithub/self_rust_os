@@ -1,0 +1,41 @@
+{
+  "passed": true,
+  "trials": 3,
+  "phases": {
+    "window": {
+      "median_seconds": 0.909126523998566,
+      "maximum_seconds": 0.9552218220051145,
+      "budget_seconds": 1.0
+    },
+    "first_page": {
+      "median_seconds": 1.3625346299959347,
+      "maximum_seconds": 1.415603818008094,
+      "budget_seconds": 2.0
+    },
+    "navigation": {
+      "median_seconds": 0.8255282440077281,
+      "maximum_seconds": 0.8427906809956767,
+      "budget_seconds": 1.0
+    }
+  },
+  "samples": [
+    {
+      "window": 0.8935006660030922,
+      "first_page": 1.345650768998894,
+      "navigation": 0.8427906809956767
+    },
+    {
+      "window": 0.909126523998566,
+      "first_page": 1.3625346299959347,
+      "navigation": 0.8255282440077281
+    },
+    {
+      "window": 0.9552218220051145,
+      "first_page": 1.415603818008094,
+      "navigation": 0.7910587520018453
+    }
+  ],
+  "cpus": 8,
+  "clock": "host monotonic",
+  "profile": "1GiB, TCG, 1920x1080, independent local HTTP/CSS"
+}

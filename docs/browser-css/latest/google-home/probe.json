@@ -1,0 +1,30 @@
+{
+  "url": "https://www.google.com/",
+  "title": "Google",
+  "load_probe_passed": false,
+  "complete_task_verified": false,
+  "elapsed_seconds": 4.884732532998896,
+  "budget_seconds": 5,
+  "counters": {
+    "http_status": 200,
+    "items": 23,
+    "links": 11,
+    "controls": 3,
+    "images": 1,
+    "truncated": 0,
+    "script_errors": 2,
+    "style_errors": 0,
+    "digest": 11333296159100160290
+  },
+  "ink_pixels": 38034,
+  "readback_digest": 11333296159100160290,
+  "submitted_digest": 11333296159100160290,
+  "checks": {
+    "title": true,
+    "readable_pixels": true,
+    "rendered_links": true
+  },
+  "error": null,
+  "unsupported_script": false,
+  "build_id": "b2e547d791121274f671ba0d009079c7b14746e4ff1b834512c4eebfee4f4e72"
+}

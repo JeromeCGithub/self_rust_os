@@ -1,0 +1,147 @@
+{
+  "title": "CSS reference layout",
+  "viewport": [
+    640,
+    308
+  ],
+  "elements": [
+    {
+      "id": "panel",
+      "tag": "DIV",
+      "box": [
+        8,
+        4,
+        120,
+        32
+      ],
+      "font": "16px / 20px monospace",
+      "color": "rgb(18, 52, 86)",
+      "display": "block",
+      "margin": "4px 8px",
+      "padding": "6px 10px"
+    },
+    {
+      "id": "mark",
+      "tag": "DIV",
+      "box": [
+        280,
+        40,
+        80,
+        30
+      ],
+      "font": "16px / 20px monospace",
+      "color": "rgb(18, 52, 86)",
+      "display": "block",
+      "margin": "0px 280px",
+      "padding": "4px 0px 6px"
+    },
+    {
+      "id": "inline",
+      "tag": "DIV",
+      "box": [
+        0,
+        70,
+        640,
+        24
+      ],
+      "font": "16px / 20px monospace",
+      "color": "rgb(18, 52, 86)",
+      "display": "block",
+      "margin": "0px",
+      "padding": "0px"
+    },
+    {
+      "id": "one",
+      "tag": "SPAN",
+      "box": [
+        230,
+        70,
+        80,
+        24
+      ],
+      "font": "16px / 20px monospace",
+      "color": "rgb(18, 52, 86)",
+      "display": "inline-block",
+      "margin": "0px",
+      "padding": "0px"
+    },
+    {
+      "id": "two",
+      "tag": "SPAN",
+      "box": [
+        310,
+        70,
+        100,
+        24
+      ],
+      "font": "16px / 20px monospace",
+      "color": "rgb(18, 52, 86)",
+      "display": "inline-block",
+      "margin": "0px",
+      "padding": "0px"
+    },
+    {
+      "id": "row",
+      "tag": "DIV",
+      "box": [
+        0,
+        94,
+        640,
+        60
+      ],
+      "font": "16px / 20px monospace",
+      "color": "rgb(18, 52, 86)",
+      "display": "flex",
+      "margin": "0px",
+      "padding": "0px"
+    },
+    {
+      "id": "short",
+      "tag": "DIV",
+      "box": [
+        530,
+        114,
+        40,
+        20
+      ],
+      "font": "16px / 20px monospace",
+      "color": "rgb(18, 52, 86)",
+      "display": "block",
+      "margin": "0px",
+      "padding": "0px"
+    },
+    {
+      "id": "tall",
+      "tag": "DIV",
+      "box": [
+        580,
+        109,
+        60,
+        30
+      ],
+      "font": "16px / 20px monospace",
+      "color": "rgb(18, 52, 86)",
+      "display": "block",
+      "margin": "0px",
+      "padding": "0px"
+    },
+    {
+      "id": "query",
+      "tag": "INPUT",
+      "box": [
+        0,
+        154,
+        514,
+        34
+      ],
+      "font": "18px sans-serif",
+      "color": "rgb(0, 0, 0)",
+      "display": "block",
+      "margin": "0px",
+      "padding": "5px 8px 0px 6px"
+    }
+  ],
+  "browser": "143.0.7499.169",
+  "source": "crates/browser/tests/fixtures/css-layout.html",
+  "source_sha256": "646c624ab4d3a2d9c1ab1367a743d486a05582a993107a73e5a8d1633350bad8"
+}
