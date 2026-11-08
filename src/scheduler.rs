@@ -40,6 +40,7 @@ struct Scheduler {
     ready_queue: VecDeque<Tid>,
     current: [Option<Tid>; 32],
     next_pid: Pid,
+    init_pid: Option<Pid>,
     generation: u64,
     phys_offset: u64,
     frame_allocator: Option<RegionFrameAllocator>,
@@ -53,6 +54,7 @@ impl Scheduler {
             ready_queue: VecDeque::new(),
             current: [None; 32],
             next_pid: 0,
+            init_pid: None,
             generation: 1,
             phys_offset: 0,
             frame_allocator: None,
@@ -100,6 +102,8 @@ impl Scheduler {
 }
 static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 
+mod supervision;
+pub use supervision::{child_next_user, terminate_child, configure_native_init, fault_current};
 mod events;
 mod placement;
 pub use events::wait_events;
@@ -480,9 +484,12 @@ fn spawn_process_inner(
         .unwrap_or_else(|| alloc::string::String::from("/"));
     let process = Process {
         pid,
+        parent: sched.current_pid(),
+        adoption_pending: false,
         state: ProcessState::Live,
         p4_frame,
         exit_code: 0,
+        exit_cause: rustos_process_abi::supervision::Cause::Exited,
         surface,
         text_cursor: (8, 8),
         console_enabled: true,
@@ -696,7 +703,7 @@ fn wake_waiters_locked(s: &mut Scheduler, pid: Pid) {
         if t.state == ThreadState::Blocked
             && matches!(t.reason,BlockReason::WaitPid(p) if p==pid || p==u32::MAX)
         {
-            set_return(t, code);
+            set_return(t, if s.init_pid.is_some() && reaped { ERROR } else { code });
             t.state = ThreadState::Ready;
             t.reason = BlockReason::None;
             s.ready_queue.push_back(t.tid);
@@ -709,17 +716,24 @@ fn wake_waiters_locked(s: &mut Scheduler, pid: Pid) {
     }
 }
 fn stop_process_locked(s: &mut Scheduler, pid: Pid, code: u64) {
+    stop_process_with_cause_locked(s, pid, code, rustos_process_abi::supervision::Cause::Exited);
+}
+fn stop_process_with_cause_locked(s: &mut Scheduler, pid: Pid, code: u64, cause: rustos_process_abi::supervision::Cause) {
+    if s.init_pid == Some(pid) { supervision::fatal_init(cause, code); }
     let Some(p) = s.processes.get_mut(pid as usize).and_then(Option::as_mut) else {
         return;
     };
+    if p.state == ProcessState::Zombie { return; }
     p.state = ProcessState::Zombie;
     p.files.clear();
     p.exit_code = code;
+    p.exit_cause = cause;
     stop_threads_locked(s, pid);
     smp::reschedule_all();
     crate::net::cleanup(pid);
     crate::audio::cleanup(pid);
     stop_owned_child_locked(s, pid);
+    supervision::adopt_orphans_locked(s);
     events::wake_locked(s);
     wake_waiters_locked(s, pid);
 }
@@ -734,11 +748,13 @@ pub fn exit_current(code: u64) {
 /// Stop a PID, including its remote threads. Destruction is deferred until quiescent.
 pub fn kill(pid: Pid) -> Option<u64> {
     let mut s = SCHEDULER.lock();
-    if s.processes.get(pid as usize)?.as_ref()?.state == ProcessState::Zombie {
+    let target = s.processes.get(pid as usize)?.as_ref()?;
+    if s.init_pid.is_some() && s.current_pid() != Some(pid) && target.parent != s.current_pid() { return None; }
+    if target.state == ProcessState::Zombie {
         return None;
     }
     let caller = s.current_tid();
-    stop_process_locked(&mut s, pid, 9);
+    stop_process_with_cause_locked(&mut s, pid, 9, rustos_process_abi::supervision::Cause::Killed);
     crate::serial_println!("[sched] process {} killed", pid);
     Some(
         if caller
@@ -764,6 +780,7 @@ pub fn waitpid(pid: Pid) -> u64 {
     let Some(p) = s.processes.get(pid as usize).and_then(Option::as_ref) else {
         return ERROR;
     };
+    if s.init_pid.is_some() && p.parent != s.current_pid() { return ERROR; }
     if p.state == ProcessState::Zombie {
         let code = p.exit_code;
         reap_connection_locked(&mut s, pid);

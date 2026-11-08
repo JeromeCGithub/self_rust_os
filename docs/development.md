@@ -137,3 +137,27 @@ target. Native threads are available through `userlib` with `features = ["thread
 see [the threading guide](threading.md). The OS loads fixed-address static ELF images and supports legacy flat binaries.
 Using the ELF container does not provide Linux ABI compatibility or dynamic linking.
 The shared root does not change syscall numbers, linker layout, or privileges.
+
+## Native Initator boot profile
+
+The default desktop still boots its compositor as PID 0. To build the separate
+headless service profile into an explicit disposable image:
+
+```bash
+RUSTOS_BOOT_PROFILE=native-init ./tools/build-grub-disk.sh target/init-m1.img
+RUSTOS_TEST_DISK=target/init-m1.img RUSTOS_CPUS=8 python3 -B e2e/init.py --case two-services
+```
+
+The profile enables kernel features `grub,native-init`; invalid profile values
+fail before builds or image writes. Initator (`/BIN/INITATOR.SVC`), Glow and Flicker
+are packaged with the existing `.service` marker and stay out of desktop icons.
+`zinit` is a `.test-only` probe installed only into a runner's private image copy.
+The runner's other cases cover faulting services, orphans, ABI rejection,
+reclamation, allocation failure, missing/bad initial images and fatal PID 1.
+Use `python3 -B e2e/init.py --help` for accepted case names. Never rebuild an
+attached image; each runner boots its own writable copy.
+
+M1 uses compiled definitions and coarse native tick deadlines. It is a trusted
+service experiment, not a secure multiuser system. System/user units, service IPC,
+configuration and graphical-session supervision follow in separate milestone PRs.
+See [current evidence and limitations](initator-progress.md).

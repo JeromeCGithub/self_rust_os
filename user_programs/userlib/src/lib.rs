@@ -40,6 +40,8 @@ pub mod audio;
 pub mod io;
 pub mod net;
 pub mod process;
+/// Owned native child-event and identity operations.
+pub mod supervision;
 pub mod sys;
 pub mod system;
 pub mod ui;

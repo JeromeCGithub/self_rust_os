@@ -7,6 +7,10 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering
 static IDS: [AtomicU32; MAX_CPUS] = [const { AtomicU32::new(u32::MAX) }; MAX_CPUS];
 static ONLINE: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
 static COUNT: AtomicUsize = AtomicUsize::new(1);
+// Release publishes terminal intent before the NMI doorbells. Each CPU publishes
+// its acknowledgement only after disabling maskable IRQs; no locks are involved.
+static TERMINAL: AtomicBool = AtomicBool::new(false);
+static PARKED: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
 static RELEASED: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "grub")]
 static TIMER: AtomicU32 = AtomicU32::new(0);
@@ -308,6 +312,11 @@ pub fn wake_idle() {
 }
 /// NMI handler: no locks or allocation, including when another CPU holds entry.
 pub fn invalidate_nmi() {
+    if TERMINAL.load(Ordering::Acquire) {
+        x86_64::instructions::interrupts::disable();
+        PARKED[current_cpu()].store(true, Ordering::Release);
+        loop { x86_64::instructions::hlt(); }
+    }
     let generation = GENERATION.load(Ordering::Acquire);
     let (frame, flags) = x86_64::registers::control::Cr3::read();
     // SAFETY: Reload the currently active valid P4; PCID/global mappings are
@@ -317,6 +326,32 @@ pub fn invalidate_nmi() {
     }
     ACK[current_cpu()].store(generation, Ordering::Release);
 }
+/// Park every other online CPU for an unrecoverable terminal transition.
+/// Caller holds kernel entry and retains every frame/device allocation forever.
+/// NMIs can interrupt gate/service lock holders without acquiring those locks.
+/// False reports an acknowledgement timeout; resources must still not be reused.
+pub fn park_others_terminal() -> bool {
+    x86_64::instructions::interrupts::disable();
+    TERMINAL.store(true, Ordering::Release);
+    let here = current_cpu();
+    let count = online_count();
+    if count == 1 { return true; }
+    for i in 0..count {
+        if i != here { apic::send(IDS[i].load(Ordering::Relaxed) as u8, 4 << 8); }
+    }
+    let mut all = true;
+    for i in 0..count {
+        if i == here { continue; }
+        let mut acknowledged = false;
+        for _ in 0..20_000_000 {
+            if PARKED[i].load(Ordering::Acquire) { acknowledged = true; break; }
+            core::hint::spin_loop();
+        }
+        all &= acknowledged;
+    }
+    all
+}
+
 /// Flush all CPUs before physical frame reuse. Caller holds kernel entry gate.
 pub fn shootdown() {
     let generation = GENERATION.fetch_add(1, Ordering::AcqRel) + 1;

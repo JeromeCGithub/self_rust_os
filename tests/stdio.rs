@@ -193,7 +193,7 @@ fn readiness_checks(host: u32, child: u32, context: &mut u64) {
         error,
         "pointer readiness belongs to the display owner"
     );
-    for (mask, timeout) in [(0, 0), (32, 0), (READ, u64::MAX)] {
+    for (mask, timeout) in [(0, 0), (64, 0), (READ, u64::MAX)] {
         assert_eq!(scheduler::wait_events(mask, timeout), error);
     }
     assert_eq!(scheduler::wait_events(WRITE, 0), WRITE);

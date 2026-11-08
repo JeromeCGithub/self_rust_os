@@ -110,6 +110,12 @@ pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: 
         rustos_process_abi::isolation::SYS_RESTRICT => {
             crate::scheduler::restrict_worker(arg1, arg2, arg3)
         }
+        rustos_process_abi::supervision::SYS_SELF if arg1 == 0 && arg2 == 0 && arg3 == 0 => {
+            crate::scheduler::current_pid().map(|pid| rustos_process_abi::supervision::ProcessKey {
+                pid, generation: 1 }.encode()).unwrap_or(SYSCALL_ERROR)
+        }
+        rustos_process_abi::supervision::SYS_CHILD_NEXT => crate::scheduler::child_next_user(arg1, arg2, arg3),
+        rustos_process_abi::supervision::SYS_TERMINATE => crate::scheduler::terminate_child(arg1, arg2, arg3),
         SYS_EXIT => {
             crate::scheduler::exit_current(arg1);
             PROCESS_EXIT_SENTINEL
@@ -183,8 +189,9 @@ pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: 
             }
             crate::scheduler::stdio_selected(arg1, arg2 as u32, arg3)
         }
-        SYS_KILL => sys_kill(arg1),
-        SYS_WAITPID => sys_waitpid(arg1),
+        SYS_KILL if arg2 == 0 && arg3 == 0 => sys_kill(arg1),
+        SYS_WAITPID if arg2 == 0 && arg3 == 0 => sys_waitpid(arg1),
+        SYS_KILL | SYS_WAITPID => SYSCALL_ERROR,
         SYS_MOUSE => sys_mouse(),
         SYS_MKDIR => sys_mkdir(arg1),
         SYS_FB_INFO => sys_fb_info(arg1),
@@ -647,6 +654,7 @@ pub(crate) fn spawn_at(path: &str, connected: bool, argv: &[&str], envp: &[&str]
 /// If killing the current process, returns `PROCESS_EXIT_SENTINEL` so the
 /// syscall handler schedules away (never returns to user).
 fn sys_kill(pid: u64) -> u64 {
+    if pid > u32::MAX as u64 { return SYSCALL_ERROR; }
     match crate::scheduler::kill(pid as u32) {
         Some(crate::scheduler::PROCESS_BLOCK_SENTINEL) => PROCESS_EXIT_SENTINEL,
         Some(_) => 0,
@@ -660,6 +668,7 @@ fn sys_kill(pid: u64) -> u64 {
 /// Otherwise blocks the current process until the target exits.
 /// Returns `SYSCALL_ERROR` for an invalid PID.
 fn sys_waitpid(pid: u64) -> u64 {
+    if pid > u32::MAX as u64 { return SYSCALL_ERROR; }
     crate::scheduler::waitpid(pid as u32)
 }
 

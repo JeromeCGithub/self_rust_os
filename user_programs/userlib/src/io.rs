@@ -40,3 +40,21 @@ macro_rules! println {
 mod cancel;
 #[cfg(feature = "alloc")]
 pub use cancel::Cancellation;
+
+mod record;
+/// Format a bounded diagnostic before writing. Formatting failure emits nothing.
+/// Unconnected console records use one syscall; connected stdio retains its own
+/// packet/stream semantics and does not gain cross-process atomicity.
+pub fn record(args: fmt::Arguments<'_>) -> fmt::Result {
+    let mut bytes = [0; 256];
+    let bytes = record::format(&mut bytes, args)?;
+    if crate::sys::console_write(bytes) == bytes.len() { Ok(()) } else { Err(fmt::Error) }
+}
+/// Best-effort diagnostic line, bounded to 256 UTF-8 bytes including newline.
+/// Oversized records are dropped whole; use io::record to handle errors directly.
+#[macro_export]
+macro_rules! recordln {
+    ($($arg:tt)*) => {{
+        let _ = $crate::io::record(format_args!("{}\n", format_args!($($arg)*)));
+    }};
+}

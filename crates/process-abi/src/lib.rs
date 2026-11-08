@@ -2,6 +2,8 @@
 #![no_std]
 /// Process-wide irreversible worker rights and heap budget.
 pub mod isolation;
+/// Owned process identity and child event records.
+pub mod supervision;
 /// Native argument-bearing spawn: path pointer, argument record pointer, flags.
 pub const SYS_SPAWN_ARGS: u64 = 29;
 /// Complete readable request size, including the 16-byte header.

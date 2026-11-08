@@ -13,12 +13,20 @@
 # No loop devices or root mounts are needed.
 #
 # Usage: ./tools/build-grub-disk.sh [output.img]
+# RUSTOS_BOOT_PROFILE=native-init selects the opt-in headless PID 1 profile;
+# desktop (the default) retains the existing graphical boot.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 IMG="${1:-${ROOT}/target/grub-disk.img}"
+
+case "${RUSTOS_BOOT_PROFILE:-desktop}" in
+    desktop) KERNEL_FEATURES=grub ;;
+    native-init) KERNEL_FEATURES=grub,native-init ;;
+    *) echo "Invalid boot profile: ${RUSTOS_BOOT_PROFILE}" >&2; exit 2 ;;
+esac
 
 SIZE_MB=128
 PART_START_SECTOR=2048          # 1 MiB aligned; room for core.img before it
@@ -27,7 +35,7 @@ SECTOR=512
 "${ROOT}/tools/build-user.sh"
 
 echo "[grub-disk] Building kernel ELF (grub feature)..."
-cargo build --release --features grub
+cargo build --release --features "${KERNEL_FEATURES}"
 KERNEL_ELF="${ROOT}/target/x86_64-self-rust-os/release/self_rust_os"
 test -f "${KERNEL_ELF}"
 

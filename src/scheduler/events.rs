@@ -14,6 +14,11 @@ fn ready(s: &Scheduler, pid: Pid, mask: u64) -> u64 {
         return ERROR;
     };
     let mut result = 0;
+    if mask & abi::EVENT_CHILD != 0
+        && s.processes.iter().flatten().any(|p| p.parent == Some(pid) && (p.state == ProcessState::Zombie || p.adoption_pending))
+    {
+        result |= abi::EVENT_CHILD;
+    }
     if mask & abi::EVENT_POINTER != 0 {
         if pid != 0 {
             return ERROR;

@@ -35,8 +35,10 @@ pub const EVENT_STDIO_WRITE: u64 = 4;
 pub const EVENT_KEYBOARD: u64 = 8;
 /// Pointer revision changed since the display owner's last mouse sample.
 pub const EVENT_POINTER: u64 = 16;
+/// An owned child has a retained completion.
+pub const EVENT_CHILD: u64 = 32;
 /// Supported readiness mask. Zero and unknown bits are invalid requests.
-pub const EVENT_ALL: u64 = 31;
+pub const EVENT_ALL: u64 = 63;
 /// ABI version.
 pub const VERSION: u32 = 1;
 /// Default worker stack, excluding the guard page.
