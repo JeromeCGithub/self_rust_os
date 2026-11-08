@@ -1,0 +1,20 @@
+E
+======================================================================
+ERROR: test_browser_css (unittest.loader._FailedTest.test_browser_css)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_browser_css
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/unittest/loader.py", line 433, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/usr/lib/python3.14/unittest/loader.py", line 374, in _get_module_from_name
+    __import__(name)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jay/personal/os/jbrowse/tools/tests/test_browser_css.py", line 6, in <module>
+    from browser_css import assert_rectangles
+ModuleNotFoundError: No module named 'browser_css'
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+FAILED (errors=1)

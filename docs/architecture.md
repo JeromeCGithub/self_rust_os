@@ -48,6 +48,7 @@ src/drivers/
   rtc/cmos.rs               Stable PC CMOS UTC samples
   pci/mod.rs                PCI configuration access, discovery and command bits
   net/e1000.rs              Intel 82540EM registers, DMA rings, Ethernet frames
+  audio/ac97.rs            Intel 82801AA PCM output, bounded DMA and position
   input/keyboard.rs         PS/2 keyboard setup and scancode queue
   input/mouse/mod.rs        PS/2 mouse setup and packet decoding
   input/mouse/absolute.rs   QEMU VMware-compatible absolute pointer
@@ -91,6 +92,17 @@ bounded work; ordinary scheduler entry consumes pending wakeups. Readiness sysca
 109 atomically checks and parks on mailbox, connected-I/O, focused-keyboard and
 display-owner pointer events.
 Portal uses a native I/O thread independently of its renderer; app policy stays in Ring 3.
+A connected application can host one separately addressed connected child through
+syscall22's owned-child selector, while stdin/stdout still reach its parent.
+Descendant queues remain private and bounded; host teardown stops/reaps its owned
+chain. [P3](browser-javascript-p3.md) uses this generic mechanism for restricted
+script workers. HTML/DOM/JavaScript policy never enters the kernel.
+The host-testable browser library separates CSS computed styles, retained paint/
+hit-test records and bounded inline/flex formatting contexts. Moving a formatting
+fragment translates its pixels and form hit targets together. The application
+owns network/resource budgets; the SDK paints proportional controls and copied
+surfaces. [Reference comparisons](browser-css-comparison.md) describe the current
+subset and its limits.
 
 Blocking reads, waits and sleeps affect the calling thread. Thread states are
 `Ready`, `Running`, `Blocked` and `Zombie`; process lifetime is `Live`/`Zombie`.
@@ -130,16 +142,17 @@ use the native [filesystem syscall contract](syscalls.md#regular-files-and-worki
 
 PID 0 owns the hardware framebuffer mapping. Other processes map private backing
 frames at the same user virtual address. The compositor snapshots those frames,
-caches window content (up to 640×400 for native SDK clients), combines changed windows in
-stacking order into a retained back buffer, and presents dirty 32×32 tiles. Cursor
-movement restores the old cursor tiles from that buffer. Graphical clients publish
-surface revisions after drawing; console output publishes automatically. Native
-SDK clients also send frame serials and wait for copy acknowledgements before
-reusing their pixels. Unchanged surfaces require only metadata queries. The six
-cache slots reserve 5.86 MiB, plus 151 KiB of glass blur scratch storage, in
-addition to the pitched composition buffer, full-resolution packed desktop cache,
-and bounded 480-row application snapshot scratch. The DE's full-display surface
-is copied before release and does not consume an application window slot.
+caches window content, combines changed windows in stacking order into a retained
+back buffer, and presents dirty32×32 tiles. Cursor movement restores old cursor
+tiles from that buffer. Version2 native clients support compositor-owned resize
+and expand/restore within the display/work area; older version1 clients remain
+fixed-size. The compositor allocates bounded front/staging content and backdrop
+caches for committed/offered sizes, retaining the old geometry until a matching
+frame commits. Full-display snapshot/blur scratch respects pitch and geometry.
+Graphical clients publish revisions and wait for copy acknowledgements before
+reusing pixels; unchanged surfaces require only metadata queries. The DE's
+full-display surface is copied before release and does not consume one of the six
+application slots. See [window resizing](window-resize.md) for protocol/limits.
 Timed waits let the CPU halt when
 applications are waiting. See [performance validation](performance.md). Text apps
 receive kernel-rendered console output on their private surface. Graphical apps
@@ -184,7 +197,7 @@ stable owned frames without borrowing client memory. Socket state is reclaimed o
 process frames and stacks are reclaimed after execution and TLB quiescence. Network progress is bounded and driven
 by callers; there is no background network worker. Static IPv4, connected UDP and
 outgoing TCP are supported. The [HTTP SDK and curl](http.md) implement DNS A
-resolution and streaming HTTP/HTTPS GET in Ring 3. [TLS](tls.md) uses Rustls,
+resolution and streaming HTTP/HTTPS GET/form POST in Ring3. [TLS](tls.md) uses Rustls,
 WebPKI verification and a RustCrypto provider; platform syscalls 80/81 supply
 hardware entropy and UTC. The SDK heap grows through native `brk` into zeroed private pages; all
 initial process threads receive 4 MiB user stacks with unmapped guards. Kernel stacks remain
@@ -221,7 +234,8 @@ native limits, not a Linux ABI/feature-completeness claim. See
 - Desktop rendering supports 640×480 through 1920×1080 at 32 bpp, with pitch up to
   8192 bytes, and allows six simultaneous windows. The default boot requests 1080p.
   Legacy content remains 488×288 pixels; native SDK clients request content sizes
-  from 160×96 through 640×400. One mapped window per process is currently exposed.
+  from160×96 through the supported display/work-area bounds (up to1920×1080);
+  version1 clients retain their640×400 limit. One mapped window per process is exposed.
 - Reclamation is deferred while remote CPUs execute an exiting context or finish
   an in-flight filesystem operation. Live/unreaped objects have bounded quotas;
   callers should join/detach threads and reap processes. See [limits](threading.md#limits).
@@ -237,3 +251,9 @@ native limits, not a Linux ABI/feature-completeness claim. See
 New interfaces must keep the kernel/userspace split, define ownership/error behavior,
 and prove relevant invariants with tests. See [development](development.md),
 [testing](testing.md), and [the ABI](syscalls.md).
+
+Optional [PCM audio](browser-media-p6.md) uses a kernel-owned AC97 DMA transport
+and PID-owned exclusive streams. The SDK and `jplay` decode/read/seek WAV in Ring3;
+no codec/player policy executes in the kernel. Audio progress is polled, and the
+33 fixed device-lifetime DMA frames are reused across streams. This does not
+provide browser video, mixing, microphone input or verified host-speaker sound.

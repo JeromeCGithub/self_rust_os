@@ -1,0 +1,40 @@
+/home/jay/personal/os/jbrowse/e2e/jbrowse.py:271: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+  actual_digest=rgb_digest(body.getdata())
+{
+  "url": "http://10.0.2.2:42763/css-reference",
+  "title": "CSS reference layout",
+  "load_probe_passed": true,
+  "complete_task_verified": false,
+  "elapsed_seconds": 2.014080616994761,
+  "budget_seconds": 5,
+  "counters": {
+    "http_status": 200,
+    "items": 12,
+    "links": 0,
+    "controls": 1,
+    "images": 0,
+    "truncated": 0,
+    "script_errors": 0,
+    "style_errors": 0,
+    "digest": 8671713442351041477
+  },
+  "ink_pixels": 30572,
+  "readback_digest": 8671713442351041477,
+  "submitted_digest": 8671713442351041477,
+  "checks": {
+    "title": true,
+    "readable_pixels": true,
+    "rendered_links": true
+  },
+  "error": null,
+  "unsupported_script": false,
+  "build_id": "b2e547d791121274f671ba0d009079c7b14746e4ff1b834512c4eebfee4f4e72",
+  "field_ink_bounds": [
+    7,
+    11,
+    63,
+    13
+  ],
+  "reference_rectangles_match": true
+}
+qemu-system-x86_64: terminating on signal 15 from pid 512060 (python3)

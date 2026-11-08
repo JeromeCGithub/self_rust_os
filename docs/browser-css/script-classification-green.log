@@ -1,0 +1,23 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/browser.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/browser-e623ea5d05507d56)
+
+running 16 tests
+test address_and_link_resolution_reject_privileged_schemes ... ok
+test flow_wraps_long_words_preserves_pre_and_bounds_geometry ... ok
+test css_cascade_inheritance_background_and_hidden_content ... ok
+test diagnostic_summary_counts_rendered_content_without_exporting_text_or_urls ... ok
+test decoded_images_have_aspect_geometry_link_hits_and_a_visible_page ... ok
+test html_entities_raw_text_and_external_sheets ... ok
+test omitted_body_still_receives_document_css ... ok
+test optional_list_end_tags_do_not_accumulate_indentation ... ok
+test image_limits_reject_invalid_buffers_and_keep_previous_resource_on_failure ... ok
+test proportional_metrics_drive_wrap_geometry_and_link_hits ... ok
+test raw_text_end_tags_require_a_complete_case_insensitive_tag_name ... ok
+test linked_and_inline_author_sheets_follow_document_order_and_importance ... ok
+test script_classification_distinguishes_data_from_executable_sources ... ok
+test text_after_image_keeps_its_own_metrics_and_image_geometry ... ok
+test malformed_html_recovers_and_limits_are_explicit ... ok
+test normal_document_budget_accepts_large_bootstrap_data_but_rejects_the_full_boundary ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s

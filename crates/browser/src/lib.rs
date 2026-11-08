@@ -5,16 +5,27 @@ mod css;
 mod encoding;
 mod forms;
 pub use encoding::{decode_html, Encoding};
-pub use forms::{Control, Field, FieldKind, Form};
+pub use forms::{Control, Field, FieldKind, Form, Submission};
+pub mod cookies;
 mod html;
 mod layout;
+pub mod page_context;
 mod url;
-use alloc::{string::String, vec::Vec};
-pub use layout::{Item, Page};
+use alloc::{string::String, sync::Arc, vec::Vec};
+pub use rustos_web_image::Image;
+#[derive(Clone, Debug)]
+pub struct ImageResource {
+    pub node: usize,
+    pub image: Arc<Image>,
+}
+pub use layout::{Item, Page, Summary};
 pub use url::{address, resolve};
 
-pub const MAX_HTML: usize = 256 * 1024;
+/// Decoded document envelope, independent of the much smaller script-worker
+/// source/effect budgets. Nodes, nesting, stylesheets and paint records stay bounded.
+pub const MAX_HTML: usize = 2 * 1024 * 1024;
 pub const MAX_CSS: usize = 128 * 1024;
+pub const MAX_STYLESHEETS: usize = 16;
 pub const MAX_NODES: usize = 4096;
 pub const MAX_DEPTH: usize = 64;
 
@@ -27,7 +38,7 @@ pub enum Error {
 }
 
 /// Flat arena: indices own relationships, never references into movable storage.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Node {
     pub tag: String,
     pub text: String,
@@ -35,7 +46,40 @@ pub struct Node {
     pub parent: Option<usize>,
     pub children: Vec<usize>,
 }
+/// Script scheduling policy shared by the application and isolated native realm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScriptKind {
+    Classic,
+    Module,
+    Data,
+}
 impl Node {
+    pub fn script_kind(&self) -> Option<ScriptKind> {
+        if self.tag != "script" {
+            return None;
+        }
+        let kind = self.attr("type").unwrap_or("").trim();
+        if kind.eq_ignore_ascii_case("module") {
+            return Some(ScriptKind::Module);
+        }
+        let essence = kind.split(';').next().unwrap_or("").trim();
+        Some(
+            if [
+                "",
+                "text/javascript",
+                "application/javascript",
+                "text/ecmascript",
+                "application/ecmascript",
+            ]
+            .iter()
+            .any(|mime| essence.eq_ignore_ascii_case(mime))
+            {
+                ScriptKind::Classic
+            } else {
+                ScriptKind::Data
+            },
+        )
+    }
     pub fn attr(&self, name: &str) -> Option<&str> {
         self.attributes
             .iter()
@@ -44,7 +88,12 @@ impl Node {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub(crate) enum Sheet {
+    Inline(String),
+    External(String),
+}
+#[derive(Debug, Clone)]
 pub struct Document {
     pub title: String,
     pub nodes: Vec<Node>,
@@ -52,6 +101,8 @@ pub struct Document {
     pub forms: Vec<Form>,
     rules: Vec<css::Rule>,
     css_bytes: usize,
+    images: Vec<ImageResource>,
+    sheets: Vec<Sheet>,
 }
 impl Document {
     /// Parse a UTF-8 HTML subset. Malformed markup recovers; budgets return Limit.
@@ -71,6 +122,70 @@ impl Document {
         self.css_bytes += css.len();
         Ok(())
     }
+    /// Rebuild author rules in HTML source order. The caller supplies resource
+    /// policy; missing or oversized optional sheets leave the remaining cascade.
+    pub fn apply_stylesheets(&mut self, mut fetch: impl FnMut(&str) -> Option<String>) -> usize {
+        self.rules.clear();
+        self.css_bytes = 0;
+        let mut failed = 0;
+        for source in self.sheets.clone() {
+            let css = match source {
+                Sheet::Inline(css) => Some(css),
+                Sheet::External(url) => fetch(&url),
+            };
+            match css {
+                Some(css) => {
+                    if self.add_css(&css).is_err() {
+                        failed += 1;
+                    }
+                }
+                None => failed += 1,
+            }
+        }
+        failed
+    }
+    /// Associate one decoded, budgeted image with an existing img element.
+    pub fn set_image(&mut self, node: usize, image: Arc<Image>) -> Result<(), Error> {
+        if !self.nodes.get(node).is_some_and(|node| node.tag == "img")
+            || image.width == 0
+            || image.height == 0
+            || image.width > 4096
+            || image.height > 4096
+            || (image.width as usize)
+                .checked_mul(image.height as usize)
+                .and_then(|n| n.checked_mul(4))
+                != Some(image.rgba.len())
+            || image.rgba.len() > rustos_web_image::MAX_PIXELS * 4
+        {
+            return Err(Error::Limit);
+        }
+        let replacing = self
+            .images
+            .iter()
+            .position(|resource| resource.node == node);
+        let used = self
+            .images
+            .iter()
+            .filter(|resource| resource.node != node)
+            .fold(0usize, |sum, resource| {
+                sum.saturating_add(resource.image.rgba.len())
+            });
+        if used.saturating_add(image.rgba.len()) > 16 * 1024 * 1024
+            || (replacing.is_none() && self.images.len() == 16)
+        {
+            return Err(Error::Limit);
+        }
+        if let Some(at) = replacing {
+            self.images[at] = ImageResource { node, image };
+        } else {
+            self.images.push(ImageResource { node, image });
+        }
+        Ok(())
+    }
+    /// Layout with the exact font metrics used by the painter.
+    pub fn layout_with(&self, width: u32, metrics: &impl rustos_text::Metrics) -> Page {
+        layout::layout_with(self, width, metrics)
+    }
     /// Block/inline flow in document pixels. A zero width returns an empty page.
     pub fn layout(&self, width: u32) -> Page {
         layout::layout(self, width)
@@ -81,3 +196,4 @@ impl Document {
 mod script;
 #[cfg(feature = "javascript")]
 pub use script::{ScriptError, ScriptReport};
+pub mod dom;

@@ -1,0 +1,28 @@
+qemu-system-x86_64: terminating on signal 15 from pid 522988 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 368, in <module>
+    navigate('/verify-context');wait('[jbrowse] loaded: Cookie navigation ready',last_navigation)
+                                ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 221, in wait
+    assert time.monotonic()<deadline, f'missing {value}\n{output()[-5000:]}'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: missing [jbrowse] loaded: Cookie navigation ready
+[compositor] ready
+[desktop] wallpaper loaded: true
+[compositor] desktop surface committed
+[desktop] ready: 10 applications
+[compositor] desktop surface committed
+[portal] Portal starting...
+[desktop] launched Terminal pid=2
+[portal] shell pid=3
+[portal] output: self_rust_os forge v1.0
+[portal] output: Type 'help' for commands.
+[portal] output:
+[portal] output: > ./jbrowse http://10.0.2.2:33315/start
+[portal] output: Spawning /bin/JBROWSE.BIN...
+[portal] output: started pid 4
+[jbrowse] ready
+[jbrowse] loaded: Browser fixture
+[jbrowse] script errors: 1
+[jbrowse] unsupported script page
+[jbrowse] loaded: Old document executed

@@ -1,0 +1,30 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/rustos_browser-2d050e2417fd7e1c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/browser.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/browser-e623ea5d05507d56)
+
+running 1 test
+test text_after_image_keeps_its_own_metrics_and_image_geometry ... FAILED
+
+failures:
+
+---- text_after_image_keeps_its_own_metrics_and_image_geometry stdout ----
+
+thread 'text_after_image_keeps_its_own_metrics_and_image_geometry' panicked at tests/browser.rs:230:5:
+assertion `left == right` failed: text must not stretch the preceding image
+  left: 160
+ right: 120
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    text_after_image_keeps_its_own_metrics_and_image_geometry
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test browser`

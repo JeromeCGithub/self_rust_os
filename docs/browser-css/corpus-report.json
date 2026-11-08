@@ -1,0 +1,397 @@
+{
+  "manifest_sha256": "31f6c2813ffa080dd2681bd8c95fe10f944a43d9255eeb46b845e5b3093c2dbb",
+  "build_id": "b2e547d791121274f671ba0d009079c7b14746e4ff1b834512c4eebfee4f4e72",
+  "date": "2026-11-06",
+  "runs": [
+    {
+      "id": "native-after-css-and-resource-fixes",
+      "observations": [
+        {
+          "task_id": "google-search",
+          "status": "fail",
+          "native": true,
+          "checks": {
+            "default_home": false,
+            "query_one_results": false,
+            "query_two_results": false,
+            "query_three_results": false,
+            "real_destinations": false,
+            "follow": false,
+            "back": false,
+            "refine": false
+          },
+          "evidence": {
+            "serial": "latest/google-query/serial.log",
+            "assertions": "latest/google-query/probe.json"
+          },
+          "reason": "Real query returns unsupported-script fallback: three script errors, zero result links."
+        },
+        {
+          "task_id": "youtube-video",
+          "status": "fail",
+          "native": true,
+          "checks": {
+            "watch_ui": false,
+            "video_frames": false,
+            "sound": false,
+            "five_minutes": false,
+            "pause": false,
+            "two_seeks": false,
+            "volume": false,
+            "captions_if_available": false,
+            "fullscreen": false,
+            "av_drift_under_100ms": false,
+            "drops_under_5_percent": false
+          },
+          "evidence": {
+            "serial": "latest/youtube/serial.log",
+            "assertions": "latest/youtube/probe.json"
+          },
+          "reason": "Full document and title load, but the executable-document worker budget and stylesheet failures leave an unsupported-script fallback, without video."
+        },
+        {
+          "task_id": "facebook-session",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "authorized_account": false,
+            "login_verification": false,
+            "feed": false,
+            "repeated_scroll": false,
+            "profile": false,
+            "restart": false,
+            "logout": false,
+            "session_revoked": false,
+            "origin_isolation": false,
+            "clear_data": false,
+            "failed_login_reconnect": false
+          },
+          "evidence": {},
+          "reason": "No authorized account workflow executed; session/storage/asynchronous platform support remains absent."
+        },
+        {
+          "task_id": "cern-read",
+          "status": "pass",
+          "native": true,
+          "checks": {
+            "title": true,
+            "readable_pixels": true,
+            "rendered_links": true
+          },
+          "evidence": {
+            "serial": "latest/cern/serial.log",
+            "assertions": "latest/cern/probe.json"
+          },
+          "reason": "The task requires only initial title, body and distinct laid-out links; no further navigation is inferred."
+        },
+        {
+          "task_id": "example-read",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "follow": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "rust-book",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "next": false,
+            "back": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "rust-reference",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "section_navigation": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "rustdoc-search",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "search": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "python-docs",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "code_layout": false,
+            "navigation": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "gnu-manual",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "fragment": false,
+            "copy": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "man7",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "preformatted": false,
+            "follow": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "w3c-css",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "navigation": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "whatwg-html",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "fragment": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "mdn-html",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "code_layout": false,
+            "follow": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "mdn-css",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "responsive_layout": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "wikipedia-article",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "image": false,
+            "fragment": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "wikipedia-search",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "search": false,
+            "read_result": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "wikimedia-image",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "image": false,
+            "follow": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "hacker-news",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "comments": false,
+            "follow": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "bbc-news",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "consent_if_served": false,
+            "article": false,
+            "image": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "guardian-news",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "consent_if_served": false,
+            "article": false,
+            "image": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "reuters-news",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "access_flow": false,
+            "article": false,
+            "image": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "github-readme",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "code_layout": false,
+            "follow": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "github-issues",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "filter": false,
+            "open_issue": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "stackoverflow",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "consent_if_served": false,
+            "question": false,
+            "answer": false,
+            "code_layout": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "npm-package",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "read": false,
+            "navigation": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "crates-search",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "search": false,
+            "details": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "openstreetmap",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "map": false,
+            "pan": false,
+            "zoom": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "httpbin-form",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "controls": false,
+            "post_roundtrip": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        },
+        {
+          "task_id": "duckduckgo-search",
+          "status": "not_run",
+          "native": false,
+          "checks": {
+            "search": false,
+            "results": false,
+            "follow": false
+          },
+          "evidence": {},
+          "reason": "Full interactive corpus task not executed on this build."
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "One partial run, not three complete scheduled runs.",
+    "Only CERN completed an ordinary task.",
+    "Native Google and YouTube remain failed goals."
+  ]
+}

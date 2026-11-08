@@ -1,0 +1,9 @@
+[package]
+name = "rustos-web-image"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Bounded native document image decoding"
+[dependencies]
+zune-png = { version = "=0.4.10", default-features = false }
+zune-core = { version = "=0.4.12", default-features = false }

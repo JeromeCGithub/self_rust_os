@@ -1,0 +1,30 @@
+   Compiling rustos-http v0.1.0 (/home/jay/personal/os/jbrowse/crates/http)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running unittests src/lib.rs (/home/jay/personal/os/jbrowse/crates/http/target/x86_64-unknown-linux-gnu/debug/deps/rustos_http-d9a863a6a61eed8a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/client.rs (/home/jay/personal/os/jbrowse/crates/http/target/x86_64-unknown-linux-gnu/debug/deps/client-ef7c307443d7165f)
+
+running 1 test
+test cookies_are_selected_for_each_redirect_url_and_injection_fails_closed ... FAILED
+
+failures:
+
+---- cookies_are_selected_for_each_redirect_url_and_injection_fails_closed stdout ----
+
+thread 'cookies_are_selected_for_each_redirect_url_and_injection_fails_closed' panicked at tests/client.rs:130:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    cookies_are_selected_for_each_redirect_url_and_injection_fails_closed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 30 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test client`

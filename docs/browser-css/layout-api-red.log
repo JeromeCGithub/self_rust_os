@@ -1,0 +1,27 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+error[E0609]: no field `font` on type `&Control`
+  --> tests/css_layout.rs:42:24
+   |
+42 |     assert_eq!(control.font.size,18);
+   |                        ^^^^ unknown field
+   |
+   = note: available fields are: `form`, `field`, `x`, `y`, `width`, `height`
+
+error[E0609]: no field `font` on type `&Control`
+  --> tests/css_layout.rs:43:24
+   |
+43 |     assert_eq!(control.font.family,rustos_text::Family::Sans);
+   |                        ^^^^ unknown field
+   |
+   = note: available fields are: `form`, `field`, `x`, `y`, `width`, `height`
+
+error[E0609]: no field `color` on type `&Control`
+  --> tests/css_layout.rs:44:24
+   |
+44 |     assert_eq!(control.color,0x123456);
+   |                        ^^^^^ unknown field
+   |
+   = note: available fields are: `form`, `field`, `x`, `y`, `width`, `height`
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `rustos-browser` (test "css_layout") due to 3 previous errors

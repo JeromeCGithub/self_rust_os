@@ -5,6 +5,8 @@
 pub mod declarative;
 pub mod desktop_protocol;
 mod events;
+#[cfg(feature = "fonts")]
+pub mod font;
 mod input;
 pub use events::Event;
 #[cfg(feature = "alloc")]
@@ -54,7 +56,7 @@ impl<'a> WindowOptions<'a> {
             material: Material::Glass,
         }
     }
-    /// Requests content dimensions (160..=640 by 96..=400 pixels).
+    /// Requests content dimensions (160..=1920 by 96..=1080), bounded by the workspace.
     pub const fn content_size(mut self, width: usize, height: usize) -> Self {
         self.width = width;
         self.height = height;
@@ -71,6 +73,7 @@ impl<'a> WindowOptions<'a> {
 pub struct Window {
     config: Configuration,
     stride: usize,
+    surface: (usize, usize),
     pending: Option<u32>,
     serial: u32,
     accepted: bool,
@@ -134,6 +137,7 @@ impl Window {
         let mut window = Self {
             config,
             stride: info.pitch / 4,
+            surface: (info.width, info.height),
             pending: None,
             serial: 0,
             accepted: false,
@@ -193,10 +197,26 @@ impl Window {
             ACCEPT => self.accepted = true,
             REJECT => self.rejected = true,
             RELEASE if self.pending == Some(message & SERIAL) => self.pending = None,
+            RESIZE if !self.desktop => {
+                let (width, height) = decode_resize(message).ok_or(Error::InvalidGeometry)?;
+                let config = Configuration {
+                    width,
+                    height,
+                    material: self.config.material,
+                };
+                if !config.fits_display(self.surface.0, self.surface.1) {
+                    return Err(Error::InvalidGeometry);
+                }
+                self.config = config;
+                self.input.unfocus();
+                return Ok(Some(Event::Resized {
+                    width: width as u32,
+                    height: height as u32,
+                }));
+            }
             POINTER => {
-                let x = ((message << 21) as i32) >> 21;
-                let y = ((message << 10) as i32) >> 21;
-                let buttons = ((message >> 22) & 7) as u8;
+                let (x, y, buttons) =
+                    protocol::decode_pointer(message).ok_or(Error::Unavailable)?;
                 self.input.pointer(x, y, buttons & 1 != 0);
                 return Ok(Some(Event::Pointer { x, y, buttons }));
             }
@@ -273,8 +293,18 @@ impl Window {
         }
         self.serial = (self.serial + 1) & SERIAL;
         sys::present_surface().map_err(|_| Error::Unavailable)?;
-        self.pending = Some(self.serial);
-        send(COMMIT | self.serial)
+        let message = if self.desktop {
+            COMMIT | self.serial
+        } else {
+            Frame {
+                width: self.config.width,
+                height: self.config.height,
+                serial: self.serial as u8,
+            }
+            .encode()
+        };
+        self.pending = Some(message & SERIAL);
+        send(message)
     }
     /// Runs a widget view on initial display and input changes; idle waits yield
     /// to the scheduler. Labels used as button IDs must be unique within a view.

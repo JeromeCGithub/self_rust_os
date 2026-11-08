@@ -1,0 +1,10 @@
+
+running 6 tests
+test tests::malformed_geometry_does_not_write_anything ... ok
+test tests::blur_spreads_background_changes_in_both_directions ... ok
+test tests::constant_backdrops_survive_blur_without_touching_guards ... ok
+test tests::material_limits_bright_backgrounds_and_retains_clearer_color ... ok
+test tests::rim_has_direction_and_focus_changes_strength ... ok
+test tests::reconstruction_is_smooth_and_clamped_at_material_edges ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

@@ -1,0 +1,60 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/css_layout.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/css_layout-c4394b0bd75838cb)
+
+running 5 tests
+test css_auto_margins_center_a_fixed_width_box ... FAILED
+test authored_control_dimensions_and_fonts_reach_the_renderer ... FAILED
+test css_four_sided_boxes_have_browser_content_and_border_geometry ... FAILED
+test flex_rows_respect_gap_and_cross_axis_centering ... FAILED
+test inline_blocks_share_a_centered_line_instead_of_full_width_backgrounds ... FAILED
+
+failures:
+
+---- css_auto_margins_center_a_fixed_width_box stdout ----
+
+thread 'css_auto_margins_center_a_fixed_width_box' panicked at tests/css_layout.rs:23:5:
+assertion `left == right` failed
+  left: (8, 20, 80, 12)
+ right: (280, 40, 80, 30)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- authored_control_dimensions_and_fonts_reach_the_renderer stdout ----
+
+thread 'authored_control_dimensions_and_fonts_reach_the_renderer' panicked at tests/css_layout.rs:41:5:
+assertion `left == right` failed
+  left: (8, 68, 400, 26)
+ right: (0, 154, 514, 34)
+
+---- css_four_sided_boxes_have_browser_content_and_border_geometry stdout ----
+
+thread 'css_four_sided_boxes_have_browser_content_and_border_geometry' panicked at tests/css_layout.rs:16:5:
+assertion `left == right` failed
+  left: (8, 8, 100, 12)
+ right: (8, 4, 120, 32)
+
+---- flex_rows_respect_gap_and_cross_axis_centering stdout ----
+
+thread 'flex_rows_respect_gap_and_cross_axis_centering' panicked at tests/css_layout.rs:34:5:
+assertion `left == right` failed
+  left: (8, 44, 40, 12)
+ right: (530, 114, 40, 20)
+
+---- inline_blocks_share_a_centered_line_instead_of_full_width_backgrounds stdout ----
+
+thread 'inline_blocks_share_a_centered_line_instead_of_full_width_backgrounds' panicked at tests/css_layout.rs:28:5:
+assertion `left == right` failed
+  left: (8, 32, 80, 12)
+ right: (230, 70, 80, 24)
+
+
+failures:
+    authored_control_dimensions_and_fonts_reach_the_renderer
+    css_auto_margins_center_a_fixed_width_box
+    css_four_sided_boxes_have_browser_content_and_border_geometry
+    flex_rows_respect_gap_and_cross_axis_centering
+    inline_blocks_share_a_centered_line_instead_of_full_width_backgrounds
+
+test result: FAILED. 0 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test css_layout`

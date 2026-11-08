@@ -1,0 +1,2 @@
+PASS: separate compositor/DE, space wallpaper, 1920x1080 edges/pointer, launchers, commands, concurrency, focus/drag/close, and compositor survival after DE exit
+qemu-system-x86_64: terminating on signal 15 from pid 366826 (python3)

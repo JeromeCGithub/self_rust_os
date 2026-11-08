@@ -1,0 +1,2 @@
+qemu-system-x86_64: terminating on signal 15 from pid 512305 (python3)
+PASS: restricted Ring 3 worker and repeated frame recovery; evidence: /home/jay/personal/os/jbrowse/target/browser-p1/cpus-8/serial-8w_6suad.log

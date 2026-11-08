@@ -88,6 +88,22 @@ fn append(doc: &mut Document, stack: &[usize], node: Node) -> Result<usize, Erro
     Ok(index)
 }
 
+// Scan raw text once, without lowercasing/copying the entire remaining document
+// for every script/style. A prefix such as </scripture> is not an end tag.
+fn raw_end(source: &str, tag: &str) -> usize {
+    let bytes = source.as_bytes();
+    let name = tag.as_bytes();
+    bytes
+        .windows(name.len() + 3)
+        .position(|part| {
+            part.starts_with(b"</")
+                && part[2..2 + name.len()].eq_ignore_ascii_case(name)
+                && (part[2 + name.len()].is_ascii_whitespace()
+                    || b"/>".contains(&part[2 + name.len()]))
+        })
+        .unwrap_or(source.len())
+}
+
 pub(crate) fn parse(source: &str) -> Result<Document, Error> {
     if source.len() > MAX_HTML {
         return Err(Error::Limit);
@@ -98,6 +114,8 @@ pub(crate) fn parse(source: &str) -> Result<Document, Error> {
         stylesheets: Vec::new(),
         rules: Vec::new(),
         css_bytes: 0,
+        images: Vec::new(),
+        sheets: Vec::new(),
         forms: Vec::new(),
     };
     let mut stack: Vec<usize> = vec![];
@@ -180,27 +198,26 @@ pub(crate) fn parse(source: &str) -> Result<Document, Error> {
                         .is_some_and(|r| r.eq_ignore_ascii_case("stylesheet"))
                 {
                     if let Some(href) = node.attr("href") {
-                        if doc.stylesheets.len() == 4 {
+                        if doc.stylesheets.len() == MAX_STYLESHEETS {
                             return Err(Error::Limit);
                         }
                         doc.stylesheets.push(href.to_string());
+                        doc.sheets.push(Sheet::External(href.to_string()));
                     }
                 }
                 let id = append(&mut doc, &stack, node)?;
                 if ["script", "style", "title", "textarea"].contains(&tag.as_str()) {
-                    let lower = rest.to_ascii_lowercase();
-                    let marker = alloc::format!("</{tag}");
-                    let end = lower.find(&marker).unwrap_or(rest.len());
+                    let end = raw_end(rest, &tag);
                     let raw = &rest[..end];
                     if tag == "textarea" {
                         doc.nodes[id].text = entities(raw);
                     }
-                    #[cfg(feature = "javascript")]
                     if tag == "script" {
                         doc.nodes[id].text = raw.to_string();
                     }
                     if tag == "style" {
                         doc.add_css(raw)?;
+                        doc.sheets.push(Sheet::Inline(raw.to_string()));
                     }
                     if tag == "title" {
                         doc.title = entities(raw)

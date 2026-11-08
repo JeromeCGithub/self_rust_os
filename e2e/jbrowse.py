@@ -4,11 +4,13 @@ import sys
 from pathlib import Path
 sys.path = [p for p in sys.path if Path(p or ".").resolve() != Path(__file__).resolve().parent]
 import http.server
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
+import socket
 import sys
 import tempfile
 import threading
@@ -18,19 +20,100 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / 'tools'))
-from qemu_test import launchers, connect, copy_disk, disk_image
+from qemu_test import launchers, connect, copy_disk, disk_image, console_text
 from qemu_network import arguments as network_arguments
 from qemu_platform import arguments as platform_arguments
+from browser_probe import rgb_digest
+from browser_css import assert_rectangles, dark_bounds
 
 if os.environ.get('RUSTOS_JBROWSE_REQUIRE_GOOGLE_RESULTS') == '1':
     os.environ['RUSTOS_JBROWSE_GOOGLE']='1'
 
 requests = []
+posts = []
+context_requests = []
+stalled_started=threading.Event()
+stalled_closed=threading.Event()
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
+    def do_POST(self):
+        length=int(self.headers.get('Content-Length','0'))
+        assert 0 <= length <= 16384
+        data=self.rfile.read(length)
+        posts.append((self.path,self.headers.get('Content-Type'),data))
+        if self.path == '/login?flow=1':
+            self.send_response(303)
+            self.send_header('Location','/post-result')
+            self.send_header('Content-Length','0')
+            self.end_headers()
+            return
+        self.send_response(400);self.send_header('Content-Length','0');self.end_headers()
     def do_GET(self):
         requests.append(self.path)
+        if self.path == '/verify-context':
+            expression='Math.max('*48+'42'+',0)'*48
+            body=("<title>Verification fixture</title><script>"
+                  "if(navigator.userAgent!=='RustOS-curl/1')throw Error('identity');"
+                  f"const answer=eval({expression!r});"
+                  "const expiry=new Date();expiry.setUTCSeconds(expiry.getUTCSeconds()+300);"
+                  "document.cookie='proof='+answer+'; Path=/; Expires='+expiry.toUTCString();"
+                  "document.cookie='private=hidden; Path=/else';"
+                  "Promise.resolve().then(()=>location.replace('/verify-results?q=rust+os'));"
+                  "</script><script>document.title='Old document executed'</script>").encode()
+        elif self.path in ['/verify-results?q=rust+os','/verify-again']:
+            cookie=self.headers.get('Cookie','')
+            context_requests.append((self.path,cookie))
+            if cookie!='proof=42':
+                self.send_response(403);self.send_header('Content-Length','0');self.end_headers();return
+            title='Cookie navigation ready' if self.path.startswith('/verify-results') else 'Cookie session ready'
+            body=(f"<title>{title}</title><style>body{{background:#d8f1e4}}</style>"
+                  "<h1>Actual fixture result</h1><p>Snippet fetched with the script cookie.</p>"
+                  "<a href='/verify-again'>Follow verified link</a>"
+                  "<script>if(document.cookie!=='proof=42')throw Error('cookie snapshot');</script>").encode()
+        elif self.path == '/verify-loop':
+            body=b"<script>location.replace('/verify-loop')</script>"
+        else:
+            body=None
+        if body is not None:
+            self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8')
+            self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+        if self.path == '/css-reference':
+            body=(ROOT/'crates/browser/tests/fixtures/css-layout.html').read_bytes()
+            self.send_response(200)
+            self.send_header('Content-Type','text/html; charset=utf-8')
+            self.send_header('Content-Length',str(len(body)))
+            self.end_headers();self.wfile.write(body)
+            return
+        if self.path == '/large-document':
+            body=b'<title>Large data document</title><script type="application/json">'+b'x'*(1300*1024)+b'</script><style>body{background:#ddf3ff}</style><p>Large data remains readable</p>'
+            self.send_response(200);self.send_header('Content-Length',str(len(body)))
+            self.end_headers();self.wfile.write(body)
+            return
+        if self.path == '/many-sheets':
+            body=('<title>Six stylesheet document</title>'+''.join(f'<link rel=stylesheet href="/css-sheet-{n}.css">' for n in range(6))+'<p>Every stylesheet loaded in source order</p>').encode()
+            self.send_response(200);self.send_header('Content-Length',str(len(body)))
+            self.end_headers();self.wfile.write(body)
+            return
+        if self.path.startswith('/css-sheet-'):
+            index=int(self.path.removeprefix('/css-sheet-').removesuffix('.css'))
+            assert 0<=index<6
+            body=f'body{{background:#{0x60a0c0 if index==5 else index:06x}}}'.encode()
+            self.send_response(200);self.send_header('Content-Length',str(len(body)))
+            self.end_headers();self.wfile.write(body)
+            return
+        if self.path == '/stalled':
+            self.send_response(200)
+            self.send_header('Content-Length', '100')
+            self.end_headers()
+            self.wfile.flush()
+            stalled_started.set()
+            self.connection.settimeout(5)
+            try:
+                if self.connection.recv(1) == b'': stalled_closed.set()
+            except ConnectionResetError: stalled_closed.set()
+            except TimeoutError: pass
+            return
         if self.path == '/start':
             self.send_response(302)
             self.send_header('Location', '/dir/index.html')
@@ -41,10 +124,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
             '/dir/index.html': b"<title>Browser fixture</title><link rel='stylesheet' href='theme.css'><div id='banner'><a href='next.html'>Follow link</a></div><p>HTML &amp; CSS from a real socket</p>" + b'<p>Scroll content</p>' * 40,
             '/dir/theme.css': b'body { background-color: #f5f0df; } #banner {background-color:#2468ac; padding:12px} a {color:white}',
             '/dir/next.html': b"<title>Second page</title><style>body {background:#d4edda}</style><h1>Navigation works</h1>",
-            '/big': b'x' * 262145,
+            '/after-cancel': b"<title>HTTP cancellation recovered</title><style>body {background:#e2f3e4}</style><a href='/after-tls'>Recover TLS navigation</a><h1>HTTP cancellation recovered</h1>",
+            '/after-tls': b'<title>TLS cancellation recovered</title><style>body {background:#dbf0fa}</style><h1>TLS cancellation recovered</h1>',
+            '/lifecycle': b"<title>Cancellation controls</title><a href='/stalled'>Start stalled request</a><br><a href='/after-cancel'>Cancel by navigating</a>",
+            '/big': b'x' * (2 * 1024 * 1024 + 1),
+            '/pixels.png': (ROOT/'crates/web-image/tests/fixtures/two-pixels.png').read_bytes(),
+            '/image': b"<title>Image fixture</title><a href='/dir/next.html'><img src='/pixels.png' width=120 alt='Image fallback'></a>",
+            '/bad.png': b'not an image',
+            '/bad-image': b"<title>Broken image fixture</title><img src='/bad.png' alt='Readable fallback'><p>Image failure recovery</p>",
+            '/typography': "<title>Typography fixture</title><style>body{font-family:sans-serif;font-size:16px;background:#f9f9f9}</style><h1>Readable text</h1><p><span style='color:#0000ff'>WWW</span> <span style='color:#ff0000'>iii</span> café Ω Ж</p><p style='font-family:serif'>A proportional serif paragraph.</p><pre>Monospace code: 0123456789</pre>".encode(),
             '/form': b"<title>Search fixture</title><form action='/find'><input type=hidden name=hl value=en><input name=q title='Search'><input type=submit name=btnG value=Search></form>",
             '/script': b"<title>Before script</title><p id='result'>Waiting</p><script>const n=6*7; document.getElementById('result').textContent='Answer: '+n; document.getElementById('result').style.color='#123456'; document.body.style.backgroundColor='#e8dcff'; document.title='Script ready';</script>",
+            '/native-script': b"<title>Before native</title><p id='result'>Waiting</p><script>class Counter {#n=40;next(){return ++this.#n}} const c=new Counter(); const p=document.getElementById('result'); if(p!==document.getElementById('result') || typeof os!=='undefined' || typeof __rustosHost!=='undefined')throw Error('boundary'); p.style.color='#0c5a42'; Promise.resolve([c.next(),c.next()].map(x=>x*2)).then(xs=>{p.textContent='Native functions: '+xs.join(',');document.body.style.backgroundColor='#c9eaff';document.title='Native engine ready';}); ({toString(){throw Error('unused completion')}});</script>",
+            '/native-queue': b"<title>Native queue bounded</title><style>body {background:#fff0dd}</style><p>Still readable after a microtask loop</p><script>function again(){Promise.resolve().then(again)};again()</script>",
+            '/native-attributes': b"<title>Before attributes</title><style>.ready{background:#b4e9d2;color:#163e72;padding:12px}</style><a id='result' style='display:none' href='/wrong'>Scripted destination</a><script>const a=document.getElementById('result');a.setAttribute('CLASS','ready');a.removeAttribute('style');a.setAttribute('href',atob('L2Rpci9uZXh0Lmh0bWw='));if(a.getAttribute('style')!==null || a.className!=='ready')throw Error('attributes');document.body.setAttribute('style','background:#edf6ff');document.title=atob(btoa('Native attributes ready'));</script>",
+            '/login-form': b"<title>Disposable POST fixture</title><form method=post action='/login?flow=1'><input name=user value=guest><input type=password name=password placeholder=Password><input value='********' readonly><input type=hidden name=csrf value=fake-token><button name=action value=login>Login</button></form>",
+            '/post-result': b"<title>POST redirect ready</title><style>body{background:#e0f4d6}</style><h1>Disposable form accepted</h1>",
             '/blank-script': b"<title>Blank script</title><script>while(true) {}</script>",
+            '/style-failure': b"<title>Stylesheet failure recovered</title><style>body{background:#c5e5fc}</style><link rel=stylesheet href='/absent-style.css'><p>Readable after a failed optional stylesheet</p>",
             '/bad-script': b"<title>Unsupported script</title><style>body {background:#fce8e6}</style><script>while(true) {}</script><p>Still readable</p>",
         }
         if self.path.startswith('/find?'):
@@ -62,13 +159,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 out = ROOT / 'target/jbrowse-e2e'
 out.mkdir(parents=True, exist_ok=True)
+tls_started=threading.Event();tls_closed=threading.Event()
+tls_listener=None
+tls_connections=[]
+if os.environ.get('RUSTOS_JBROWSE_LIFECYCLE') == '1':
+    tls_listener=socket.socket()
+    tls_listener.bind(('127.0.0.1',0));tls_listener.listen(1);tls_listener.settimeout(.2)
+    def stalled_tls():
+        while tls_listener.fileno()>=0:
+            try: connection,_=tls_listener.accept()
+            except socket.timeout: continue
+            except OSError: return
+            tls_connections.append(connection)
+            with connection:
+                connection.settimeout(5)
+                try:
+                    if connection.recv(16384): tls_started.set()
+                    while connection.recv(16384): pass
+                    tls_closed.set()
+                except ConnectionResetError: tls_closed.set()
+                except (TimeoutError,OSError): pass
+            return
+    threading.Thread(target=stalled_tls,daemon=True).start()
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
     tmp = Path(tmp)
     disk = copy_disk(disk_image(ROOT), tmp)
     terminal_x = launchers(disk)['PORTAL']
-    serial = out / 'serial.log'
+    descriptor, serial_path = tempfile.mkstemp(prefix='serial-', suffix='.log', dir=out)
+    os.close(descriptor)
+    serial = Path(serial_path)
     qemu = subprocess.Popen(['qemu-system-x86_64', '-drive', f'format=raw,file={disk}', '-machine', 'pc,i8042=on,vmport=on', '-vga','std','-serial',f'file:{serial}','-display','none','-no-reboot','-qmp',f'unix:{tmp}/qmp,server,nowait'] + platform_arguments() + network_arguments())
     try:
         qmp = connect(tmp/'qmp', time.monotonic()+60, qemu)
@@ -90,7 +211,7 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
             return command('human-monitor-command', {'command-line':text})
         def output():
             raw = serial.read_text(errors='replace')
-            return raw + ''.join(re.findall(r'\[kernel\] sys_write: "(.*?)"\n', raw, re.S))
+            return console_text(raw)
         last_navigation=0
         def wait(value, after=None):
             if after is None: after=last_navigation
@@ -111,7 +232,7 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         def key(code):
             hmp('sendkey '+code);time.sleep(.08)
         def type_text(text):
-            keys={' ':'spc','/':'slash',':':'shift-semicolon','.':'dot','-':'minus','?':'shift-slash','=':'equal'}
+            keys={' ':'spc','/':'slash',':':'shift-semicolon','.':'dot','-':'minus','?':'shift-slash','=':'equal','+':'shift-equal','&':'shift-7','%':'shift-5','_':'shift-minus','(':'shift-9',')':'shift-0'}
             for c in text:
                 key(keys.get(c, ('shift-'+c.lower()) if c.isupper() else c))
         def shot(name):
@@ -130,11 +251,85 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         wait('[desktop] ready:')
         click(terminal_x,65)
         wait('[portal] shell pid=')
-        type_text('./jbrowse' if os.environ.get('RUSTOS_JBROWSE_GOOGLE') == '1' else f'./jbrowse http://10.0.2.2:{server.server_port}/start')
+        start_path='/stalled' if os.environ.get('RUSTOS_JBROWSE_STOP_STARTUP') == '1' else '/start'
+        site=os.environ.get('RUSTOS_JBROWSE_SITE')
+        if os.environ.get('RUSTOS_JBROWSE_CSS') == '1':
+            site=f'http://10.0.2.2:{server.server_port}/css-reference'
+            os.environ['RUSTOS_JBROWSE_SITE_TITLE']='CSS reference layout'
+            os.environ['RUSTOS_JBROWSE_SITE_MIN_LINKS']='0'
+        if os.environ.get('RUSTOS_JBROWSE_LARGE') == '1':
+            site=f'http://10.0.2.2:{server.server_port}/large-document'
+            os.environ['RUSTOS_JBROWSE_SITE_TITLE']='Large data document'
+            os.environ['RUSTOS_JBROWSE_SITE_MIN_LINKS']='0'
+        if os.environ.get('RUSTOS_JBROWSE_SHEETS') == '1':
+            site=f'http://10.0.2.2:{server.server_port}/many-sheets'
+            os.environ['RUSTOS_JBROWSE_SITE_TITLE']='Six stylesheet document'
+            os.environ['RUSTOS_JBROWSE_SITE_MIN_LINKS']='0'
+        type_text(f'./jbrowse {site} --diagnostics' if site else './jbrowse --diagnostics' if os.environ.get('RUSTOS_JBROWSE_GOOGLE') == '1' else f'./jbrowse http://10.0.2.2:{server.server_port}{start_path}')
+        launch_started=time.monotonic()
         key('ret')
         wait('[jbrowse] ready')
         # Second native window: x=92, titlebar y=128, content y=156.
         ox,oy=92,156
+        if site:
+            # A load probe records visible basic rendering, not an interactive
+            # Google/Facebook/YouTube task or a complete compatibility pass.
+            destination=Path(os.environ.get('RUSTOS_JBROWSE_SITE_OUT',str(ROOT/'target/site-probe')))
+            destination.mkdir(parents=True,exist_ok=True)
+            deadline=time.monotonic()+45
+            counters=None;error=None;expected_digest=None
+            while expected_digest is None:
+                text=output()
+                error=re.search(r'\[jbrowse\] error: ([^\n]+)',text)
+                match=re.search(r'\[jbrowse\] counters ([^\n]+)',text)
+                if match:
+                    counters={key:int(value) for key,value in re.findall(r'(\w+)=(\d+)',match.group(1))}
+                    expected_digest=counters.get('digest')
+                failed_frame=re.search(r'\[jbrowse\] error_frame digest=(\d+)',text)
+                if failed_frame:expected_digest=int(failed_frame.group(1))
+                assert qemu.poll() is None and time.monotonic()<deadline,'site outcome watchdog'
+                time.sleep(.02)
+            # Publication can precede composition. Accept the readback only once
+            # its opaque page interior matches the submitted native surface.
+            # Exclude the compositor's one-pixel decorative side rims.
+            deadline=time.monotonic()+20
+            while True:
+                frame=shot('site-probe')
+                body=frame.crop((ox+1,oy+64,ox+639,oy+372)).convert('RGB')
+                actual_digest=rgb_digest(body.getdata())
+                if actual_digest==expected_digest:break
+                assert qemu.poll() is None and time.monotonic()<deadline,'submitted page never reached the framebuffer'
+                time.sleep(.02)
+            frame.save(destination/'page.png')
+            colors=body.getcolors(638*308) or []
+            ink=638*308-max((count for count,_ in colors),default=638*308)
+            titles=re.findall(r'\[jbrowse\] loaded: ([^\n]+)',output());title=titles[-1] if titles else ''
+            seconds=time.monotonic()-launch_started
+            checks=dict(title=os.environ.get('RUSTOS_JBROWSE_SITE_TITLE','').lower() in title.lower(),readable_pixels=ink>=100,rendered_links=bool(counters and counters['links']>=int(os.environ.get('RUSTOS_JBROWSE_SITE_MIN_LINKS','1'))))
+            passed=bool(counters and 200<=counters['http_status']<300 and not counters['truncated'] and counters['script_errors']==0 and counters.get('style_errors')==0 and all(checks.values()) and seconds<=5)
+            result=dict(url=site,title=title,load_probe_passed=passed,complete_task_verified=False,elapsed_seconds=seconds,budget_seconds=5,counters=counters,ink_pixels=ink,readback_digest=actual_digest,submitted_digest=expected_digest,checks=checks,error=error.group(1) if error else None,unsupported_script='[jbrowse] unsupported script page' in output(),build_id=hashlib.sha256(disk_image(ROOT).read_bytes()).hexdigest())
+            if os.environ.get('RUSTOS_JBROWSE_CSS') == '1':
+                expected=json.loads((ROOT/'crates/browser/tests/fixtures/css-layout-boxes.json').read_text())
+                assert_rectangles(frame.crop((ox,oy+64,ox+640,oy+372)),expected,inset=1)
+                # The real reference uses18px sans-serif. Permit outline-face
+                # substitution, but require glyphs too large for the old8px cells.
+                ink_bounds=dark_bounds(frame.crop((ox+2,oy+64+156,ox+512,oy+64+186)))
+                assert ink_bounds and 54<=ink_bounds[2]<=75 and 13<=ink_bounds[3]<=22, f'CSS field still uses the wrong font: {ink_bounds}'
+                result['field_ink_bounds']=ink_bounds
+                result['reference_rectangles_match']=True
+            if os.environ.get('RUSTOS_JBROWSE_SHEETS') == '1':
+                assert [p for p in requests if p.startswith('/css-sheet-')]==[f'/css-sheet-{n}.css' for n in range(6)]
+                assert frame.getpixel((ox+500,oy+200))==(96,160,192),'last stylesheet did not win'
+                result['all_six_sheets_in_order']=True
+            (destination/'probe.json').write_text(json.dumps(result,indent=2)+'\n')
+            (destination/'serial.log').write_text(serial.read_text(errors='replace'))
+            print(json.dumps(result,indent=2),flush=True)
+            raise SystemExit(0 if passed else 1)
+        if os.environ.get('RUSTOS_JBROWSE_STOP_STARTUP') == '1':
+            assert stalled_started.wait(5), 'startup request not sent'
+            mark=len(output());click(ox+608,oy+42);wait('[jbrowse] stopped',mark)
+            assert stalled_closed.wait(.5), 'startup stop did not close its socket'
+            print('PASS: Stop cancels the first navigation before any page commits')
         if os.environ.get('RUSTOS_JBROWSE_GOOGLE') == '1':
             wait('[jbrowse] loaded: Google')
             # Wait for the actual native input rectangle, excluding the loading
@@ -163,17 +358,101 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
                 time.sleep(.1)
             if os.environ.get('RUSTOS_JBROWSE_REQUIRE_GOOGLE_RESULTS') == '1':
                 assert '[jbrowse] unsupported script page' not in output()[mark:], 'Google results remain blocked by unsupported JavaScript'
+                wait('[jbrowse] counters ',mark)
+                records=re.findall(r'\[jbrowse\] counters ([^\n]+)',output()[mark:])
+                counters={name:int(value) for name,value in re.findall(r'(\w+)=(\d+)',records[-1])}
+                assert counters['http_status']==200 and counters['script_errors']==0 and counters['style_errors']==0 and counters['truncated']==0 and counters['linked_headings']>=3 and counters['links']>=3, f'Google did not display a usable result list: {counters}'
         def navigate(path):
             global last_navigation
             last_navigation=len(output())
             click(ox+120,oy+42)
             type_text(f'http://10.0.2.2:{server.server_port}{path}')
             key('ret')
+        if os.environ.get('RUSTOS_JBROWSE_PAGE_CONTEXT') == '1':
+            navigate('/verify-context');wait('[jbrowse] loaded: Cookie navigation ready',last_navigation)
+            pixel((ox+500,oy+200),(216,241,228),'cookie-navigation')
+            assert context_requests==[('/verify-results?q=rust+os','proof=42')]
+            assert '[jbrowse] script errors:' not in output()[last_navigation:]
+            navigate('/verify-again');wait('[jbrowse] loaded: Cookie session ready',last_navigation)
+            pixel((ox+500,oy+200),(216,241,228),'cookie-session')
+            assert context_requests[-1]==('/verify-again','proof=42')
+            navigate('/verify-loop');wait('[jbrowse] error: Script navigation limit exceeded',last_navigation)
+            assert requests.count('/verify-loop')==5,'script redirect loop was not bounded at four follows'
+            navigate('/verify-again');wait('[jbrowse] loaded: Cookie session ready',last_navigation)
+            pixel((ox+500,oy+200),(216,241,228),'cookie-navigation-recovered')
+            print('PASS: native generated script, Date, cookie scope, Promise navigation, persistence and redirect-loop recovery')
+            raise SystemExit(0)
+        if os.environ.get('RUSTOS_JBROWSE_STYLE_FAILURE') == '1':
+            navigate('/style-failure');wait('[jbrowse] loaded: Stylesheet failure recovered')
+            wait('[jbrowse] stylesheet errors: 1',last_navigation)
+            pixel((ox+500,oy+200),(197,229,252),'style-failure-recovered')
+            navigate('/many-sheets');wait('[jbrowse] loaded: Six stylesheet document')
+            pixel((ox+500,oy+200),(96,160,192),'style-failure-next-page')
+            assert '[jbrowse] stylesheet errors:' not in output()[last_navigation:]
+            print('PASS: missing stylesheet is reported, inline fallback paints and the next six-sheet navigation recovers')
+            raise SystemExit(0)
+        if os.environ.get('RUSTOS_JBROWSE_NATIVE_SCRIPTS') == '1':
+            navigate('/native-script');wait('[jbrowse] loaded: Native engine ready')
+            image=pixel((ox+500,oy+200),(201,234,255),'native-script')
+            colors=image.crop((ox,oy+64,ox+500,oy+150)).getcolors(500*86)
+            assert sum(count for count,color in colors if color==(12,90,66))>40, 'native DOM text mutation was not painted'
+            navigate('/native-queue');wait('[jbrowse] loaded: Native queue bounded')
+            pixel((ox+500,oy+200),(255,240,221),'native-queue')
+            assert '[jbrowse] script errors: 1' in output()[last_navigation:], 'unbounded microtask queue was not rejected'
+            print('PASS: native restricted QuickJS, classes/functions/promises, DOM pixels and bounded microtask recovery')
+        if os.environ.get('RUSTOS_JBROWSE_P5') == '1':
+            navigate('/login-form');wait('[jbrowse] loaded: Disposable POST fixture')
+            click(ox+100,oy+118)
+            pixel((ox+8,oy+112),(57,122,192),'password-focus')
+            type_text('testpass')
+            click(ox+100,oy+84)
+            image=pixel((ox+8,oy+80),(57,122,192),'password-mask')
+            masked=image.crop((ox+14,oy+113,ox+78,oy+125)).tobytes()
+            reference=image.crop((ox+14,oy+147,ox+78,oy+159)).tobytes()
+            assert masked==reference, 'password pixels differ from the eight-star reference'
+            assert len(set(masked))>1, 'password mask is blank'
+            mark=len(output());click(ox+40,oy+186);wait('[jbrowse] loaded: POST redirect ready',mark)
+            pixel((ox+500,oy+200),(224,244,214),'post-redirect')
+            assert posts==[('/login?flow=1','application/x-www-form-urlencoded',b'user=guest&password=testpass&csrf=fake-token&action=login')], 'unexpected disposable form request'
+            assert '/post-result' in requests, '303 did not become GET'
+            before_posts=len(posts)
+            mark=len(output());click(ox+608,oy+42);wait('[jbrowse] loaded: POST redirect ready',mark)
+            assert len(posts)==before_posts, 'reload unexpectedly replayed POST'
+            assert 'testpass' not in output(), 'form value leaked to serial diagnostics'
+            print('PASS: password pixels/editing, exact POST body, 303-to-GET redirect and reload without POST replay')
+        if os.environ.get('RUSTOS_JBROWSE_P4') == '1':
+            navigate('/native-attributes');wait('[jbrowse] loaded: Native attributes ready')
+            pixel((ox+500,oy+200),(237,246,255),'native-attributes')
+            # Blank area of the class-colored row, clear of antialiased glyphs.
+            pixel((ox+500,oy+75),(180,233,210),'native-attributes')
+            assert '[jbrowse] script errors:' not in output()[last_navigation:]
+            mark=len(output());click(ox+90,oy+80);wait('[jbrowse] loaded: Second page',mark)
+            assert '/dir/next.html' in requests and '/wrong' not in requests, 'scripted href was not followed'
+            print('PASS: native attributes, CSS class/style invalidation, base64 and real scripted link navigation')
         navigate('/start')
         wait('[jbrowse] loaded: Browser fixture')
         assert '/dir/theme.css' in requests, requests
         pixel((ox+500,oy+200),(245,240,223),'html-css')
         pixel((ox+12,oy+76),(36,104,172),'html-css')
+        if os.environ.get('RUSTOS_JBROWSE_RESIZE') == '1':
+            # The expander fills the DE work area, keeping both panels visible.
+            click(ox+640-51,128+14)
+            image=pixel((1800,900),(245,240,223),'maximized-browser')
+            assert image.getpixel((1919,0))==(17,29,48), 'maximize covered top panel'
+            assert image.getpixel((1919,1079))==(16,28,46), 'maximize covered bottom panel'
+            pixel((1902,42),(255,107,121),'maximized-browser')
+            mark=len(output());click(1836,98);wait('[jbrowse] loaded: Browser fixture',mark)
+            click(1869,42)
+            pixel((ox+622,142),(255,107,121),'restored-browser')
+            pixel((ox+500,oy+200),(245,240,223),'restored-browser')
+            move(ox+639,oy+399);hmp('mouse_button 1');time.sleep(.15)
+            move(ox+959,oy+599);hmp('mouse_button 0')
+            pixel((ox+900,oy+500),(245,240,223),'resized-browser')
+            pixel((ox+942,142),(255,107,121),'resized-browser')
+            move(ox+959,oy+599);hmp('mouse_button 1');time.sleep(.15)
+            move(ox+639,oy+399);hmp('mouse_button 0')
+            pixel((ox+622,142),(255,107,121),'resize-back')
+            print('PASS: maximize/restore, DE panel reservations, pointer coordinates beyond 1023 and edge resize with client redraw')
         # Release inside an anchor navigates relative to the redirect target.
         click(ox+40,oy+90)
         wait('[jbrowse] loaded: Second page')
@@ -191,12 +470,20 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         pixel((ox+500,oy+200),(212,237,218),'recovered')
         navigate('/form');wait('[jbrowse] loaded: Search fixture')
         # Entry x=8,y=8 in document coordinates; submit is on the next row.
-        click(ox+100,oy+84);type_text('rust os');key('ret')
+        click(ox+100,oy+84)
+        pixel((ox+8,oy+80),(57,122,192),'form-focus')
+        type_text('rust os')
+        if os.environ.get('RUSTOS_JBROWSE_RESIZE') == '1':
+            click(ox+589,142);pixel((1902,42),(255,107,121),'maximized-form')
+            click(1869,42);pixel((ox+622,142),(255,107,121),'restored-form')
+        key('ret')
         wait('[jbrowse] loaded: Search results')
         assert '/find?hl=en&q=rust+os' in requests,requests
         pixel((ox+500,oy+200),(221,243,255),'form-search')
         navigate('/form');wait('[jbrowse] loaded: Search fixture')
-        click(ox+100,oy+84);type_text('browser');click(ox+40,oy+118)
+        click(ox+100,oy+84)
+        pixel((ox+8,oy+80),(57,122,192),'form-focus')
+        type_text('browser');click(ox+40,oy+118)
         wait('[jbrowse] loaded: Search results')
         assert '/find?hl=en&q=browser&btnG=Search' in requests,requests
         pixel((ox+500,oy+200),(221,243,255),'form-button')
@@ -215,14 +502,78 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
             navigate('/dir/next.html');wait('[jbrowse] loaded: Second page')
             pixel((ox+500,oy+200),(212,237,218),'script-recovery')
         if os.environ.get('RUSTOS_JBROWSE_PUBLIC') == '1':
+            before_public=shot('before-public').crop((ox,oy+64,ox+640,oy+200)).tobytes()
             click(ox+120,oy+42)
             type_text('http://info.cern.ch/hypertext/WWW/TheProject.html')
             key('ret')
             wait('[jbrowse] loaded: The World Wide Web project')
-            image=pixel((ox+500,oy+200),(255,255,255),'cern-public')
+            # The old background probe now intersects proportional text.
+            # Probe the empty margin and require fresh document pixels as well.
+            deadline=time.monotonic()+20
+            while True:
+                image=pixel((ox+2,oy+100),(255,255,255),'cern-public')
+                if image.crop((ox,oy+64,ox+640,oy+200)).tobytes()!=before_public: break
+                assert time.monotonic()<deadline, 'public document did not replace old pixels'
+                time.sleep(.1)
             # Real page text occupies the document area; toolbar is excluded.
             colors=image.crop((ox,oy+64,ox+640,oy+200)).getcolors(640*136)
             assert sum(count for count,color in colors if color != (255,255,255)) > 100, 'public page has no rendered text'
+            if os.environ.get('RUSTOS_JBROWSE_RESIZE') == '1':
+                click(ox+589,142)
+                pixel((1800,900),(255,255,255),'cern-maximized')
+                pixel((1902,42),(255,107,121),'cern-maximized')
+                click(1869,42);pixel((ox+622,142),(255,107,121),'cern-restored')
+
+        if os.environ.get('RUSTOS_JBROWSE_IMAGES') == '1':
+            navigate('/image');wait('[jbrowse] loaded: Image fixture')
+            pixel((ox+20,oy+84),(255,0,0),'decoded-image')
+            pixel((ox+100,oy+84),(127,255,127),'alpha-image')
+            pixel((ox+100,oy+130),(127,255,127),'image-no-text-decoration')
+            click(ox+20,oy+84);wait('[jbrowse] loaded: Second page')
+            mark=len(output());click(ox+21,oy+42);wait('[jbrowse] loaded: Image fixture',mark)
+            pixel((ox+20,oy+84),(255,0,0),'history-image')
+            mark=len(output());click(ox+53,oy+42);wait('[jbrowse] loaded: Second page',mark)
+            pixel((ox+500,oy+200),(212,237,218),'history-forward')
+            navigate('/bad-image');wait('[jbrowse] loaded: Broken image fixture')
+            image=pixel((ox+500,oy+200),(255,255,255),'bad-image-fallback')
+            assert any(color!=(255,255,255) and count>20 for count,color in image.crop((ox,oy+64,ox+400,oy+150)).getcolors(400*86)), 'image failure erased document fallback'
+            print('PASS: native PNG pixels, alpha/scaling, image link hits and failure fallback')
+        if os.environ.get('RUSTOS_JBROWSE_TYPOGRAPHY') == '1':
+            navigate('/typography');wait('[jbrowse] loaded: Typography fixture')
+            image=pixel((ox+500,oy+200),(249,249,249),'typography')
+            crop=image.crop((ox,oy+64,ox+640,oy+300))
+            colors=crop.getcolors(crop.width*crop.height)
+            assert len(colors)>20, 'page text has no antialiased coverage'
+            blue=[];red=[]
+            for y in range(crop.height):
+                for x in range(crop.width):
+                    r,g,b=crop.getpixel((x,y))
+                    if b>200 and r<120 and g<120:blue.append(x)
+                    if r>200 and g<120 and b<120:red.append(x)
+            assert blue and red, 'proportional glyph fixtures absent'
+            assert max(blue)-min(blue)>2*(max(red)-min(red)), 'WWW and iii still use a fixed glyph cell'
+            print('PASS: native proportional antialiased fonts, CSS families and Unicode fixture')
+        if os.environ.get('RUSTOS_JBROWSE_LIFECYCLE') == '1':
+            stalled_started.clear();stalled_closed.clear()
+            navigate('/lifecycle');wait('[jbrowse] loaded: Cancellation controls')
+            pixel((ox+500,oy+200),(255,255,255),'cancellation-controls')
+            click(ox+20,oy+80)
+            assert stalled_started.wait(5), 'stalled HTTP fixture not requested'
+            began=time.monotonic()
+            last_navigation=len(output());click(ox+20,oy+100)
+            wait('[jbrowse] loaded: HTTP cancellation recovered')
+            assert stalled_closed.wait(.5), 'superseded request socket stayed open'
+            assert time.monotonic()-began<5, 'navigation waited for old connection timeout'
+            pixel((ox+500,oy+200),(226,243,228),'cancelled-navigation')
+            click(ox+120,oy+42);type_text(f'https://10.0.2.2:{tls_listener.getsockname()[1]}/');key('ret')
+            assert tls_started.wait(5), 'TLS fixture did not receive handshake bytes'
+            began=time.monotonic()
+            last_navigation=len(output());click(ox+20,oy+80)
+            wait('[jbrowse] loaded: TLS cancellation recovered')
+            assert tls_closed.wait(.5), 'cancelled TLS handshake socket stayed open'
+            assert time.monotonic()-began<5, 'navigation waited for old TLS timeout'
+            pixel((ox+500,oy+200),(219,240,250),'cancelled-tls')
+            print('PASS: stalled HTTP/TLS cancellation, fresh destinations and framebuffer commits')
         # Close, return to the independently running terminal, then relaunch.
         click(ox+622,128+14)
         time.sleep(.5)
@@ -240,3 +591,5 @@ with tempfile.TemporaryDirectory(prefix='jbrowse-') as tmp:
         except subprocess.TimeoutExpired:
             qemu.kill();qemu.wait()
         server.shutdown();server.server_close()
+        if tls_listener is not None: tls_listener.close()
+        for connection in tls_connections: connection.close()

@@ -7,8 +7,53 @@ name = "rustos-browser"
 version = "0.1.0"
 dependencies = [
  "rustos-script",
+ "rustos-text",
+ "rustos-web-image",
 ]
 
 [[package]]
 name = "rustos-script"
 version = "0.1.0"
+
+[[package]]
+name = "rustos-text"
+version = "0.1.0"
+
+[[package]]
+name = "rustos-web-image"
+version = "0.1.0"
+dependencies = [
+ "zune-core",
+ "zune-png",
+]
+
+[[package]]
+name = "simd-adler32"
+version = "0.3.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+
+[[package]]
+name = "zune-core"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f423a2c17029964870cfaabb1f13dfab7d092a62a29a89264f4d36990ca414a"
+
+[[package]]
+name = "zune-inflate"
+version = "0.2.54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73ab332fe2f6680068f3582b16a24f90ad7096d5d39b974d1c0aff0125116f02"
+dependencies = [
+ "simd-adler32",
+]
+
+[[package]]
+name = "zune-png"
+version = "0.4.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d29c085769c6f29effea890f093120ac019375fdc789d2a496ba8ba96c77509"
+dependencies = [
+ "zune-core",
+ "zune-inflate",
+]

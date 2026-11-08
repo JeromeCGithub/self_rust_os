@@ -100,10 +100,16 @@ const SYSCALL_ERROR: u64 = u64::MAX - 1;
 /// The syscall return value, or [`PROCESS_EXIT_SENTINEL`] to signal process exit.
 pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
     crate::scheduler::reap_retired();
+    if !crate::scheduler::syscall_permitted(num, arg1) {
+        return SYSCALL_ERROR;
+    }
     if (96..=109).contains(&num) {
         return thread_dispatch(num, arg1, arg2, arg3);
     }
     match num {
+        rustos_process_abi::isolation::SYS_RESTRICT => {
+            crate::scheduler::restrict_worker(arg1, arg2, arg3)
+        }
         SYS_EXIT => {
             crate::scheduler::exit_current(arg1);
             PROCESS_EXIT_SENTINEL
@@ -138,6 +144,7 @@ pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: 
         }
         64..=70 => crate::net::syscall(num, arg1, arg2, arg3),
         80..=81 => crate::system::syscall(num, arg1, arg2, arg3),
+        82..=85 => crate::audio::syscall(num, arg1, arg2, arg3),
         SYS_READ_NB => sys_read_nb(arg1, arg2, arg3),
         SYS_LS => sys_ls(arg1, arg2, arg3),
         SYS_READ_FILE => sys_read_file(arg1, arg2, arg3),
@@ -166,10 +173,15 @@ pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: 
         }
         30 if arg3 == 48 => crate::userspace::launch::spawn(arg1, arg2),
         SYS_STDIO => {
-            if arg1 > 2 || arg2 > u32::MAX as u64 || arg3 != 0 || (arg1 != 1 && arg2 != 0) {
+            if arg1 > 2
+                || arg2 > u32::MAX as u64
+                || (arg3 > u32::MAX as u64 + 1)
+                || (arg1 == 0 && arg3 != 0)
+                || (arg1 != 1 && arg2 != 0)
+            {
                 return SYSCALL_ERROR;
             }
-            crate::scheduler::stdio(arg1, arg2 as u32)
+            crate::scheduler::stdio_selected(arg1, arg2 as u32, arg3)
         }
         SYS_KILL => sys_kill(arg1),
         SYS_WAITPID => sys_waitpid(arg1),
@@ -753,9 +765,14 @@ mod tests {
 
     #[test_case]
     fn stdio_rejects_reserved_and_truncated_arguments() {
-        for (op, payload, reserved) in
-            [(3, 0, 0), (1, u64::MAX, 0), (0, 1, 0), (2, 1, 0), (0, 0, 1)]
-        {
+        for (op, payload, reserved) in [
+            (3, 0, 0),
+            (1, u64::MAX, 0),
+            (0, 1, 0),
+            (2, 1, 0),
+            (0, 0, 1),
+            (2, 0, u64::MAX),
+        ] {
             assert_eq!(
                 syscall_dispatch(SYS_STDIO, op, payload, reserved),
                 SYSCALL_ERROR

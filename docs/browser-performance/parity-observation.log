@@ -1,0 +1,24 @@
+   Compiling rustos-text v0.1.0 (/home/jay/personal/os/jbrowse/crates/text)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/parity.rs (/home/jay/personal/os/jbrowse/crates/text/target/x86_64-unknown-linux-gnu/debug/deps/parity-a901cce3b70a6b61)
+
+running 1 test
+test on_demand_faces_preserve_existing_unicode_metrics_and_exact_coverage ... FAILED
+
+failures:
+
+---- on_demand_faces_preserve_existing_unicode_metrics_and_exact_coverage stdout ----
+
+thread 'on_demand_faces_preserve_existing_unicode_metrics_and_exact_coverage' panicked at tests/parity.rs:23:13:
+assertion `left == right` failed
+  left: 29
+ right: 28
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    on_demand_faces_preserve_existing_unicode_metrics_and_exact_coverage
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s
+
+error: test failed, to rerun pass `--test parity`

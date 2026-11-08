@@ -1,0 +1,22 @@
+   Compiling rustos-text v0.1.0 (/home/jay/personal/os/jbrowse/crates/text)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/startup.rs (/home/jay/personal/os/jbrowse/crates/text/target/x86_64-unknown-linux-gnu/debug/deps/startup-5c44c7427dbfb924)
+
+running 1 test
+test constructing_embedded_faces_does_not_compile_or_allocate_every_glyph ... FAILED
+
+failures:
+
+---- constructing_embedded_faces_does_not_compile_or_allocate_every_glyph stdout ----
+
+thread 'constructing_embedded_faces_does_not_compile_or_allocate_every_glyph' panicked at tests/startup.rs:36:5:
+font initialization allocated 296713176 bytes before a glyph was requested
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    constructing_embedded_faces_does_not_compile_or_allocate_every_glyph
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+error: test failed, to rerun pass `--test startup`

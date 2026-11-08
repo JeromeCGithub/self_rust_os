@@ -1,0 +1,9 @@
+
+running 5 tests
+test expansion_tests::failed_allocations_restore_the_previous_mode_and_restore_rectangle ... ok
+test frame_tests::outstanding_old_frames_cannot_be_reinterpreted_at_an_offered_size ... ok
+test expansion_tests::rapid_restore_does_not_change_the_mode_of_an_inflight_maximize_frame ... ok
+test reservation_tests::reservations_wait_for_inflight_geometry_and_keep_a_valid_decorated_window ... ok
+test tests::corners_resize_with_fixed_opposite_edges_and_workspace_clipping ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

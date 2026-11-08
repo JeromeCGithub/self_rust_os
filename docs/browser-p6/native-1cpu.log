@@ -1,0 +1,10 @@
+qemu-system-x86_64: -device AC97,audiodev=test: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: -device AC97,audiodev=test: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: terminating on signal 15 from pid 439954 (python3)
+PASS: independently captured non-silent stereo PCM {'sample_rate': 48000, 'channels': 2, 'active_frames': 36864, 'frequency_hz': 984.375}

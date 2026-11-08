@@ -1,0 +1,23 @@
+   Compiling rustos-media v0.1.0 (/home/jay/personal/os/jbrowse/crates/media)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (/home/jay/personal/os/jbrowse/crates/media/target/x86_64-unknown-linux-gnu/debug/deps/rustos_media-57bbd4148f89a840)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/wav.rs (/home/jay/personal/os/jbrowse/crates/media/target/x86_64-unknown-linux-gnu/debug/deps/wav-7c3b05f76d56a95d)
+
+running 3 tests
+test native_pcm_chunks_seek_in_frames_and_preserve_channels_without_copying ... ok
+test malformed_truncated_ambiguous_and_wrong_profiles_fail_closed ... ok
+test odd_sized_metadata_chunks_are_bounded_and_skipped_with_padding ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustos_media
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

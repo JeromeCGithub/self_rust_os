@@ -1,0 +1,55 @@
+   Compiling rustos-net-abi v0.1.0 (/home/jay/personal/os/jbrowse/crates/net-abi)
+   Compiling rustos-http v0.1.0 (/home/jay/personal/os/jbrowse/crates/http)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running unittests src/lib.rs (rustos-p1-http/x86_64-unknown-linux-gnu/debug/deps/rustos_http-d9a863a6a61eed8a)
+
+running 2 tests
+test dns::tests::name_pointer_cycle_is_bounded ... ok
+test dns::tests::query_and_compressed_a_response ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/client.rs (rustos-p1-http/x86_64-unknown-linux-gnu/debug/deps/client-ef7c307443d7165f)
+
+running 23 tests
+test content_length_and_fragmented_headers_short_writes ... ok
+test cancellation_before_open_and_during_headers_closes_only_owned_sockets ... FAILED
+test chunked_extensions_trailers_and_fragmentation ... ok
+test dns_timeout_retries_and_closes ... ok
+test eof_framing_status_and_informational_response ... ok
+test final_url_after_redirect_is_observed_once_for_relative_resources ... ok
+test dns_query_matching_cname_and_udp_cleanup ... ok
+test incomplete_and_ambiguous_messages_fail_and_close ... ok
+test invalid_urls_never_open_sockets ... ok
+test https_uses_tls_and_default_port_before_sending_http ... ok
+test no_body_204_and_304 ... ok
+test large_body_streams_without_collecting_and_can_cancel ... ok
+test unavailable_tls_never_sends_plaintext ... ok
+test rejects_https_downgrade_and_preserves_relative_scheme ... ok
+test relative_redirect_and_loop_are_bounded ... ok
+test response_reports_declared_charset_for_browser_decoding ... ok
+test timeout_output_failure_and_body_limit_release_socket ... ok
+test follows_long_redirects_with_partial_request_writes ... ok
+test accepts_long_chunk_extensions_and_trailers ... ok
+test malformed_status_chunk_and_header_limits ... ok
+test accepts_modern_security_headers_and_larger_header_blocks ... ok
+test larger_header_line_and_total_limits_still_close_the_socket ... ok
+test streams_up_to_the_expanded_default_body_limit ... ok
+
+failures:
+
+---- cancellation_before_open_and_during_headers_closes_only_owned_sockets stdout ----
+
+thread 'cancellation_before_open_and_during_headers_closes_only_owned_sockets' panicked at tests/client.rs:630:5:
+assertion `left == right` failed
+  left: Err(Truncated)
+ right: Err(Cancelled)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    cancellation_before_open_and_during_headers_closes_only_owned_sockets
+
+test result: FAILED. 22 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.02s
+
+error: test failed, to rerun pass `--test client`

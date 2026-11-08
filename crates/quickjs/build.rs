@@ -52,6 +52,22 @@ fn main() {
         forbidden,
         "#undef malloc\n#undef free\n#undef realloc\n#define malloc(s) malloc_is_forbidden(s)",
     );
+    if native {
+        // RustOS has UTC seconds but no per-process timezone database. QuickJS
+        // computes calendar fields itself; its sole localtime_r call asks only
+        // for the local UTC offset. Select UTC explicitly rather than exporting
+        // a partial libc localtime implementation. Keep vendor input intact.
+        let local_offset = "localtime_r(&ti, &tm);";
+        assert_eq!(
+            configured.matches(local_offset).count(),
+            1,
+            "UTC configuration patch drift"
+        );
+        configured = configured.replace(
+            local_offset,
+            "tm.tm_gmtoff = 0; /* RustOS local timezone is UTC. */",
+        );
+    }
     fs::write(out.join("quickjs.c"), configured).expect("configured engine source");
     let cc = env::var("CC").unwrap_or_else(|_| "gcc".into());
     let mut sources = vec![out.join("quickjs.c")];

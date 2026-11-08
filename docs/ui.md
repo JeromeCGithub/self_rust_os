@@ -102,8 +102,8 @@ components, layout and styles. The window protocol and syscall ABI are unchanged
 
 ## Drawing and input contract
 
-- Content dimensions are independent of desktop resolution: 160–640 pixels wide
-  and 96–400 high, also bounded by the display's negotiated workspace. The SDK
+- Content dimensions are independent of desktop resolution: 160–1920 pixels wide
+  and 96–1080 high, also bounded by the display's negotiated workspace. The SDK
   preflights only the titlebar; the DE requests panel reservations and the WM
   rejects content that does not fit them. The default DE reserves 28 pixels above
   and 32 below, with a further 28 pixels for window decorations. The WM chooses placement and adds a
@@ -121,7 +121,7 @@ components, layout and styles. The window protocol and syscall ABI are unchanged
   presenting the frame. Pixels stay unchanged while a submission is outstanding. This supplies
   coherent snapshots for SDK clients; it is not buffer swapping or display vsync.
   Raw clients remain responsible for following the same protocol.
-- `poll_event` provides local pointer, focus and close events. The WM routes
+- `poll_event` provides local pointer, focus, resize and close events. The WM routes
   pointer events to the focused native window, retaining delivery outside its
   bounds so a pressed widget can cancel on release outside. Keyboard reads still
   use focused `sys::read_nb`; the SDK also provides an independent bounded text editor model.
@@ -185,13 +185,69 @@ legacy window registration and full-display pointer routing. See the
 [shell extension](desktop-environment.md#shell-message-extension). Existing app
 message kinds and syscall numbers are preserved.
 
-Only the first configuration is accepted for a window. Geometry, content, and
-material are fixed for its lifetime. Unknown message kinds are ignored. Configuration
+Only the first initial configuration is accepted for a window. Version-1 geometry
+and material remain fixed; version2 adds compositor-offered resizing as described below. Unknown message kinds are ignored. Configuration
 replies precede pointer delivery; frame releases follow presentation. Pending replies
 and focus state are retried when a client inbox is full. Button transitions sampled
 during rendering are queued in order (32 entries); motion coalesces to its latest
 position. Overflow retains the oldest edges and reconciles to the newest state. This is a small project protocol,
 not Wayland compatibility or a general capability/session system.
+
+## Window protocol version 2 and resizing
+
+The compositor owns resize/move/maximize/restore and all decoration hit testing.
+The DE continues to reserve its panels. Drag any edge/corner of a new SDK window;
+use the square control immediately left of Close to expand to the workspace and
+restore its previous bounds. Maximized windows retain the titlebar and DE panels.
+Their edges/titlebar do not start another resize/drag until restored. Interactive
+minimum content is the lesser of the initial size and320×200; initially smaller
+supported clients retain their smaller minimum. Raw and version-1 clients keep
+fixed dimensions and their existing pointer/commit format.
+
+New SDK configurations set bit27 to select version2. Initial width/height still
+fit the complete mapped display surface, including the28-pixel titlebar and DE
+work-area constraints. Width and height use11 bits each. No syscall changes or
+additional surface mappings are needed; snapshots/canvases retain the actual
+framebuffer pitch. All clients must keep a committed surface immutable until
+matching RELEASE, including while a resize offer is pending.
+
+| Kind | Version-2 payload |
+| --- | --- |
+| CONFIGURE1 | Width0–10, height11–21, material22–23, version flag27; other bits zero |
+| COMMIT3 | Actual submitted width0–10, height11–21, serial22–27 (six bits) |
+| RELEASE4 | Exact28-bit COMMIT payload, after copying/presenting that frame |
+| POINTER5 | Signed12-bit x0–11/y12–23, buttons24–26; bit27 zero |
+| RESIZE F | WM→app only: offered width0–10/height11–21; other low bits zero |
+
+Only one resize offer is active per client; further drag targets coalesce. The
+WM preallocates staging buffers before publishing an offer, keeps the old cache
+and geometry for old-size frames, and adopts the offered bounds on the first
+matching new-size frame. Unoffered frame sizes cannot reinterpret a previous
+submission. Frame dimensions travel with each commit, so a resize arriving during
+an internal RELEASE wait cannot race an old frame. The SDK validates offers
+against its original full surface, cancels widget capture, and emits
+`Event::Resized { width, height }`. `Window::width/height` and the next Canvas use
+the new size; generic component loops redraw automatically. Custom applications
+handle the resize event or read canvas dimensions while drawing.
+
+Decoration pointer capture stays in the WM through release. A maximize click
+must not become a client click after the window moves underneath it. jbrowse
+retains its document and edited form values, reflows using the existing shared
+font metrics, and anchors URL/scroll/status controls to the new canvas. Other
+custom applications retain their own content-layout policy; Terminal currently
+keeps its fixed text grid within the resized canvas.
+
+The compositor owns per-slot packed content/backdrop Vec buffers with checked
+geometry and fallible reservation. At most six live slots each retain a front
+and one staged cache; removal releases both. Maximum supported cache payload is
+under193 MiB across all six full-size front/staging pairs, plus display/scratch
+buffers. The normal workspace is smaller. Allocator high-water heap pages are
+reused, not promised to return immediately to the OS. A failed resize allocation
+keeps the old window; no incomplete buffer is offered. Full-display scratch and
+blur sizes are derived from the existing1920×1080/pitch8192 platform envelope.
+
+See [resize evidence and limits](window-resize.md). Version-1 wire handling above
+is retained for older binaries; all repository applications/metadata were rebuilt.
 
 ## Validation
 
@@ -222,7 +278,28 @@ and drawing clips within the rectangle. The borrow prevents simultaneous mutable
 access through the parent, and no new pointer or unsafe code is needed. Browser
 scrolling uses this to prevent page text from painting over native chrome.
 
+`Canvas::region_digest(Rect)` fingerprints a fully contained RGB24 region without
+mutating it; alpha and row padding are excluded. This noncryptographic developer
+readback helper returns `None` for invalid geometry. It does not acknowledge
+presentation. The [browser probe](browser-compatibility-p8.md) waits for a matching
+physical framebuffer region separately and excludes compositor decorations.
+
 Input received while waiting for frame RELEASE is buffered in a bounded FIFO and
 returned by `poll_event` in order. Pointer press/release and focus transitions
 are preserved. Capacity is 64 events; overflow returns `Error::Unavailable`
 rather than silently dropping a transition.
+
+## Optional proportional text and image painting
+
+Enable the SDK `fonts` feature for `ui::font::{FontSet, Painter, Style, Family}`.
+Load trusted font bytes once, share immutable metrics with layout and keep each
+Painter/cache on its painting thread. The coverage cache is bounded to512 glyphs
+and1 MiB. Embedded browser faces and known limits are documented in
+[P2 presentation](browser-rendering-p2.md). Other apps keep the bitmap path.
+
+`Canvas::alpha_mask` blends a complete grayscale mask; `rgba_image` paints a
+complete RGBA buffer into a destination rectangle with nearest-neighbor scaling.
+Both validate checked buffer geometry before drawing, return false on malformed
+input, clip to the current viewport and preserve row padding. They allocate no
+buffers and interpret no URLs/codecs. Zero destination extent is a successful
+no-op for an otherwise valid image. The caller owns decoding/resource budgets.

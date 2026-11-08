@@ -1,0 +1,11 @@
+[package]
+name = "rustos-browser-dom"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Owned native ECMAScript realm and bounded document effects"
+[features]
+freestanding = ["rustos-quickjs/freestanding"]
+[dependencies]
+rustos-browser = { path = "../browser" }
+rustos-quickjs = { path = "../quickjs" }

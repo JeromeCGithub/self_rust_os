@@ -1,0 +1,10 @@
+qemu-system-x86_64: terminating on signal 15 from pid 264168 (python3)
+PASS: Stop cancels the first navigation before any page commits
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 282, in <module>
+    pixel((ox+100,oy+130),(127,255,127),'image-no-text-decoration')
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 174, in pixel
+    assert time.monotonic()<deadline, f'{point}: {image.getpixel(point)} != {color}'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (192, 286): (0, 0, 0) != (127, 255, 127)

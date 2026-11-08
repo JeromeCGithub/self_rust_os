@@ -1,0 +1,9 @@
+qemu-system-x86_64: terminating on signal 15 from pid 374861 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/tls.py", line 153, in <module>
+    if __name__=='__main__':main()
+                            ~~~~^^
+  File "/home/jay/personal/os/jbrowse/e2e/tls.py", line 135, in main
+    assert sum(request.startswith(b'POST /post ') for _,request in received)==2, 'verified TLS POST requests missing'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: verified TLS POST requests missing

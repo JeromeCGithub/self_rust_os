@@ -59,3 +59,9 @@ def launchers(disk):
     names = [Path(p).stem.upper() for p in listing.decode().splitlines()
              if p.upper().endswith('.BIN') and Path(p).stem.upper() not in ('WM', 'DE')]
     return {name: 50 + 100 * index for index, name in enumerate(names[:16])}
+
+
+def console_text(raw):
+    """Decode console output into a stable append-only observation stream."""
+    import re
+    return ''.join(re.findall(r'\[kernel\] sys_write: "(.*?)"\n', raw, re.S))

@@ -1,0 +1,115 @@
+[H[J[1;1HGRUB starting
+
+[grub] entered 64-bit Rust entry
+[grub] multiboot2 magic OK: 0x36d76289
+[grub] memory map: 2 regions, 1023 MiB usable
+[grub] bootloader framebuffer: 1920x1080x32 type=1 addr=0xfd000000 pitch=7680
+[grub] FbInfo: 1920x1080 pitch=7680 addr=0xfd000000
+[grub] kernel image ends at 0x17d000
+[grub] frame allocator: 1 regions after reserving kernel
+[grub] mapped 1024 MiB of physical memory at 0xffff800000000000
+[grub] mapping framebuffer: 2025 pages at phys 0xfd000000
+[grub] framebuffer mapped at virt 0xffff900000000000
+[kernel] RustOS booting...
+[kernel] Initialization complete!
+[kernel] Heap OK
+[kernel] Keyboard queue OK
+[mouse] initialized (IRQ12, 3-byte packets)
+[mouse] absolute pointer enabled (QEMU vmmouse)
+[net] e1000 52:54:00:12:34:56; 10.0.2.15/24 via 10.0.2.2
+[audio] PCM unavailable: NoDevice
+[kernel] mounting root filesystem...
+[fs] mounting FAT32 partition: lba_start=2048 sectors=260096
+[kernel] root filesystem mounted
+[kernel] Heap initialized, starting scheduler...
+[kernel] mapped ELF image: 6631 pages; 51011 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 0 (61200 bytes)
+[smp] online=8
+[kernel] mapped ELF image: 1529 pages; 35006 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 1 (43600 bytes)
+[kernel] sys_spawn: '/BIN/DE.BIN' -> pid 1
+[kernel] sys_write: "[compositor] ready"
+[kernel] sys_write: "
+"
+[kernel] sys_write: "[desktop] wallpaper loaded: "
+[kernel] sys_write: "true"
+[kernel] sys_write: "
+"
+[kernel] sys_write: "[compositor] desktop surface committed"
+[kernel] sys_write: "
+"
+[kernel] sys_write: "[desktop] ready: "
+[kernel] sys_write: "10"
+[kernel] sys_write: " applications"
+[kernel] sys_write: "
+"
+[kernel] sys_write: "[compositor] desktop surface committed"
+[kernel] sys_write: "
+"
+[kernel] mapped ELF image: 10 pages; 31088 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 2 (39096 bytes)
+[kernel] sys_spawn: '/BIN/PORTAL.BIN' -> pid 2
+[kernel] sys_write: "[portal] Portal starting..."
+[kernel] sys_write: "
+"
+[kernel] sys_write: "[desktop] launched "
+[kernel] sys_write: "Terminal"
+[kernel] sys_write: " pid="
+[kernel] sys_write: "2"
+[kernel] sys_write: "
+"
+[kernel] mapped ELF image: 192 pages; 774131 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 3 (783888 bytes)
+[kernel] sys_spawn: '/BIN/FORGE.BIN' -> pid 3
+[kernel] sys_write: "[portal] shell pid="
+[kernel] sys_write: "3"
+[kernel] sys_write: "
+"
+[kernel] sys_write: "[portal] output: "
+[kernel] sys_write: "self_rust_os forge v1.0"
+[kernel] sys_write: "
+"
+[kernel] sys_write: "[portal] output: "
+[kernel] sys_write: "Type 'help' for commands."
+[kernel] sys_write: "
+"
+[kernel] sys_write: "[portal] output: "
+[kernel] sys_write: ""
+[kernel] sys_write: "
+"
+[kernel] sys_write: "[portal] output: "
+[kernel] sys_write: "diagnostics"
+[kernel] sys_write: "
+"
+[kernel] sys_write: "[portal] output: "
+[kernel] sys_write: "Spawning /bin/JBROWSE.BIN..."
+[kernel] sys_write: "
+"
+[kernel] mapped ELF image: 941 pages; 3844309 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 4 (3852088 bytes)
+[kernel] sys_spawn: '/BIN/JBROWSE.BIN' -> pid 4
+[kernel] sys_write: "[portal] output: "
+[kernel] sys_write: "started pid 4"
+[kernel] sys_write: "
+"
+[kernel] sys_write: "[jbrowse] ready"
+[kernel] sys_write: "
+"
+[kernel] sys_write: "[jbrowse] error: "
+[kernel] sys_write: "response or URL exceeds limits"
+[kernel] sys_write: "
+"
+[kernel] sys_write: "[jbrowse] error_frame digest="
+[kernel] sys_write: "16431960419761525381"
+[kernel] sys_write: "
+"

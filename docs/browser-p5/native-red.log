@@ -1,0 +1,9 @@
+qemu-system-x86_64: terminating on signal 15 from pid 370108 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 255, in <module>
+    pixel((ox+8,oy+112),(57,122,192),'password-focus')
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 193, in pixel
+    assert time.monotonic()<deadline, f'{point}: {image.getpixel(point)} != {color}'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (100, 268): (126, 155, 185) != (57, 122, 192)

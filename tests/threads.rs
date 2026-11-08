@@ -112,6 +112,7 @@ fn ownership_and_wait_boundaries() {
     let baseline = scheduler::frame_count();
     argument_mapping_checks(&mut context);
     heap_mapping_checks(&mut context);
+    restricted_heap_checks(&mut context);
     elf_mapping_checks(&mut context);
     let child = scheduler::spawn_process(&[0xc3], 0).unwrap();
     assert_eq!(scheduler::wait_message(u64::MAX), u64::MAX - 1);
@@ -412,4 +413,38 @@ fn activate_pid(pid: u32, context: &mut u64) {
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     self_rust_os::test_panic_handler(info)
+}
+
+// The worker budget restricts complete owned pages; failures preserve mappings.
+fn restricted_heap_checks(context: &mut u64) {
+    let parent = scheduler::current_pid().unwrap();
+    assert_eq!(scheduler::restrict_worker(1, 65536, 0), u64::MAX - 1);
+    let baseline = scheduler::frame_count();
+    for _ in 0..3 {
+        let child = scheduler::spawn_process(&[0xc3], 0).unwrap();
+        assert!(scheduler::connect_stdio(child));
+        activate_pid(child, context);
+        assert_eq!(scheduler::restrict_worker(1, 65537, 0), u64::MAX - 1);
+        assert_eq!(scheduler::restrict_worker(1, 65536, 0), 0);
+        let base = rustos_thread_abi::HEAP_BASE;
+        assert_eq!(scheduler::program_break(base + 65536), base + 65536);
+        assert_eq!(scheduler::program_break(base + 65537), base + 65536);
+        assert!(self_rust_os::userspace::usercopy::validate(
+            base + 65535,
+            1,
+            true
+        ));
+        assert!(!self_rust_os::userspace::usercopy::validate(
+            base + 65536,
+            1,
+            true
+        ));
+        assert_eq!(scheduler::restrict_worker(1, 131072, 0), u64::MAX - 1);
+        activate_pid(parent, context);
+        assert!(!self_rust_os::userspace::usercopy::validate(base, 1, false));
+        scheduler::kill(child).unwrap();
+        assert_eq!(scheduler::waitpid(child), 9);
+        scheduler::reap_retired();
+        assert_eq!(scheduler::frame_count(), baseline);
+    }
 }

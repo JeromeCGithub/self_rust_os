@@ -1,7 +1,13 @@
 # jbrowse roadmap: everyday browsing and modern websites
 
 Status: implementation started with [P0 native engine feasibility](browser-engine-p0.md),
-2026-11-05; later phases remain planned. Baseline: browser commit
+2026-11-05; [P1 runtime](browser-runtime-p1.md) is implemented and
+[P2 presentation](browser-rendering-p2.md) and
+[P3 native JavaScript](browser-javascript-p3.md) are in progress.
+[P4 attributes/base64](browser-google-p4.md),
+[generated-script/navigation/cookie support](browser-google-navigation.md) and
+[P5 password/POST forms](browser-sessions-p5.md) have started; their Google results
+and authenticated-session gates remain open. Baseline: browser commit
 `b44a83a`. This is a plan for missing capabilities, not a claim of new support.
 See the [browser guide](jbrowse.md), [Google status](jbrowse-google.md), and
 [JavaScript prototype](jbrowse-javascript.md) for current behavior and evidence.
@@ -15,10 +21,10 @@ Receiving HTTP 200 or displaying a site's title does not establish support.
 
 | Target | User-visible acceptance | Current baseline |
 | --- | --- | --- |
-| Classic browsing | Styled pages, images/fonts, working forms/links, back/forward, reload, selection, copy/paste and scrolling | Small HTML/CSS subset, GET forms, links, bitmap text; many features absent |
-| Google Search | Default homepage, query entry, readable result titles/snippets, follow a result, Back and refine the query | Homepage/submission work; usable results fail on unsupported JavaScript |
+| Classic browsing | Styled pages, images/fonts, working forms/links, back/forward, reload, selection, copy/paste and scrolling | Small HTML/CSS subset, GET forms/links, native proportional fonts/static PNG, bounded history/Stop; full P2 gate open |
+| Google Search | Default homepage, query entry, readable result titles/snippets, follow a result, Back and refine the query | Homepage/submission and verification redirect work; current native test receives HTTP429 with zero result headings |
 | YouTube video | Real watch page; play a public unencrypted video with synchronized sound; pause/seek/volume/quality/fullscreen | No browser media pipeline or audio driver in the current driver tree |
-| Facebook | Normal user login/verification, readable feed, scrolling/profile navigation, session persistence and logout | No verified support; full JS/DOM, sessions and storage are missing |
+| Facebook | Normal user login/verification, readable feed, scrolling/profile navigation, session persistence and logout | No verified support; complete DOM/events, sessions and storage are missing |
 | Most ordinary websites | Pass a published representative corpus of tasks across documentation, news, forms, commerce and dynamic sites | No measured broad compatibility claim |
 
 “Complete” means a maintained compatibility profile, not every API and website
@@ -39,9 +45,11 @@ origin storage, media and a production browser security model.
 
 Measure these constraints before selecting dependencies:
 
-- The [window protocol](../user_programs/userlib/src/ui/protocol.rs) caps native
-  content at 640 by 400 with fixed geometry. Larger windows, resize and fullscreen
-  need coordinated SDK/WM and potentially surface-mapping changes.
+- The [window protocol](../user_programs/userlib/src/ui/protocol.rs) now supports
+  workspace-sized native content, edge resize and maximize/restore through the
+  [SDK/compositor resize work](window-resize.md). The default1920×1080 DE profile
+  permits1920×992 content after panels/titlebar. Older version-1 clients remain
+  fixed-size. Borderless fullscreen and dynamic display modes remain separate.
 - The browser caps HTML at 256 KiB/4096 nodes; the script prototype caps aggregate
   source at 32 KiB and tokens at 8192. These are prototype budgets, not practical
   modern-site capacity targets. Documents are currently buffered before layout.
@@ -147,6 +155,11 @@ failed feasibility result with a revised plan. A host-only build is insufficient
 
 ### P1 — Native runtime, lifecycle and isolation
 
+Implementation: [P1 runtime and evidence](browser-runtime-p1.md) provides a
+restricted language service, owned IPC, engine/page limits and navigation
+cancellation. Full renderer/service separation and origin policy remain explicit
+follow-up work; browser DOM integration is P3.
+
 - Supply measured requirements for allocation, virtual memory, guarded stacks,
   threads, synchronization, TLS, clocks and event readiness. Distinguish wall-clock
   certificate time from monotonic scheduling/media time.
@@ -164,6 +177,9 @@ take down the desktop. Repeated open/navigate/close and worker failures demonstr
 resource reuse/reclamation, not just successful first launch.
 
 ### P2 — Classic browsing
+
+Implementation in progress: [native fonts, PNG, cascade and navigation](browser-rendering-p2.md).
+The full exit gate below remains open; implemented subsets are documented separately.
 
 - Standards-based HTML tree construction, encoding detection, entities, URL/base
   handling and malformed-input recovery.
@@ -186,6 +202,10 @@ Compare layout, pixels and hit-testing with a reference browser, including input
 under load and failure recovery.
 
 ### P3 — Real JavaScript and browser APIs
+
+Implementation in progress: [restricted native DOM and promise checkpoints](browser-javascript-p3.md).
+The application now uses QuickJS; the complete API/session/origin/event-loop gate
+below remains open.
 
 - Port a real ECMAScript parser/VM with objects/prototypes, functions/closures,
   exceptions, arrays/typed arrays, JSON, RegExp, promises, modules and GC. Track
@@ -249,6 +269,11 @@ WebRTC/device permissions.
 
 ### P6 — Media and OS audio before YouTube
 
+Implementation in progress: [native PCM and userspace WAV playback](browser-media-p6.md).
+The audio mechanism/player is tested; codecs, browser media elements and synchronized
+video remain open. [Browser startup performance](browser-performance.md) now has
+fixed native timing gates and measured on-demand font initialization.
+
 - Add an audio device mechanism with bounded PCM streams, clock/position,
   readiness, buffer ownership, underrun handling and close/kill recovery. Choose
   a documented QEMU device first; mixing/codecs/player policy stay in Ring 3.
@@ -270,6 +295,9 @@ recover without wedging the desktop. Capture/inspect guest audio and perform a
 manual listening check; framebuffer video alone does not establish host sound.
 
 ### P7 — Real YouTube video
+
+Initial prerequisite: [validated media byte ranges](browser-youtube-p7.md). This
+is tested HTTP/HTTPS transport support, not a YouTube playback pass.
 
 Use a normal public unencrypted video and the real watch/player UI. Implement
 missing general language, DOM, media, capability-reporting and request behavior
@@ -293,6 +321,11 @@ of ordinary unencrypted playback.
 
 ### P8 — Measure broad compatibility and maintain it
 
+Initial implementation: [pinned native task corpus and displayed-page probes](browser-compatibility-p8.md).
+The initial assessment fails; Google, YouTube, Facebook and broad compatibility
+remain open. Loading placeholders and HTTP200 responses are not task passes.
+Follow-up: [real-browser CSS comparisons, bounded larger documents and packed worker transfers](browser-css-comparison.md).
+
 Publish a versioned corpus before claiming “most”: proposed initial scope is 30
 sites/tasks spanning static documentation, encyclopedia/news, responsive images,
 commerce/forms and JS applications. Google, YouTube and Facebook are independent
@@ -310,7 +343,8 @@ needs; none is automatically required by every ordinary page.
 
 ## Test and delivery contract
 
-Everything above remains planned unless identified as baseline or P0 evidence. Follow the
+Capabilities remain planned unless a linked implementation states otherwise.
+P0/P1, initial P2/P3 support and native window resizing have separate executed evidence. Follow the
 [repository TDD/testing contract](testing.md): failing observable behavior,
 small implementation, green checks, then refactor. Never loosen site assertions
 because the server returned a challenge, error or placeholder.
@@ -331,7 +365,9 @@ Preserve the existing Google gap reproduction:
 RUSTOS_TEST_DISK=target/jbrowse-google.img RUSTOS_JBROWSE_REQUIRE_GOOGLE_RESULTS=1 python3 -B e2e/jbrowse.py
 ```
 
-The recorded failure is `Google results remain blocked by unsupported JavaScript`.
+The earlier failure was `Google results remain blocked by unsupported JavaScript`.
+The [current follow-up](browser-google-navigation.md) executes the verification
+redirect; the strict gate now fails with HTTP429 and zero linked result headings.
 The ordinary fixture runner's green result does not pass this goal. Future
 conformance/media harnesses do not exist merely because this plan names them.
 Deliver small subsystem changes with ABI/source docs, regenerated artifacts when

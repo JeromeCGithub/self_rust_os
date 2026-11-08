@@ -1,0 +1,26 @@
+test_performance_tasks_launch_the_named_applications_after_browser_install (test_desktop_perf.PerformanceLaunchers.test_performance_tasks_launch_the_named_applications_after_browser_install) ... FAIL
+
+======================================================================
+FAIL: test_performance_tasks_launch_the_named_applications_after_browser_install (test_desktop_perf.PerformanceLaunchers.test_performance_tasks_launch_the_named_applications_after_browser_install)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/tools/tests/test_desktop_perf.py", line 16, in test_performance_tasks_launch_the_named_applications_after_browser_install
+    self.assertEqual(points,[450,550,650], 'Terminal, Snake and Spin must follow current DE discovery positions')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [450, 450, 550] != [450, 550, 650]
+
+First differing element 1:
+450
+550
+
+- [450, 450, 550]
+?       ^    ^
+
++ [450, 550, 650]
+?       ^    ^
+ : Terminal, Snake and Spin must follow current DE discovery positions
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=1)

@@ -22,6 +22,9 @@ pub const PROCESS_BLOCK_SENTINEL: u64 = u64::MAX - 2;
 /// Internal timer result requesting the CPU's dedicated idle stack.
 pub const IDLE_RSP: u64 = u64::MAX;
 const ERROR: u64 = u64::MAX - 1;
+mod channels;
+pub use channels::{can_connect_stdio, connect_stdio, stdio, stdio_selected};
+use channels::{reap_connection_locked, stop_owned_child_locked, STDIO_QUEUE_CAPACITY};
 const MAX_THREADS: usize = 1024;
 
 pub use crate::process::{BlockReason, Pid, Process, ProcessState, ThreadState, Tid};
@@ -491,9 +494,12 @@ fn spawn_process_inner(
         inbox_len: 0,
         io_peer: None,
         io_inbox: VecDeque::new(),
+        io_nested_peer: None,
+        io_nested_inbox: VecDeque::new(),
         pointer_seen: crate::drivers::input::mouse::revision(),
         files: crate::fs::handles::Files::new(cwd),
         heap_break: rustos_thread_abi::HEAP_BASE,
+        worker_heap_limit: None,
         tls: tls_image,
     };
     let mut thread = make_thread(
@@ -712,6 +718,7 @@ fn stop_process_locked(s: &mut Scheduler, pid: Pid, code: u64) {
     stop_threads_locked(s, pid);
     smp::reschedule_all();
     crate::net::cleanup(pid);
+    crate::audio::cleanup(pid);
     stop_owned_child_locked(s, pid);
     events::wake_locked(s);
     wake_waiters_locked(s, pid);
@@ -1125,168 +1132,6 @@ pub fn graphics_mode() {
     }
 }
 
-/// At most 16 KiB per endpoint, allocated fallibly only for connected processes.
-const STDIO_QUEUE_CAPACITY: usize = 4096;
-
-/// Whether the current process can own a new I/O connection.
-pub fn can_connect_stdio() -> bool {
-    let sched = SCHEDULER.lock();
-    sched
-        .current_pid()
-        .and_then(|pid| sched.processes[pid as usize].as_ref())
-        .map(|p| p.io_peer.is_none())
-        .unwrap_or(false)
-}
-
-/// Connect a newly spawned child before returning from its spawning syscall.
-/// The kernel entry gate spans creation and this linkage, so no child executes
-/// before its connection is published. This function is not exposed as an attach syscall.
-pub fn connect_stdio(child: Pid) -> bool {
-    let mut sched = SCHEDULER.lock();
-    let Some(parent) = sched.current_pid() else {
-        return false;
-    };
-    if parent == child {
-        return false;
-    }
-    for pid in [parent, child] {
-        let Some(p) = sched.processes.get(pid as usize).and_then(Option::as_ref) else {
-            return false;
-        };
-        if p.state == ProcessState::Zombie || p.io_peer.is_some() {
-            return false;
-        }
-    }
-    // Reserve both queues before publishing either endpoint. Allocation failure
-    // drops local storage and leaves both process records unchanged. Enqueue
-    // never allocates; the explicit bound stays below reserved capacity.
-    let mut parent_queue = VecDeque::new();
-    let mut child_queue = VecDeque::new();
-    if parent_queue
-        .try_reserve_exact(STDIO_QUEUE_CAPACITY)
-        .is_err()
-        || child_queue.try_reserve_exact(STDIO_QUEUE_CAPACITY).is_err()
-    {
-        return false;
-    }
-    sched.processes[parent as usize]
-        .as_mut()
-        .expect("validated host")
-        .io_inbox = parent_queue;
-    sched.processes[child as usize]
-        .as_mut()
-        .expect("validated child")
-        .io_inbox = child_queue;
-    sched.processes[parent as usize]
-        .as_mut()
-        .expect("validated live endpoint")
-        .io_peer = Some((child, false));
-    sched.processes[child as usize]
-        .as_mut()
-        .expect("validated live endpoint")
-        .io_peer = Some((parent, true));
-    true
-}
-
-/// Register-only endpoint operations: 0 metadata, 1 send, 2 receive.
-/// Queues are bounded and independent of compositor inboxes. The scheduler lock
-/// serializes endpoint metadata and FIFO changes; no reference spans scheduling.
-pub fn stdio(operation: u64, payload: u32) -> u64 {
-    const ERROR: u64 = u64::MAX - 1;
-    let mut sched = SCHEDULER.lock();
-    let Some(pid) = sched.current_pid() else {
-        return ERROR;
-    };
-    let Some(proc) = sched.processes.get(pid as usize).and_then(Option::as_ref) else {
-        return ERROR;
-    };
-    if operation == 0 {
-        return proc
-            .io_peer
-            .map(|(peer, child)| ((u64::from(peer) + 1) << 1) | u64::from(child))
-            .unwrap_or(0);
-    }
-    let Some((peer, _)) = proc.io_peer else {
-        return ERROR;
-    };
-    if operation == 2 && !proc.io_inbox.is_empty() {
-        let proc = sched.processes[pid as usize]
-            .as_mut()
-            .expect("validated current endpoint");
-        let word = proc.io_inbox.pop_front().expect("nonempty endpoint queue");
-        events::wake_locked(&mut sched);
-        return u64::from(word) + 1;
-    }
-    let Some(target) = sched
-        .processes
-        .get_mut(peer as usize)
-        .and_then(Option::as_mut)
-    else {
-        return ERROR;
-    };
-    if target.state == ProcessState::Zombie {
-        return ERROR;
-    }
-    match operation {
-        1 => {
-            if target.io_inbox.len() == STDIO_QUEUE_CAPACITY {
-                return 1;
-            }
-            target.io_inbox.push_back(payload);
-            events::wake_locked(&mut sched);
-            0
-        }
-        2 => 0,
-        _ => ERROR,
-    }
-}
-
-/// An owned endpoint cannot outlive its host. Stack and address-space owners
-/// remain in the deferred reaper until every CPU has stopped executing them.
-fn stop_owned_child_locked(sched: &mut Scheduler, parent: Pid) {
-    let child = sched.processes[parent as usize]
-        .as_ref()
-        .and_then(|p| p.io_peer)
-        .and_then(|(pid, is_child)| if is_child { None } else { Some(pid) });
-    if let Some(child) = child {
-        if let Some(p) = sched
-            .processes
-            .get_mut(child as usize)
-            .and_then(Option::as_mut)
-        {
-            if p.state != ProcessState::Zombie {
-                p.state = ProcessState::Zombie;
-                p.files.clear();
-                p.exit_code = 9;
-            }
-        }
-        crate::net::cleanup(child);
-        stop_threads_locked(sched, child);
-        wake_waiters_locked(sched, child);
-    }
-}
-
-fn reap_connection_locked(sched: &mut Scheduler, pid: Pid) {
-    let endpoint = sched.processes[pid as usize]
-        .as_ref()
-        .and_then(|p| p.io_peer);
-    if let Some((peer, is_child)) = endpoint {
-        if is_child {
-            if let Some(parent) = sched
-                .processes
-                .get_mut(peer as usize)
-                .and_then(Option::as_mut)
-            {
-                parent.io_peer = None;
-                parent.io_inbox = VecDeque::new();
-            }
-        } else {
-            // exit/kill has already stopped this owned child.
-            retire_process(sched, peer);
-        }
-    }
-}
-
 /// Copy a surface prefix with stable owned frames and a fully validated user
 /// destination. Raw assembly never borrows either application's mutable RAM.
 pub fn snapshot_user(pid: Pid, destination: u64, len: usize) -> u64 {
@@ -1414,4 +1259,54 @@ pub(crate) fn save_extended_state() {
             }
         }
     }
+}
+
+/// Irreversibly restrict a connected child before processing untrusted input.
+/// Entry gate + scheduler lock serialize the principal against every syscall.
+pub fn restrict_worker(profile: u64, bytes: u64, reserved: u64) -> u64 {
+    use rustos_process_abi::isolation as abi;
+    if profile != abi::WORKER || reserved != 0 || !abi::valid_budget(bytes) {
+        return ERROR;
+    }
+    let mut scheduler = SCHEDULER.lock();
+    let Some(pid) = scheduler.current_pid() else {
+        return ERROR;
+    };
+    if pid == 0
+        || scheduler
+            .threads
+            .iter()
+            .flatten()
+            .filter(|t| t.pid == pid)
+            .count()
+            != 1
+    {
+        return ERROR;
+    }
+    let Some(process) = scheduler
+        .processes
+        .get_mut(pid as usize)
+        .and_then(Option::as_mut)
+    else {
+        return ERROR;
+    };
+    if process.worker_heap_limit.is_some()
+        || process.io_nested_peer.is_some()
+        || !process.io_peer.is_some_and(|(_, child)| child)
+        || process.heap_break > rustos_thread_abi::HEAP_BASE + bytes
+    {
+        return ERROR;
+    }
+    process.worker_heap_limit = Some(rustos_thread_abi::HEAP_BASE + bytes);
+    0
+}
+/// Check process authority before syscall-specific copying, allocation or I/O.
+pub(crate) fn syscall_permitted(number: u64, first: u64) -> bool {
+    let scheduler = SCHEDULER.lock();
+    let restricted = scheduler
+        .current_pid()
+        .and_then(|pid| scheduler.processes.get(pid as usize))
+        .and_then(Option::as_ref)
+        .is_some_and(|p| p.worker_heap_limit.is_some());
+    !restricted || rustos_process_abi::isolation::permits(number, first)
 }

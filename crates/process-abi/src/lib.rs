@@ -1,5 +1,7 @@
 //! Bounded UTF-8 argv request, shared by the kernel and Ring 3 SDK.
 #![no_std]
+/// Process-wide irreversible worker rights and heap budget.
+pub mod isolation;
 /// Native argument-bearing spawn: path pointer, argument record pointer, flags.
 pub const SYS_SPAWN_ARGS: u64 = 29;
 /// Complete readable request size, including the 16-byte header.

@@ -9,8 +9,9 @@ def install(programs, image):
     for binary in sorted(Path(programs).glob('*/*.bin')):
         if (binary.parent / '.test-only').is_file():
             continue
+        destination = (binary.stem + '.svc') if (binary.parent / '.service').is_file() else binary.name
         subprocess.run(['mcopy', '-i', image, str(binary),
-                        f'::/BIN/{binary.name.upper()}'], check=True)
+                        f'::/BIN/{destination.upper()}'], check=True)
 
 
 if __name__ == '__main__':

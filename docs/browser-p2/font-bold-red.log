@@ -1,0 +1,42 @@
+   Compiling rustos-text v0.1.0 (/home/jay/personal/os/jbrowse/crates/text)
+warning: field `extra_bold` is never read
+  --> src/lib.rs:25:45
+   |
+25 | pub struct FontSet {fonts:[fontdue::Font;4],extra_bold:Option<[fontdue::Font;2]>}
+   |            ------- field in this struct     ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `rustos-text` (lib) generated 1 warning
+warning: `rustos-text` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (rustos-p2-text/x86_64-unknown-linux-gnu/debug/deps/rustos_text-a97be3ae1452d2c5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fonts.rs (rustos-p2-text/x86_64-unknown-linux-gnu/debug/deps/fonts-d44de309dd7be31f)
+
+running 3 tests
+test proportional_unicode_glyphs_have_real_coverage_and_matching_metrics ... ok
+test invalid_font_data_and_unbounded_sizes_are_rejected ... ok
+test bold_serif_and_monospace_use_their_own_real_outlines ... FAILED
+
+failures:
+
+---- bold_serif_and_monospace_use_their_own_real_outlines stdout ----
+
+thread 'bold_serif_and_monospace_use_their_own_real_outlines' panicked at tests/fonts.rs:34:3:
+assertion `left != right` failed: real bold face for Serif
+  left: [156, 169, 169, 169, 57, 0, 0, 21, 169, 55, 0, 0, 0, 163, 169, 169, 67, 40, 181, 249, 50, 14, 0, 0, 91, 255, 144, 0, 0, 0, 42, 199, 72, 17, 0, 100, 255, 65, 0, 0, 0, 163, 238, 216, 0, 0, 0, 7, 213, 0, 0, 0, 28, 255, 137, 0, 0, 1, 219, 128, 255, 33, 0, 0, 69, 151, 0, 0, 0, 0, 211, 210, 0, 0, 51, 174, 50, 255, 105, 0, 0, 140, 79, 0, 0, 0, 0, 139, 255, 27, 0, 123, 102, 1, 233, 177, 0, 0, 206, 13, 0, 0, 0, 0, 67, 255, 98, 0, 195, 30, 0, 162, 243, 6, 28, 190, 0, 0, 0, 0, 0, 6, 244, 170, 15, 210, 0, 0, 90, 255, 66, 100, 118, 0, 0, 0, 0, 0, 0, 178, 239, 86, 142, 0, 0, 20, 253, 139, 172, 46, 0, 0, 0, 0, 0, 0, 106, 255, 211, 70, 0, 0, 0, 202, 214, 213, 0, 0, 0, 0, 0, 0, 0, 34, 255, 245, 8, 0, 0, 0, 130, 255, 158, 0, 0, 0, 0, 0, 0, 0, 0, 218, 181, 0, 0, 0, 0, 58, 255, 86, 0, 0, 0, 0]
+ right: [156, 169, 169, 169, 57, 0, 0, 21, 169, 55, 0, 0, 0, 163, 169, 169, 67, 40, 181, 249, 50, 14, 0, 0, 91, 255, 144, 0, 0, 0, 42, 199, 72, 17, 0, 100, 255, 65, 0, 0, 0, 163, 238, 216, 0, 0, 0, 7, 213, 0, 0, 0, 28, 255, 137, 0, 0, 1, 219, 128, 255, 33, 0, 0, 69, 151, 0, 0, 0, 0, 211, 210, 0, 0, 51, 174, 50, 255, 105, 0, 0, 140, 79, 0, 0, 0, 0, 139, 255, 27, 0, 123, 102, 1, 233, 177, 0, 0, 206, 13, 0, 0, 0, 0, 67, 255, 98, 0, 195, 30, 0, 162, 243, 6, 28, 190, 0, 0, 0, 0, 0, 6, 244, 170, 15, 210, 0, 0, 90, 255, 66, 100, 118, 0, 0, 0, 0, 0, 0, 178, 239, 86, 142, 0, 0, 20, 253, 139, 172, 46, 0, 0, 0, 0, 0, 0, 106, 255, 211, 70, 0, 0, 0, 202, 214, 213, 0, 0, 0, 0, 0, 0, 0, 34, 255, 245, 8, 0, 0, 0, 130, 255, 158, 0, 0, 0, 0, 0, 0, 0, 0, 218, 181, 0, 0, 0, 0, 58, 255, 86, 0, 0, 0, 0]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    bold_serif_and_monospace_use_their_own_real_outlines
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+error: test failed, to rerun pass `--test fonts`

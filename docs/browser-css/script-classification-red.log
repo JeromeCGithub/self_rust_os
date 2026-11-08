@@ -1,0 +1,16 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+error[E0432]: unresolved import `rustos_browser::ScriptKind`
+   --> tests/browser.rs:329:9
+    |
+329 |     use rustos_browser::ScriptKind;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `ScriptKind` in the root
+
+error[E0599]: no method named `script_kind` found for reference `&Node` in the current scope
+   --> tests/browser.rs:331:55
+    |
+331 |     assert_eq!(doc.nodes.iter().filter_map(|node|node.script_kind()).collect::<Vec<_>>(),[ScriptKind::Data,ScriptKind::Classic,ScriptKind...
+    |                                                       ^^^^^^^^^^^ method not found in `&Node`
+
+Some errors have detailed explanations: E0432, E0599.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `rustos-browser` (test "browser") due to 2 previous errors

@@ -35,6 +35,8 @@ pub(crate) fn run() {
         cursor: None,
         cursor_under: [0; 8 * 14],
         pointer_input: crate::input::PointerInput::new(),
+        caches: core::array::from_fn(|_| crate::cache::Cache::empty()),
+        staging: core::array::from_fn(|_| None),
     };
     display.clear_background();
     let mut shell_pid = match sys::spawn("/BIN/DE.BIN") {
@@ -52,11 +54,13 @@ pub(crate) fn run() {
     let mut last_managed = None;
     let mut work = WorkArea { top: 0, bottom: 0 };
     let mut desktop_capture = false;
+    let mut decoration_capture = false;
     println!("[compositor] ready");
     let mut windows: [Option<Window>; MAX] = [None; MAX];
     let mut used = 0;
     let mut previous = 0;
     let mut drag: Option<(i32, i32)> = None;
+    let mut resize: Option<(u32, crate::geometry::Bounds, u8, i32, i32)> = None;
     let mut scene_dirty = true;
     let mut old_bounds = (0, 0, info.width, info.height);
     let mut focused = shell_pid.unwrap_or(0);
@@ -91,11 +95,16 @@ pub(crate) fn run() {
                     if shell::authorized(pid, shell_pid) && shell_connected {
                         let area = WorkArea::decode(message, info.height).filter(|area| {
                             windows[..used].iter().flatten().all(|w| {
-                                w.height
-                                    + TITLE_H as usize
-                                    + usize::from(area.top)
-                                    + usize::from(area.bottom)
-                                    <= info.height
+                                crate::geometry::accepts_reservation(
+                                    crate::geometry::Workspace {
+                                        width: info.width,
+                                        height: info.height,
+                                        top: usize::from(area.top),
+                                        bottom: usize::from(area.bottom),
+                                    },
+                                    w.height,
+                                    w.offered.is_some() || w.requested.is_some(),
+                                )
                             })
                         });
                         if let Some(area) = area {
@@ -202,24 +211,38 @@ pub(crate) fn run() {
                         let _ = sys::send_message(pid, protocol::REJECT);
                         continue;
                     }
+                    let config = config.expect("validated configuration");
+                    if existing.is_none() && used == MAX {
+                        let _ = sys::send_message(pid, protocol::REJECT);
+                        continue;
+                    }
+                    let slot = existing
+                        .map(|i| windows[i].unwrap().cache_slot)
+                        .unwrap_or_else(|| free_slot(&windows[..used]));
+                    // Reserve the complete cache before publishing a new window,
+                    // changing focus or replacing any client geometry.
+                    if !display.allocate_content(slot, config.width, config.height) {
+                        if let Some(index) = existing {
+                            windows[index].as_mut().unwrap().reply = Some(protocol::REJECT);
+                        } else {
+                            let _ = sys::send_message(pid, protocol::REJECT);
+                        }
+                        continue;
+                    }
                     let index = if let Some(index) = existing {
                         index
                     } else {
-                        if used == MAX {
-                            let _ = sys::send_message(pid, protocol::REJECT);
-                            continue;
-                        }
-                        let slot = free_slot(&windows[..used]);
                         windows[used] = Some(new_window(pid, slot, used));
                         used += 1;
                         focused = pid;
                         focus(pid);
                         used - 1
                     };
-                    let config = config.expect("validated configuration");
                     let window = windows[index].as_mut().expect("registered window");
                     window.width = config.width;
                     window.height = config.height;
+                    window.resizable = message & protocol::VERSION2 != 0;
+                    window.minimum = (config.width.min(320), config.height.min(200));
                     window.native = true;
                     window.material = config.material;
                     window.reply = Some(protocol::ACCEPT);
@@ -232,7 +255,6 @@ pub(crate) fn run() {
                             - TITLE_H
                             - window.height as i32,
                     );
-                    display.reset_content(window);
                     scene_dirty = true;
                 }
                 protocol::TITLE => {
@@ -335,6 +357,8 @@ pub(crate) fn run() {
                     focus(focused);
                 }
                 drag = None;
+                resize = None;
+                display.release_cache(window.cache_slot);
                 scene_dirty = true;
             } else {
                 index += 1;
@@ -344,6 +368,7 @@ pub(crate) fn run() {
         let down = buttons & 1 != 0;
         let click = down && previous & 1 == 0;
         if click {
+            decoration_capture = false;
             let window_hit = (0..used).rev().find(|&i| {
                 let w = windows[i].unwrap();
                 hit(mx, my, w.x, w.y, w.width as i32, w.height as i32 + TITLE_H)
@@ -361,7 +386,19 @@ pub(crate) fn run() {
                 windows[used - 1] = Some(w);
                 focused = w.pid;
                 focus(w.pid);
-                if hit(mx, my, w.x + w.width as i32 - 33, w.y, 33, TITLE_H) {
+                let edges = if w.resizable
+                    && !w.expansion.expanded()
+                    && w.offered.is_none()
+                    && w.requested.is_none()
+                {
+                    crate::geometry::edges(w.bounds(), mx, my)
+                } else {
+                    0
+                };
+                decoration_capture = edges != 0 || my < w.y + TITLE_H;
+                if edges != 0 {
+                    resize = Some((w.pid, w.bounds(), edges, mx, my));
+                } else if hit(mx, my, w.x + w.width as i32 - 33, w.y, 33, TITLE_H) {
                     if w.native && !w.exited {
                         let _ = sys::send_message(w.pid, protocol::CLOSE);
                         windows[used - 1].as_mut().unwrap().closing = Some(sys::ticks());
@@ -370,6 +407,7 @@ pub(crate) fn run() {
                         let _ = sys::waitpid(w.pid);
                         used -= 1;
                         windows[used] = None;
+                        display.release_cache(w.cache_slot);
                         scene_dirty = true;
                         focused = if used > 0 {
                             windows[used - 1].unwrap().pid
@@ -378,7 +416,31 @@ pub(crate) fn run() {
                         };
                         focus(focused);
                     }
-                } else if hit(mx, my, w.x, w.y, w.width as i32 - 33, TITLE_H) {
+                } else if w.resizable && hit(mx, my, w.x + w.width as i32 - 66, w.y, 33, TITLE_H) {
+                    let window = windows[used - 1].as_mut().unwrap();
+                    let target = window.expansion.toggle(
+                        window.bounds(),
+                        crate::geometry::Workspace {
+                            width: info.width,
+                            height: info.height,
+                            top: usize::from(work.top),
+                            bottom: usize::from(work.bottom),
+                        }
+                        .maximized(),
+                    );
+                    window.requested = Some(target);
+                } else if !w.expansion.expanded()
+                    && w.offered.is_none()
+                    && w.requested.is_none()
+                    && hit(
+                        mx,
+                        my,
+                        w.x,
+                        w.y,
+                        w.width as i32 - if w.resizable { 66 } else { 33 },
+                        TITLE_H,
+                    )
+                {
                     drag = Some((mx - w.x, my - w.y));
                     println!("[desktop] drag started: pid={}", w.pid);
                 }
@@ -388,8 +450,23 @@ pub(crate) fn run() {
                 scene_dirty = true;
             }
         }
+        if let Some((pid, start, edges, x, y)) = resize {
+            if let Some(window) = windows[..used].iter_mut().flatten().find(|w| w.pid == pid) {
+                let target = crate::geometry::Workspace {
+                    width: info.width,
+                    height: info.height,
+                    top: usize::from(work.top),
+                    bottom: usize::from(work.bottom),
+                }
+                .resized(start, edges, mx - x, my - y, window.minimum);
+                if target != window.bounds() {
+                    window.requested = Some(target);
+                }
+            }
+        }
         if !down {
             drag = None;
+            resize = None;
         }
         if let Some((dx, dy)) = drag {
             if used > 0 {
@@ -417,9 +494,43 @@ pub(crate) fn run() {
             let Some(window) = slot else {
                 continue;
             };
+            let before = window.bounds();
             if display.update_surface(window) {
                 compose = true;
                 changed |= 1 << index;
+                scene_dirty |= before != window.bounds();
+            }
+            if window.resizable && window.offered.is_none() {
+                if let Some(bounds) = window.requested.take() {
+                    if (bounds.width, bounds.height) == (window.width, window.height) {
+                        // A mode toggle can keep the same extents (for example
+                        // a manually resized work-area-sized window).
+                        window.expansion.offered();
+                        window.expansion.committed();
+                        scene_dirty = true;
+                        (window.x, window.y) = (bounds.x, bounds.y);
+                        compose |= scene_dirty;
+                    } else if display.prepare_resize(window.cache_slot, bounds.width, bounds.height)
+                    {
+                        window.expansion.offered();
+                        window.offered = Some(bounds);
+                        window.resize_sent = false;
+                    } else {
+                        window.expansion.refused();
+                        println!("[compositor] resize allocation refused");
+                    }
+                }
+            }
+            if let Some(bounds) = window.offered {
+                if !window.resize_sent
+                    && sys::send_message(
+                        window.pid,
+                        protocol::resize_message(bounds.width, bounds.height),
+                    )
+                    .is_ok()
+                {
+                    window.resize_sent = true;
+                }
             }
             // Configuration replies precede pointer events; frame release follows presentation.
             if let Some(reply) = window.reply {
@@ -434,17 +545,27 @@ pub(crate) fn run() {
                     window.focus_event = None;
                 }
             }
-            if window.native && window.pid == focused && drag.is_none() {
+            if window.native
+                && window.pid == focused
+                && drag.is_none()
+                && resize.is_none()
+                && !decoration_capture
+            {
+                let limit = if window.resizable { 2048 } else { 1024 };
                 let pointer = (
-                    (mx - window.x).clamp(-1024, 1023),
-                    (my - window.y - TITLE_H).clamp(-1024, 1023),
+                    (mx - window.x).clamp(-limit, limit - 1),
+                    (my - window.y - TITLE_H).clamp(-limit, limit - 1),
                     buttons,
                 );
                 if window.pointer != Some(pointer) {
-                    let payload = protocol::POINTER
-                        | (pointer.0 as u32 & 2047)
-                        | ((pointer.1 as u32 & 2047) << 11)
-                        | (u32::from(buttons & 7) << 22);
+                    let payload = if window.resizable {
+                        protocol::pointer(pointer.0, pointer.1, buttons)
+                    } else {
+                        protocol::POINTER
+                            | (pointer.0 as u32 & 2047)
+                            | ((pointer.1 as u32 & 2047) << 11)
+                            | (u32::from(buttons & 7) << 22)
+                    };
                     if sys::send_message(window.pid, payload).is_ok() {
                         window.pointer = Some(pointer);
                     }
@@ -506,7 +627,11 @@ pub(crate) fn run() {
                     .iter()
                     .flatten()
                     .any(|w| hit(mx, my, w.x, w.y, w.width as i32, w.height as i32 + TITLE_H));
-                if shell_connected && (!over_window || desktop_capture) && drag.is_none() {
+                if shell_connected
+                    && (!over_window || desktop_capture)
+                    && drag.is_none()
+                    && resize.is_none()
+                {
                     let buttons = if desktop_capture {
                         buttons
                     } else {
@@ -521,6 +646,7 @@ pub(crate) fn run() {
         }
         if !down {
             desktop_capture = false;
+            decoration_capture = false;
         }
         if compose {
             let mut bounds = (info.width, info.height, 0, 0);

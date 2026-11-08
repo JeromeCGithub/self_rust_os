@@ -1,0 +1,30 @@
+{
+  "url": "http://info.cern.ch/hypertext/WWW/TheProject.html",
+  "title": "The World Wide Web project",
+  "load_probe_passed": true,
+  "complete_task_verified": false,
+  "elapsed_seconds": 3.4722946219990263,
+  "budget_seconds": 5,
+  "counters": {
+    "http_status": 200,
+    "items": 90,
+    "links": 25,
+    "controls": 0,
+    "images": 0,
+    "truncated": 0,
+    "script_errors": 0,
+    "style_errors": 0,
+    "digest": 11811219845886791230
+  },
+  "ink_pixels": 25898,
+  "readback_digest": 11811219845886791230,
+  "submitted_digest": 11811219845886791230,
+  "checks": {
+    "title": true,
+    "readable_pixels": true,
+    "rendered_links": true
+  },
+  "error": null,
+  "unsupported_script": false,
+  "build_id": "b2e547d791121274f671ba0d009079c7b14746e4ff1b834512c4eebfee4f4e72"
+}

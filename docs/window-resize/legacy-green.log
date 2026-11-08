@@ -1,0 +1,2 @@
+PASS: Ring 3 toolkit, negotiated size, glass/rounded pixels, sharp text, button capture, backdrop resampling, close/reopen, focus and live lower-layer damage
+qemu-system-x86_64: terminating on signal 15 from pid 341414 (python3)

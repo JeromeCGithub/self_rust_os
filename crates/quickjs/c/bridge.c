@@ -4,7 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef int (*HostCall)(void *, uint32_t, uint32_t, const char *, size_t,
+                        const char *, size_t, char *, size_t, size_t *, uint32_t *);
 typedef struct {
+  void *host;
+  HostCall host_call;
   JSRuntime *runtime;
   JSContext *context;
   size_t current, peak, allocations;
@@ -124,6 +128,10 @@ void *rjs_create(size_t memory, size_t stack, uint64_t budget) {
   }
   return p;
 }
+int rjs_date(void *opaque) {
+  Probe *p = opaque;
+  return JS_AddIntrinsicDate(p->context) ? 3 : 0;
+}
 int rjs_eval(void *opaque, const char *source, size_t length, char *output,
              size_t capacity, size_t *written) {
   Probe *p = opaque;
@@ -163,4 +171,92 @@ int rjs_eval(void *opaque, const char *source, size_t length, char *output,
 void rjs_stats(const void *opaque, ProbeStats *stats) {
   const Probe *p = opaque;
   *stats = (ProbeStats){p->current, p->peak, p->allocations, p->polls};
+}
+
+/* Script completion values are deliberately never converted to strings. */
+int rjs_execute(void *opaque, const char *source, size_t length) {
+  Probe *p = opaque;
+  p->polls = p->quota_failed = p->interrupted = 0;
+  JS_UpdateStackTop(p->runtime);
+  JSValue value = JS_Eval(p->context, source, length, "page.js", JS_EVAL_TYPE_GLOBAL);
+  int status = 0;
+  if (JS_IsException(value)) {
+    JSValue error = JS_GetException(p->context);
+    JS_FreeValue(p->context, error);
+    status = p->interrupted ? 2 : p->quota_failed ? 3 : 1;
+  }
+  JS_FreeValue(p->context, value);
+  JS_RunGC(p->runtime);
+  return status;
+}
+
+/* One CPU budget covers the entire checkpoint, including all jobs. */
+int rjs_jobs(void *opaque, size_t limit, size_t *completed) {
+  Probe *p = opaque;
+  p->polls = p->quota_failed = p->interrupted = 0;
+  *completed = 0;
+  JS_UpdateStackTop(p->runtime);
+  while (*completed < limit && JS_IsJobPending(p->runtime)) {
+    JSContext *context = NULL;
+    int status = JS_ExecutePendingJob(p->runtime, &context);
+    (*completed)++;
+    if (status < 0) {
+      if (context) {
+        JSValue error = JS_GetException(context);
+        JS_FreeValue(context, error);
+      }
+      return p->interrupted ? 2 : p->quota_failed ? 3 : 1;
+    }
+    /* A Promise rejection may consume the exception while the interrupt/quota
+       flag still identifies an exhausted checkpoint. */
+    if (p->interrupted || p->quota_failed)
+      return p->interrupted ? 2 : 3;
+  }
+  JS_RunGC(p->runtime);
+  return JS_IsJobPending(p->runtime) ? 2 : 0;
+}
+
+/* All conversion happens before entering Rust, and all host results are copied
+   before returning to JS. No JS value crosses this boundary. */
+static JSValue host_call(JSContext *context, JSValueConst this_value, int argc,
+                         JSValueConst *argv) {
+  (void)this_value;
+  Probe *p = JS_GetContextOpaque(context);
+  uint32_t operation, node, result_node = 0;
+  if (!p || !p->host_call || argc != 4 ||
+      JS_ToUint32(context, &operation, argv[0]) ||
+      JS_ToUint32(context, &node, argv[1]))
+    return JS_ThrowTypeError(context, "invalid host call");
+  size_t a_len = 0, b_len = 0, written = 0;
+  const char *a = JS_ToCStringLen(context, &a_len, argv[2]);
+  if (!a) return JS_EXCEPTION;
+  const char *b = JS_ToCStringLen(context, &b_len, argv[3]);
+  if (!b) { JS_FreeCString(context, a); return JS_EXCEPTION; }
+  /* Rust receives &mut [u8], which requires initialized bytes even though
+     the callback only overwrites the returned prefix. */
+  char output[8192] = {0};
+  int status = -1;
+  if (a_len <= sizeof(output) && b_len <= sizeof(output))
+    status = p->host_call(p->host, operation, node, a, a_len, b, b_len,
+                          output, sizeof(output), &written, &result_node);
+  JS_FreeCString(context, a);
+  JS_FreeCString(context, b);
+  if (status == 0 && written <= sizeof(output))
+    return JS_NewStringLen(context, output, written);
+  if (status == 1) return JS_NewUint32(context, result_node);
+  if (status == 2) return JS_NULL;
+  if (status == 3) return JS_UNDEFINED;
+  return JS_ThrowTypeError(context, "host operation rejected");
+}
+int rjs_host(void *opaque, void *host, HostCall callback) {
+  Probe *p = opaque;
+  if (p->host || !host || !callback) return -1;
+  p->host = host;
+  p->host_call = callback;
+  JS_SetContextOpaque(p->context, p);
+  JSValue global = JS_GetGlobalObject(p->context);
+  int result = JS_SetPropertyStr(p->context, global, "__rustosHost",
+                                 JS_NewCFunction(p->context, host_call, "", 4));
+  JS_FreeValue(p->context, global);
+  return result < 0 ? -1 : 0;
 }

@@ -1,0 +1,17 @@
+qemu-system-x86_64: -device AC97,audiodev=test: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: -device AC97,audiodev=test: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.pi' (no host audio driver)
+qemu-system-x86_64: audio: Can not open `ac97.mc' (no host audio driver)
+qemu-system-x86_64: terminating on signal 15 from pid 433835 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/media.py", line 85, in <module>
+    if __name__=='__main__':main()
+                            ~~~~^^
+  File "/home/jay/personal/os/jbrowse/e2e/media.py", line 59, in main
+    wait('[desktop] ready:');click(launchers(disk)['JPLAY'],65);wait('[jplay] ready')
+                                   ~~~~~~~~~~~~~~~^^^^^^^^^
+KeyError: 'JPLAY'

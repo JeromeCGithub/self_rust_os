@@ -1,0 +1,15 @@
+<!doctype html><meta charset=utf-8><title>CSS reference layout</title>
+<style>
+body {margin:0;font:16px/20px monospace;color:#123456}
+#panel {width:100px;height:20px;margin:4px 8px;padding:6px 10px;background:#ffccaa}
+#mark {display:block;width:80px;height:20px;margin:0 auto;padding:4px 0 6px;background:#bbddff}
+#inline {text-align:center;height:24px}
+#one {display:inline-block;width:80px;height:24px;background:#aaddbb}
+#two {display:inline-block;width:100px;height:24px;background:#ddbbff}
+#row {display:flex;justify-content:flex-end;align-items:center;gap:10px;height:60px}
+#short {width:40px;height:20px;background:#ffaaaa}
+#tall {width:60px;height:30px;background:#aaffaa}
+form {margin:0}
+#query {display:block;width:496px;height:25px;padding:5px 8px 0 6px;margin:0;font:18px sans-serif}
+</style>
+<div id=panel>Panel</div><div id=mark>Mark</div><div id=inline><span id=one>One</span><span id=two>Two</span></div><div id=row><div id=short>A</div><div id=tall>B</div></div><form><input id=query name=q value=Search></form>

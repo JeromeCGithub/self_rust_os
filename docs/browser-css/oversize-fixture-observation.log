@@ -1,0 +1,43 @@
+qemu-system-x86_64: terminating on signal 15 from pid 500957 (python3)
+PASS: native restricted QuickJS, classes/functions/promises, DOM pixels and bounded microtask recovery
+PASS: password pixels/editing, exact POST body, 303-to-GET redirect and reload without POST replay
+PASS: native attributes, CSS class/style invalidation, base64 and real scripted link navigation
+PASS: maximize/restore, DE panel reservations, pointer coordinates beyond 1023 and edge resize with client redraw
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 387, in <module>
+    navigate('/big');wait('[jbrowse] error: response or URL exceeds limits')
+                     ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 180, in wait
+    assert time.monotonic()<deadline, f'missing {value}\n{output()[-5000:]}'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: missing [jbrowse] error: response or URL exceeds limits
+[compositor] ready
+[desktop] wallpaper loaded: true
+[compositor] desktop surface committed
+[desktop] ready: 10 applications
+[compositor] desktop surface committed
+[portal] Portal starting...
+[desktop] launched Terminal pid=2
+[portal] shell pid=3
+[portal] output: self_rust_os forge v1.0
+[portal] output: Type 'help' for commands.
+[portal] output:
+[portal] output: > ./jbrowse http://10.0.2.2:44027/start
+[portal] output: Spawning /bin/JBROWSE.BIN...
+[portal] output: started pid 4
+[jbrowse] ready
+[jbrowse] loaded: Browser fixture
+[jbrowse] loaded: Native engine ready
+[jbrowse] script errors: 1
+[jbrowse] loaded: Native queue bounded
+[jbrowse] loaded: Disposable POST fixture
+[jbrowse] loaded: POST redirect ready
+[jbrowse] loaded: POST redirect ready
+[jbrowse] loaded: Native attributes ready
+[jbrowse] loaded: Second page
+[jbrowse] loaded: Browser fixture
+[jbrowse] loaded: Browser fixture
+[jbrowse] loaded: Second page
+[jbrowse] loaded: Browser fixture
+[jbrowse] error: invalid address
+[jbrowse] loaded: http://10.0.2.2:44027/big

@@ -1,0 +1,21 @@
+{
+  "passed": false,
+  "required_runs": 3,
+  "recorded_runs": 1,
+  "manifest_sha256": "31f6c2813ffa080dd2681bd8c95fe10f944a43d9255eeb46b845e5b3093c2dbb",
+  "build_id": "0dd47f589a5c6e2c9d9a8bb20eb6dbfc3824b323b5ba05beee31a3491eef8ea6",
+  "runs": [
+    {
+      "id": "native-initial-2026-11-06",
+      "passed": false,
+      "ordinary_passed": 1,
+      "ordinary_total": 27,
+      "mandatory": {
+        "facebook-session": false,
+        "google-search": false,
+        "youtube-video": false
+      },
+      "missing_tasks": []
+    }
+  ]
+}

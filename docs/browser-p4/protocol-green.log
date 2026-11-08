@@ -1,0 +1,23 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+     Running unittests src/lib.rs (/home/jay/personal/os/jbrowse/crates/browser-worker/target/x86_64-unknown-linux-gnu/debug/deps/rustos_browser_worker-462275c70492cca7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/protocol.rs (/home/jay/personal/os/jbrowse/crates/browser-worker/target/x86_64-unknown-linux-gnu/debug/deps/protocol-d5ac08dd6c9e8ba8)
+
+running 4 tests
+test document_requests_have_a_distinct_kind_and_preserve_binary_effect_records ... ok
+test copied_results_cancel_and_stale_replies_obey_session_ownership ... ok
+test framing_rejects_ambient_handles_lengths_reserved_bytes_and_wrong_versions ... ok
+test missing_worker_response_is_bounded_and_freed ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustos_browser_worker
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

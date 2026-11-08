@@ -1,0 +1,31 @@
+
+running 5 tests
+test expansion_tests::failed_allocations_restore_the_previous_mode_and_restore_rectangle ... FAILED
+test expansion_tests::rapid_restore_does_not_change_the_mode_of_an_inflight_maximize_frame ... FAILED
+test frame_tests::outstanding_old_frames_cannot_be_reinterpreted_at_an_offered_size ... ok
+test tests::corners_resize_with_fixed_opposite_edges_and_workspace_clipping ... ok
+test reservation_tests::reservations_wait_for_inflight_geometry_and_keep_a_valid_decorated_window ... ok
+
+failures:
+
+---- expansion_tests::failed_allocations_restore_the_previous_mode_and_restore_rectangle stdout ----
+
+thread 'expansion_tests::failed_allocations_restore_the_previous_mode_and_restore_rectangle' panicked at user_programs/wm/src/geometry.rs:247:9:
+assertion `left == right` failed
+  left: Bounds { x: 100, y: 120, width: 640, height: 400 }
+ right: Bounds { x: 0, y: 28, width: 1920, height: 992 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- expansion_tests::rapid_restore_does_not_change_the_mode_of_an_inflight_maximize_frame stdout ----
+
+thread 'expansion_tests::rapid_restore_does_not_change_the_mode_of_an_inflight_maximize_frame' panicked at user_programs/wm/src/geometry.rs:261:9:
+assertion `left == right` failed
+  left: Bounds { x: 100, y: 120, width: 640, height: 400 }
+ right: Bounds { x: 0, y: 28, width: 1920, height: 992 }
+
+
+failures:
+    expansion_tests::failed_allocations_restore_the_previous_mode_and_restore_rectangle
+    expansion_tests::rapid_restore_does_not_change_the_mode_of_an_inflight_maximize_frame
+
+test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

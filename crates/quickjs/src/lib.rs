@@ -47,6 +47,7 @@ pub struct Stats {
 extern "C" {
     fn rjs_create(memory: usize, stack: usize, polls: u64) -> *mut c_void;
     fn rjs_destroy(runtime: *mut c_void);
+    fn rjs_date(runtime: *mut c_void) -> i32;
     fn rjs_eval(
         runtime: *mut c_void,
         source: *const c_char,
@@ -55,6 +56,8 @@ extern "C" {
         capacity: usize,
         written: *mut usize,
     ) -> i32;
+    fn rjs_execute(runtime: *mut c_void, source: *const c_char, length: usize) -> i32;
+    fn rjs_jobs(runtime: *mut c_void, limit: usize, completed: *mut usize) -> i32;
     fn rjs_stats(runtime: *const c_void, stats: *mut Stats);
 }
 /// Owns one context/runtime on its creating thread; it is neither Send nor Sync.
@@ -87,6 +90,13 @@ impl Runtime {
             raw,
             _thread: PhantomData,
         })
+    }
+    /// Enable ECMAScript Date for a page realm. The plain evaluator keeps its
+    /// clock-free profile. Freestanding builds use the owner's epoch callback.
+    pub fn enable_date(&mut self) -> Result<(), Error> {
+        // SAFETY: Exclusive self owns a live, thread-confined context. This
+        // intrinsic installation retains no Rust pointer and copies no buffers.
+        status(unsafe { rjs_date(self.raw.as_ptr()) })
     }
     /// Evaluate a bounded UTF-8 classic script and copy its string result.
     /// Poll limits bound engine callbacks, not exact instruction or wall-clock counts.
@@ -122,6 +132,32 @@ impl Runtime {
             4 => Err(Error::OutputLimit),
             _ => Err(Error::Unavailable),
         }
+    }
+    /// Execute a classic script without coercing its unused completion value.
+    pub fn execute(&mut self, source: &str) -> Result<(), Error> {
+        if source.len() > 1024 * 1024 {
+            return Err(Error::InvalidInput);
+        }
+        let source = CString::new(source).map_err(|_| Error::InvalidInput)?;
+        // SAFETY: Exclusive owner keeps the thread-confined C runtime live. CString
+        // supplies the complete terminated input for this synchronous call; no
+        // pointer is retained. C releases its completion/exception values.
+        status(unsafe { rjs_execute(self.raw.as_ptr(), source.as_ptr(), source.as_bytes().len()) })
+    }
+    /// Run a bounded microtask checkpoint. Pending work requires another checkpoint
+    /// or destruction of the realm; it never runs implicitly during evaluation.
+    pub fn run_jobs(&mut self, limit: usize) -> Result<usize, Error> {
+        if !(1..=1024).contains(&limit) {
+            return Err(Error::InvalidInput);
+        }
+        let mut completed = 0;
+        // SAFETY: Exclusive live runtime stays on its creator thread. C writes
+        // one size_t into the initialized exclusive output and retains no pointer.
+        status(unsafe { rjs_jobs(self.raw.as_ptr(), limit, &mut completed) })?;
+        if completed > limit {
+            return Err(Error::Unavailable);
+        }
+        Ok(completed)
     }
     /// Snapshot engine counters without publishing any foreign pointers.
     pub fn stats(&self) -> Stats {
@@ -167,3 +203,16 @@ pub fn native_platform_check() -> Option<bool> {
         None
     }
 }
+
+fn status(value: i32) -> Result<(), Error> {
+    match value {
+        0 => Ok(()),
+        1 => Err(Error::Exception),
+        2 => Err(Error::Interrupted),
+        3 => Err(Error::Memory),
+        4 => Err(Error::OutputLimit),
+        _ => Err(Error::Unavailable),
+    }
+}
+mod host;
+pub use host::{Host, HostRuntime, Reply};

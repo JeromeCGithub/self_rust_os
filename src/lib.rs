@@ -22,6 +22,7 @@ use core::panic::PanicInfo;
 use x86_64::instructions;
 
 pub mod allocator;
+pub mod audio;
 pub mod arch;
 pub mod drivers;
 use drivers::video::framebuffer as gfx;

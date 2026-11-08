@@ -1,0 +1,10 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+error[E0599]: no method named `summary` found for struct `Page` in the current scope
+  --> tests/browser.rs:26:47
+   |
+26 |     let page=doc.layout(160);let summary=page.summary();
+   |                                               ^^^^^^^ method not found in `Page`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `rustos-browser` (test "browser") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

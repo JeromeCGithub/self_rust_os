@@ -16,6 +16,7 @@ pub fn run(config: [u8; 4]) {
             "/chunked",
             "/close",
             "/large",
+            "/range",
             "/truncated",
         ] {
             use core::fmt::Write;
@@ -26,8 +27,13 @@ pub fn run(config: [u8; 4]) {
             write!(&mut url, "http://fixture.test:{}{}", port, path).unwrap();
             let mut data = [0; 32];
             let mut length = 0;
-            let result = http::get_with(
+            let result = http::request_with_url(
                 core::str::from_utf8(&url.data[..url.len]).unwrap(),
+                if path == "/range" {
+                    http::Request::GetRange(http::ByteRange { first: 4, last: 7 })
+                } else {
+                    http::Request::Get
+                },
                 options,
                 |bytes| {
                     if path == "/large" {
@@ -39,6 +45,7 @@ pub fn run(config: [u8; 4]) {
                     length += bytes.len();
                     Ok(())
                 },
+                |_| {},
             );
             if path == "/truncated" {
                 assert_eq!(result, Err(http::Error::Truncated));
@@ -48,6 +55,17 @@ pub fn run(config: [u8; 4]) {
                 if path == "/close" {
                     assert_eq!(response.status, 404);
                     assert_eq!(&data[..length], b"eof-ok");
+                } else if path == "/range" {
+                    assert_eq!(response.status, 206);
+                    assert_eq!(&data[..length], b"efgh");
+                    assert_eq!(
+                        response.range,
+                        Some(http::ContentRange::Satisfied {
+                            first: 4,
+                            last: 7,
+                            total: 12
+                        })
+                    );
                 } else if path == "/large" {
                     assert_eq!(length, 20000);
                 } else {

@@ -1,0 +1,10 @@
+PASS: native restricted QuickJS, classes/functions/promises, DOM pixels and bounded microtask recovery
+PASS: maximize/restore, DE panel reservations, pointer coordinates beyond 1023 and edge resize with client redraw
+PASS: native PNG pixels, alpha/scaling, image link hits and failure fallback
+PASS: native proportional antialiased fonts, CSS families and Unicode fixture
+qemu-system-x86_64: terminating on signal 15 from pid 347188 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 361, in <module>
+    assert stalled_closed.wait(.5), 'superseded request socket stayed open'
+           ~~~~~~~~~~~~~~~~~~~^^^^
+AssertionError: superseded request socket stayed open

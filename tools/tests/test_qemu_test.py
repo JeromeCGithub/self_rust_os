@@ -74,3 +74,12 @@ class LauncherDiscovery(unittest.TestCase):
         with patch('subprocess.check_output',return_value=listing) as command:
             self.assertEqual(monitor.launchers('/tmp/private.img'),{'CURL':50,'FORGE':150,'HELLO':250,'JBROWSE':350,'PORTAL':450,'SNAKE':550})
         command.assert_called_once_with(['mdir','-b','-i','/tmp/private.img@@1048576','::/BIN'])
+
+
+class ConsoleObservation(unittest.TestCase):
+    def test_new_raw_diagnostics_do_not_move_old_console_messages_past_a_mark(self):
+        first='[kernel] sys_write: "old page"\n'
+        mark=len(monitor.console_text(first))
+        later=first+'[kernel] sys_write: "Loading..."\n'
+        self.assertNotIn('old page',monitor.console_text(later)[mark:])
+        self.assertEqual(monitor.console_text(later)[:mark],monitor.console_text(first))

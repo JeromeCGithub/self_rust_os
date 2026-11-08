@@ -1,0 +1,30 @@
+{
+  "url": "http://10.0.2.2:40245/css-reference",
+  "title": "CSS reference layout",
+  "load_probe_passed": true,
+  "complete_task_verified": false,
+  "elapsed_seconds": 1.9552752419986064,
+  "budget_seconds": 5,
+  "counters": {
+    "http_status": 200,
+    "items": 12,
+    "links": 0,
+    "controls": 1,
+    "images": 0,
+    "truncated": 0,
+    "script_errors": 0,
+    "digest": 8671713442351041477
+  },
+  "ink_pixels": 30572,
+  "readback_digest": 8671713442351041477,
+  "submitted_digest": 8671713442351041477,
+  "checks": {
+    "title": true,
+    "readable_pixels": true,
+    "rendered_links": true
+  },
+  "error": null,
+  "unsupported_script": false,
+  "build_id": "72ed8e1c60ea8655d0d1a0baf447390521b9f42a63bfc5179a937592ccda8e8d",
+  "reference_rectangles_match": true
+}
