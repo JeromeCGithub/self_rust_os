@@ -2,6 +2,33 @@
 mod abi;
 use userlib::{recordln, supervision, sys};
 fn main(argc: usize, argv: &[&str]) {
+    if argc > 1 && argv[1] == "--unit-probe" {
+        assert_eq!(
+            argv,
+            &[
+                "/BIN/ZINIT.SVC",
+                "--unit-probe",
+                "two words",
+                "$(literal)*",
+                "",
+                "café"
+            ]
+        );
+        assert_eq!(
+            userlib::env::var("UNIT_EXAMPLE").as_deref(),
+            Some("value=literal")
+        );
+        assert_eq!(userlib::env::var("UNIT_EMPTY").as_deref(), Some(""));
+        assert_eq!(
+            userlib::env::var("PATH"),
+            None,
+            "manager environment must not leak into services"
+        );
+        recordln!("[unit-probe] vectors PASS");
+        loop {
+            sys::wait_events(sys::Events::CHILD, 0).expect("probe event wait");
+        }
+    }
     if argc > 1 && argv[1] == "--intruder" {
         abi::intruder();
         return;

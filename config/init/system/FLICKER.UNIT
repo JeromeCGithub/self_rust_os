@@ -1,0 +1,11 @@
+Version=1
+Kind=service
+Name=flicker
+Exec=/BIN/FLICKER.SVC
+Ready=spawned
+Restart=on-failure
+RestartDelayTicks=2
+RestartMaxDelayTicks=8
+RestartBurst=3
+RestartWindowTicks=100
+HealthyResetTicks=50

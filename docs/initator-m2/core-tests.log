@@ -1,0 +1,95 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+     Running unittests src/lib.rs (/home/jay/personal/self_rust_os-initator/crates/service-core/target/x86_64-unknown-linux-gnu/debug/deps/rustos_service_core-8844db8fe91fd7f5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/config.rs (/home/jay/personal/self_rust_os-initator/crates/service-core/target/x86_64-unknown-linux-gnu/debug/deps/config-fb1d6456ca7a8a2c)
+
+running 12 tests
+test crlf_comments_and_outer_ascii_whitespace_are_supported ... ok
+test encoding_and_line_errors_are_precise ... ok
+test duplicate_singletons_environment_names_and_edges_are_rejected ... ok
+test rejects_control_characters_in_values_before_allocation ... ok
+test rejects_service_fields_in_targets_even_when_kind_is_last ... ok
+test service_preserves_explicit_vectors_without_shell_semantics ... ok
+test bounds_file_vectors_launch_bytes_and_dependency_names ... ok
+test target_retains_activation_and_ordering_as_distinct_edges ... ok
+test unsupported_future_mechanisms_are_not_silently_accepted ... ok
+test validates_numeric_boundaries_and_cross_field_restart_limits ... ok
+test validates_required_fields_names_paths_and_environment ... ok
+test exact_file_launch_environment_and_edge_limits_are_observable ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/graph.rs (/home/jay/personal/self_rust_os-initator/crates/service-core/target/x86_64-unknown-linux-gnu/debug/deps/graph-825742fd63c0c356)
+
+running 9 tests
+test catalog_order_is_independent_of_filesystem_enumeration ... ok
+test activation_closure_distinguishes_ordering_and_optional_membership ... ok
+test cycles_report_the_actual_closed_path_including_mixed_edges ... ok
+test membership_is_not_an_ordering_barrier ... ok
+test validates_unselected_cycles_and_preserves_source_parse_location ... ok
+test unknown_units_and_duplicate_sources_fail_before_activation ... ok
+test aggregate_byte_and_edge_budgets_are_enforced ... ok
+test supports_all_64_catalog_bits_and_rejects_the_65th_unit ... ok
+test aggregate_edges_fail_before_resolving_or_activating_any_node ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/manager.rs (/home/jay/personal/self_rust_os-initator/crates/service-core/target/x86_64-unknown-linux-gnu/debug/deps/manager-b4baed07e8bba97b)
+
+running 7 tests
+test dependency_activation_and_event_driven_restart_share_one_host_tested_adapter ... ok
+test explicit_stop_cancels_backoff_and_late_results_cannot_change_a_new_run ... ok
+test explicit_activation_at_exhausted_rate_limit_fails_instead_of_stalling ... ok
+test a_previously_settled_required_target_waits_for_startup_replacement ... ok
+test observed_loss_before_dependent_start_prevents_activation_and_restart ... ok
+test spawn_failure_rolls_back_and_suppresses_retries_for_unowned_branches ... ok
+test retryable_startup_loss_holds_dependents_until_replacement_or_terminal_limit ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/supervision.rs (/home/jay/personal/self_rust_os-initator/crates/service-core/target/x86_64-unknown-linux-gnu/debug/deps/supervision-77ec732c158ce560)
+
+running 13 tests
+test reactivation_waits_for_cleanup_and_preserves_rate_limit_history ... ok
+test inactive_catalog_only_starts_explicitly_admitted_services ... ok
+test restart_history_bound_is_validated_before_start ... ok
+test restart_limit_uses_a_rolling_window_across_old_window_boundary ... ok
+test restart_storm_has_exponential_delay_and_a_terminal_limit ... ok
+test reused_pid_does_not_match_old_generation ... ok
+test rolling_history_reuses_storage_when_old_attempts_expire ... ok
+test stop_during_spawn_requires_cleanup_of_late_success ... ok
+test stop_suppresses_always_restart_and_cancels_backoff ... ok
+test success_failure_and_spawn_failure_follow_policy ... ok
+test two_children_are_independent_and_second_failure_does_not_wait_for_first ... ok
+test unhealthy_short_runs_do_not_reset_budget_but_healthy_run_does ... ok
+test validates_limits_and_never_wraps_deadlines ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/transaction.rs (/home/jay/personal/self_rust_os-initator/crates/service-core/target/x86_64-unknown-linux-gnu/debug/deps/transaction-a55499c80a66d71d)
+
+running 12 tests
+test duplicate_requests_coalesce_conflicts_and_stale_results_are_rejected ... ok
+test cleanup_uses_reverse_actual_activation_order ... ok
+test loss_during_cleanup_acknowledges_stop_without_requiring_a_second_event ... ok
+test failed_optional_group_does_not_keep_its_exclusive_prerequisites_running ... ok
+test post_activation_loss_keeps_desire_without_binding_dependents_to_liveness ... ok
+test prerequisites_wait_for_activation_and_independent_starts_can_overlap ... ok
+test observed_prerequisite_loss_blocks_dependents_and_waits_for_late_siblings ... ok
+test optional_failure_degrades_target_but_after_is_only_a_settled_barrier ... ok
+test rollback_and_explicit_stop_preserve_services_owned_by_another_root ... ok
+test required_failure_never_starts_dependent_and_rolls_back_exclusive_services ... ok
+test stale_transaction_results_cannot_complete_a_new_run_of_the_same_unit ... ok
+test service_headroom_counts_all_retained_roots_and_is_released_on_stop ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests rustos_service_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

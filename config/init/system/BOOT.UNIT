@@ -1,0 +1,5 @@
+Version=1
+Kind=target
+Name=boot
+Requires=glow
+Wants=flicker
