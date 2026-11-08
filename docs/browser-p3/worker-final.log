@@ -1,0 +1,2 @@
+PASS: restricted Ring 3 worker and repeated frame recovery; evidence: /home/jay/personal/os/jbrowse/target/browser-p1/cpus-32/serial-6_yn2dbh.log
+qemu-system-x86_64: terminating on signal 15 from pid 317017 (python3)

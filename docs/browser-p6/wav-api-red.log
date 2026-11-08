@@ -1,0 +1,11 @@
+   Compiling rustos-media v0.1.0 (/home/jay/personal/os/jbrowse/crates/media)
+error[E0432]: unresolved import `rustos_media`
+ --> tests/wav.rs:1:5
+  |
+1 | use rustos_media::{Wav,Error};
+  |     ^^^^^^^^^^^^ use of unresolved module or unlinked crate `rustos_media`
+  |
+  = help: if you wanted to use a crate named `rustos_media`, use `cargo add rustos_media` to add it to your `Cargo.toml`
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `rustos-media` (test "wav") due to 1 previous error

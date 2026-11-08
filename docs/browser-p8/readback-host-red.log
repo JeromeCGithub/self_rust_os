@@ -1,0 +1,20 @@
+E
+======================================================================
+ERROR: test_browser_probe (unittest.loader._FailedTest.test_browser_probe)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_browser_probe
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/unittest/loader.py", line 433, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/usr/lib/python3.14/unittest/loader.py", line 374, in _get_module_from_name
+    __import__(name)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jay/personal/os/jbrowse/tools/tests/test_browser_probe.py", line 5, in <module>
+    from browser_probe import rgb_digest
+ModuleNotFoundError: No module named 'browser_probe'
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+FAILED (errors=1)

@@ -1,0 +1,7 @@
+
+running 3 tests
+test tests::click_during_composition_keeps_both_edges_and_positions ... ok
+test tests::motion_coalesces_without_duplicate_button_edges ... ok
+test tests::overflow_is_bounded_and_reconciles_to_latest_buttons ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

@@ -1,0 +1,31 @@
+{
+  "url": "http://10.0.2.2:37631/many-sheets",
+  "title": "Six stylesheet document",
+  "load_probe_passed": true,
+  "complete_task_verified": false,
+  "elapsed_seconds": 2.6051236799976323,
+  "budget_seconds": 5,
+  "counters": {
+    "http_status": 200,
+    "items": 2,
+    "links": 0,
+    "controls": 0,
+    "images": 0,
+    "truncated": 0,
+    "script_errors": 0,
+    "style_errors": 0,
+    "digest": 2983416829767501431
+  },
+  "ink_pixels": 1914,
+  "readback_digest": 2983416829767501431,
+  "submitted_digest": 2983416829767501431,
+  "checks": {
+    "title": true,
+    "readable_pixels": true,
+    "rendered_links": true
+  },
+  "error": null,
+  "unsupported_script": false,
+  "build_id": "b2e547d791121274f671ba0d009079c7b14746e4ff1b834512c4eebfee4f4e72",
+  "all_six_sheets_in_order": true
+}

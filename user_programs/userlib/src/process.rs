@@ -1,10 +1,16 @@
 //! Owned child process with a bounded, private standard-I/O connection.
-//! Input packets contain one byte; output packets contain up to three bytes.
+//! Ordinary stdin input uses one-byte packets; explicit framed protocols may
+//! exchange up to three bytes per packet without changing the kernel ABI.
 use crate::sys::{self, MessageError, SYSCALL_ERROR};
+mod packet;
 
 fn operation(op: u64, value: u32) -> u64 {
-    // SAFETY: This register-only syscall has no pointers or borrowed buffers.
-    unsafe { sys::syscall(sys::SYS_STDIO, op, u64::from(value), 0) }
+    selected_operation(op, value, 0)
+}
+fn selected_operation(op: u64, value: u32, selector: u64) -> u64 {
+    // SAFETY: Register-only operation/payload/selector; no borrowed buffers. The
+    // kernel validates ownership before accessing a selected endpoint queue.
+    unsafe { sys::syscall(sys::SYS_STDIO, op, u64::from(value), selector) }
 }
 pub(crate) fn redirected() -> bool {
     use core::sync::atomic::{AtomicU8, Ordering};
@@ -25,21 +31,28 @@ pub(crate) fn redirected() -> bool {
     role == 2
 }
 fn send(word: u32) -> Result<(), MessageError> {
-    match operation(1, word) {
+    send_selected(word, 0)
+}
+fn send_selected(word: u32, selector: u64) -> Result<(), MessageError> {
+    match selected_operation(1, word, selector) {
         0 => Ok(()),
         1 => Err(MessageError::Full),
         _ => Err(MessageError::Unavailable),
     }
 }
 fn receive() -> Result<Option<u32>, MessageError> {
-    match operation(2, 0) {
+    receive_selected(0)
+}
+fn receive_selected(selector: u64) -> Result<Option<u32>, MessageError> {
+    match selected_operation(2, 0, selector) {
         0 => Ok(None),
         SYSCALL_ERROR => Err(MessageError::Unavailable),
         value => Ok(Some((value - 1) as u32)),
     }
 }
 
-/// A terminal owns one child endpoint. Dropping it kills and reaps the child.
+/// A process owns one child endpoint, independently of its redirected stdin/stdout.
+/// Dropping it kills and reaps the child.
 /// This is a bounded transport, not a POSIX PTY or file-descriptor API.
 pub struct Child {
     pid: u32,
@@ -68,11 +81,23 @@ impl Child {
     }
     /// Forward one input byte. Full means retry this byte after draining output.
     pub fn write_byte(&mut self, byte: u8) -> Result<(), MessageError> {
-        send((1 << 24) | u32::from(byte))
+        send_selected((1 << 24) | u32::from(byte), u64::from(self.pid) + 1)
+    }
+    /// Nonblocking copied packet for an explicitly packet-aware child protocol.
+    /// Consumes at most three bytes; Full consumes none. Ordinary stdin clients
+    /// must continue using write_byte, since a one-byte read cannot retain a tail.
+    pub fn write_packet(&mut self, bytes: &[u8]) -> Result<usize, MessageError> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        let packet = packet::Packet::from_bytes(&bytes[..bytes.len().min(3)])
+            .ok_or(MessageError::Unavailable)?;
+        send_selected(packet.word(), u64::from(self.pid) + 1)?;
+        Ok(packet.bytes().len())
     }
     /// Drain one output packet. None means live but empty; unavailable means EOF.
     pub fn read(&mut self) -> Result<Option<([u8; 3], usize)>, MessageError> {
-        let Some(word) = receive()? else {
+        let Some(word) = receive_selected(u64::from(self.pid) + 1)? else {
             return Ok(None);
         };
         let count = (word >> 24) as usize;
@@ -84,6 +109,17 @@ impl Child {
             count,
         )))
     }
+}
+/// Nonblocking private-stream packet receive for explicitly framed protocols.
+/// Empty and EOF remain distinct. This does not consume keyboard/ambient IPC.
+pub fn read_packet() -> Result<Option<([u8; 3], usize)>, MessageError> {
+    receive()?
+        .map(|word| {
+            packet::Packet::from_word(word)
+                .map(|packet| packet.parts())
+                .ok_or(MessageError::Unavailable)
+        })
+        .transpose()
 }
 impl Drop for Child {
     fn drop(&mut self) {
@@ -133,5 +169,28 @@ pub(crate) fn read(bytes: &mut [u8], blocking: bool) -> usize {
             Ok(None) => return 0,
             Err(_) => sys::exit(0),
         }
+    }
+}
+
+/// Irreversibly drop filesystem/network/process/display authority for this
+/// connected, single-threaded child. Call before accepting untrusted input.
+/// Only the existing endpoint, heap budget, clocks/entropy and progress remain.
+/// Initial image/stack/surface mappings are unchanged; no new threads are allowed.
+pub fn restrict_worker(heap_bytes: usize) -> Result<(), ()> {
+    let abi_profile = rustos_process_abi::isolation::WORKER;
+    // SAFETY: Register-only profile/budget; kernel validates all scalar fields and
+    // atomically changes only the caller's process-wide principal.
+    let result = unsafe {
+        sys::syscall(
+            rustos_process_abi::isolation::SYS_RESTRICT,
+            abi_profile,
+            heap_bytes as u64,
+            0,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(())
     }
 }

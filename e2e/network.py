@@ -21,7 +21,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / 'tools'))
 from qemu_network import arguments as network_arguments
 from qemu_platform import arguments as platform_arguments
-from qemu_test import disk_image, DeferredWorkers
+from qemu_test import disk_image, DeferredWorkers, launchers
 
 
 def checksum(data):
@@ -68,6 +68,10 @@ def verify_echo_capture(path, address, minimum):
     matched = sum(requests.get(key) == payload for key, payload in replies.items())
     assert matched >= minimum, f'only {matched} independently verified replies'
     return matched
+
+
+def launcher_x(disk, name):
+    return launchers(disk)[name]
 
 
 def main():
@@ -189,7 +193,7 @@ def main():
             request('qmp_capabilities')
             wait_for('[desktop] ready:')
             request('input-send-event', {'events': [
-                {'type': 'abs', 'data': {'axis': 'x', 'value': (350*32767+1918)//1919}},
+                {'type': 'abs', 'data': {'axis': 'x', 'value': (launcher_x(disk,'PORTAL')*32767+1918)//1919}},
                 {'type': 'abs', 'data': {'axis': 'y', 'value': (65*32767+1078)//1079}}]})
             time.sleep(.2)
             for down in (True, False):
@@ -197,10 +201,9 @@ def main():
                 time.sleep(.2)
             wait_for('self_rust_os forge v1.0')
             if args.probe:
-                # Build-user installs binaries alphabetically; CURL is first and
-                # ZNETTEST is the seventh launcher.
+                # Resolve the actual FAT application order, excluding services.
                 request('input-send-event', {'events': [
-                    {'type': 'abs', 'data': {'axis': 'x', 'value': (650*32767+1918)//1919}},
+                    {'type': 'abs', 'data': {'axis': 'x', 'value': (launcher_x(disk,'ZNETTEST')*32767+1918)//1919}},
                     {'type': 'abs', 'data': {'axis': 'y', 'value': (65*32767+1078)//1079}}]})
                 time.sleep(.2)
                 for down in (True, False):

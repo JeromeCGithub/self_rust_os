@@ -1,0 +1,40 @@
+2026-11-05 bounded source/build investigation. This is NOT a native Servo pass.
+
+Repository: https://github.com/servo/servo
+Revision: b88af263d11e12288ff3eca0848aaa675d6a52f0
+Checkout: git clone --depth 1 --filter=blob:none https://github.com/servo/servo.git /tmp/rustos-servo-checkout
+Verified checkout HEAD with git rev-parse HEAD.
+
+Upstream file SHA-256:
+543a601790da13eeb48f4cbf510cbec89f443805c744f29fc229c31ab9293691  Cargo.toml
+24ba41c4b8236c5a95cd0cc6c8a309bd2aa1ac6eaa55145b39a3b6f2f55b9d4f  rust-toolchain.toml
+9823a866565c830ff04f373c72453df40c7826bc979cfb72806dbe03aa3ed582  components/servo/Cargo.toml
+140c5ba600d3305cc819fdc42021464f38248a670957315e71eb3940352e802d  components/servo/lib.rs
+
+Repository compiler retained: rustc 1.86.0-nightly (ae5de6c75 2025-01-29)
+Servo declared minimum: 1.88.0; selected toolchain: 1.99.1.
+These source requirements need a separately reviewed compiler/platform decision.
+Do not describe the following resolution failure as an observed MSRV/compiler failure.
+
+Run in the full checkout with this OS's unchanged target JSON:
+cargo +nightly-2025-01-30 check --offline --package servo --no-default-features --target /home/jay/personal/os/jbrowse/user_programs/zjsprobe/x86_64-user-program.json
+Exit: 101. Stopped before compiling engine code.
+error: failed to get `servo_arc` as a dependency of package `servo-malloc-size-of v0.8.0 (/tmp/rustos-servo-checkout/components/malloc_size_of)`
+
+Caused by:
+  failed to load source for dependency `servo_arc`
+
+Caused by:
+  Unable to update https://github.com/servo/stylo?rev=d906dc82b17fbcaf9c89d802cbb3ece3ff5fcd45#d906dc82
+
+Caused by:
+  can't checkout from 'https://github.com/servo/stylo': you are in the offline mode (--offline)
+
+Inventory (source review, not a complete transitive dependency graph):
+components/servo/servo.rs and webview.rs use std cell/rc/sync/time.
+Workspace lists mozjs 0.26.14 (SpiderMonkey), libc, Tokio/hyper/rustls,
+IPC, font and image libraries, WebRender/Surfman, optional GStreamer.
+Embedding requires EventLoopWaker, spin_event_loop, RenderingContext,
+WebView input forwarding, frame notification, paint and present.
+No std, C/C++, SpiderMonkey, graphics or browser service port attempted.
+No guest memory, startup, site or rendering measurement for Servo.

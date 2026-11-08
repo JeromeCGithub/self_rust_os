@@ -13,6 +13,7 @@ use rustls::{
 /// TLS errors never permit a fallback to plaintext or unchecked certificates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
+    Cancelled,
     Certificate,
     Entropy,
     Clock,

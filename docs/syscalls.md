@@ -46,7 +46,7 @@ Unused arguments are zero in SDK wrappers. `ptr` means a user virtual address.
 | 20 | `send_message` | target PID (`u32`), payload (`u32`), zero | Zero on enqueue, one when full, error for forbidden/missing/dead target or invalid integer arguments |
 | 21 | `receive_message` | zero, zero, zero | Zero if empty, otherwise `((sender + 1) << 32) \| payload`; error without a current process or with nonzero arguments |
 
-| 22 | connected standard I/O (SDK `process` module) | operation (0 metadata, 1 send, 2 receive), scalar payload for send, zero | See connected-child contract below; no pointers |
+| 22 | connected standard I/O (SDK `process` module) | operation (0 metadata, 1 send, 2 receive), scalar payload for send, endpoint selector | See connected-child contract below; no pointers |
 | 23 | `open` | path ptr, flags, zero | Lowest free regular-file descriptor, 3–1026; see file contract below |
 | 24 | `close` | fd, zero, zero | Zero on success; closed/invalid descriptors fail |
 | 25 | `write` | fd, input ptr, byte length | Regular file: possibly short count, advances offset; fd 1/2: console output |
@@ -59,6 +59,7 @@ Unused arguments are zero in SDK wrappers. `ptr` means a user virtual address.
 | 31 | `brk` (unsafe SDK primitive) | requested break, zero, zero | Zero request queries; success returns requested break, failure returns old break |
 | 32 | `arch_prctl` / `fs_base`, `set_fs_base` | operation, address/output ptr, zero | Linux operation values `0x1002` SET_FS and `0x1003` GET_FS; zero on success |
 | 33 | `fs::read_dir` | path ptr, output ptr, capacity bytes | Capacity zero queries required bytes; otherwise complete full-name records or error |
+| 34 | `process::restrict_worker` | profile (1), heap bytes, zero | Irreversible restricted connected-child principal; see below |
 
 Operations 14–16 currently appear as numeric dispatcher arms and numeric SDK calls.
 Do not assume the named `SYS_*` constants above operation 13 are a complete ABI inventory.
@@ -310,6 +311,32 @@ Failed=3, distinct from network errors and scheduler control sentinels. Existing
 syscall numbers and network ABI records remain unchanged. TLS, certificates,
 trust policy and HTTPS are [userspace library responsibilities](tls.md), with no
 TLS-specific kernel syscall.
+## PCM audio output
+
+Audio policy/decoding remains Ring3. The optional kernel AC97 driver exposes one
+exclusive stereo signed16-bit little-endian48kHz stream, with opaque PID-owned
+handles and32 bounded DMA descriptors. See [P6 ownership/testing](browser-media-p6.md).
+
+| Number | SDK operation | Arguments (`rdi`, `rsi`, `rdx`) | Result |
+| --- | --- | --- | --- |
+|82 | `audio::Stream::open` |zero, zero, zero |Owned handle, or NoDevice/Busy/error |
+|83 | `Stream::write` |handle, readable PCM ptr, byte length |Exact accepted bytes or WouldBlock/error; length4–4096, divisible by4 |
+|84 | Stream control/Drop |handle, operation, zero |0 or error;0 close,1 pause,2 resume |
+|85 | `Stream::status` |handle, writable status ptr,40 |0 or error; copies complete version1 record |
+
+Status layout is padding-free: version u32, flags u32 (bit0 running,bit1 paused),
+submitted frames u64, played frames u64, queued frames u32, free slots u32,
+hardware FIFO-error count u64. Counters are complete stereo PCM frames, not bytes
+or individual samples. Complete readable/writable mappings and reserved arguments
+are validated before device access; no user pointer survives a copy. Audio errors
+use `u64::MAX-1023+code` (Invalid1, NoDevice2, Busy3, WouldBlock4, Failed5,
+NotOwner6); unknown reserved encodings fail closed in the SDK.
+
+Close/exit/kill stops DMA and invalidates the lease, including owned child teardown.
+Boot-owned33 DMA frames are reused for the controller lifetime. Reset failure
+quarantines the controller and prevents buffer reuse. Restricted script workers
+cannot invoke these calls. This is a native mechanism, not an OSS/ALSA/Linux ABI.
+
 ## Connected child standard I/O
 
 `spawn` flags zero retains ordinary spawning. Flag one creates an owned duplex
@@ -317,7 +344,18 @@ connection before the child can run. Unknown flags, nonzero reserved arguments
 and an occupied endpoint fail before loading a child. This is generic process I/O;
 the kernel does not know whether the executable is a shell.
 
-Syscall 22 operates only on the caller's endpoint:
+Syscall 22 operates only on the caller's existing endpoints. RDX=0 preserves the
+original standard stream; RDX=`owned_child_pid + 1` explicitly selects the one
+child connection owned by this caller. A connected child may itself own one
+connected descendant, with a separate FIFO. Foreign PIDs, a parent PID and stale
+selectors do not confer authority. Metadata (operation0) still requires RDX=0.
+The SDK's `Child` always uses the explicit selector; stdin/stdout use zero.
+Zero-selector stdio retains its original stream. Older SDK `Child` wrappers
+cannot address a nested endpoint: rebuild them with the selected-endpoint SDK
+before using this new topology. All repository applications were rebuilt together.
+Existing ordinary host/child zero-selector traffic remains covered by regression tests.
+
+
 
 - Operation 0: metadata, zero if unconnected, otherwise
   `((peer_pid + 1) << 1) | child_side`. A closed endpoint keeps metadata until reaped.
@@ -331,17 +369,33 @@ Syscall 22 operates only on the caller's endpoint:
 
 Queues are separate from syscalls 20/21 and cannot be addressed by arbitrary PID.
 SDK byte framing uses count bits 24–31 and up to three low bytes in little-endian
-order. Host-to-child packets have count one. Standard console wrappers redirect
+order. Ordinary stdin host-to-child packets have count one. Explicit framed
+protocols may use `Child::write_packet` and `process::read_packet` with canonical
+one-to-three-byte packets. The sender returns a nonblocking prefix count (zero
+for empty input, Full consumes nothing); the receiver distinguishes live-empty
+from EOF and rejects invalid counts/nonzero unused bytes. Header and body packet
+boundaries remain separate in the browser protocol. Ordinary `write_byte`/stdin
+semantics are unchanged; the kernel still treats payloads as opaque words.
+Standard console wrappers redirect
 on the child side; the host uses `process::Child` and keeps ordinary keyboard I/O.
 No new kernel pointer dereference or retained user reference is introduced by
 operation 22. Spawn copies and validates the complete NUL-terminated path
 before loading the executable through the filesystem service.
 
-The host owns the child lifetime. Host exit/kill stops its connected child;
-reaping the host also removes that child's PCB. Reaping a child releases its host
+The host owns the child lifetime. Host exit/kill stops its owned connected descendants;
+reaping the host also removes those stopped PCBs. Traversals use constant stack
+space and are bounded by128 live process slots. Waiters are woken from leaf to
+root; an already-exited descendant keeps its original exit status. Reaping a child releases its host
 endpoint and drops queued packets. Killing a host from its own child schedules away
 from the stopped child. Frames/stacks are reclaimed after deferred execution/TLB quiescence; existing
 process-control permission limitations still apply. See [terminal architecture](terminal-shell.md).
+
+A selected Child is nonblocking; the browser transport uses its existing bounded
+sleep/retry/deadline loop for progress. Readiness syscall109's stdio bits continue
+to monitor the original zero-selector stream. A child's stdout backpressure checks
+the correct incoming FIFO in its parent, including a parent's descendant queue.
+No new user pointer or syscall number is introduced. See
+[P3 native JavaScript integration](browser-javascript-p3.md) for executed evidence.
 
 ## Native threads and CPU information
 
@@ -371,3 +425,29 @@ Pointer readiness compares a complete driver sample's published revision with th
 display owner's last mouse read. Only PID 0 can select this bit. The existing
 mouse syscall's packed return format is unchanged. IRQs publish complete samples
 and send at most one idle-CPU doorbell; ordinary kernel entry performs wakeups.
+
+
+## Restricted worker principal
+
+Syscall 34 takes profile `1`, a page-aligned heap budget from 64 KiB through
+64 MiB, and a zero reserved word. It returns zero or `SYSCALL_ERROR`. Only a
+single-threaded non-PID-0 process with the **child** side of an existing connected
+stdio endpoint and no owned descendant may enter it. A repeat transition, invalid budget/profile/flags,
+or a budget below the current break fails without changing state. The budget is
+relative to `HEAP_BASE`; it bounds complete brk pages, including rejected growth
+rollback. Initial image/stack/surface/table allocations are separate.
+
+Enforcement occurs before dispatch/usercopy for every syscall and thread. Allowed
+numbers: 0, 3, 17, 22, 31, 32, 80, 81, 96, 97, 102, 103; syscall 109 allows only
+nonzero combinations of stdio readiness bits 2/4. Other operations, including
+unknown future numbers, return `SYSCALL_ERROR`. Thus existing endpoint ownership
+remains authoritative; a worker cannot choose another peer, spawn descendants,
+create threads, open files/sockets, access input/display or relax the profile.
+
+`userlib::process::restrict_worker(heap_bytes)` is the typed wrapper. Call it from
+trusted bootstrap before accepting untrusted bytes. It is a restricted-worker
+mechanism, not origin isolation, JIT protection, a total-memory accounting ABI or
+a promise that arbitrary existing resources are revoked/closed. Ordinary apps'
+rights are unchanged. The native service bootstraps with an empty environment and
+no pre-opened resources beyond its private endpoint. See
+[P1 design and executed validation](browser-runtime-p1.md).

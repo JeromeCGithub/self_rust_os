@@ -1,0 +1,8 @@
+qemu-system-x86_64: terminating on signal 15 from pid 324102 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 243, in <module>
+    image=pixel((1800,900),(245,240,223),'maximized-browser')
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 176, in pixel
+    assert time.monotonic()<deadline, f'{point}: {image.getpixel(point)} != {color}'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (1800, 900): (49, 31, 31) != (245, 240, 223)

@@ -1,0 +1,29 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running tests/dom.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/dom-3b05a15ba13ae843)
+
+running 2 tests
+test bounded_pointer_free_changes_round_trip_and_reject_malformed_input ... FAILED
+test text_is_literal_and_invalid_worker_effects_cannot_partially_commit ... FAILED
+
+failures:
+
+---- bounded_pointer_free_changes_round_trip_and_reject_malformed_input stdout ----
+
+thread 'bounded_pointer_free_changes_round_trip_and_reject_malformed_input' panicked at tests/dom.rs:5:32:
+called `Result::unwrap()` on an `Err` value: Limit
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- text_is_literal_and_invalid_worker_effects_cannot_partially_commit stdout ----
+
+thread 'text_is_literal_and_invalid_worker_effects_cannot_partially_commit' panicked at tests/dom.rs:20:33:
+called `Result::unwrap()` on an `Err` value: Limit
+
+
+failures:
+    bounded_pointer_free_changes_round_trip_and_reject_malformed_input
+    text_is_literal_and_invalid_worker_effects_cannot_partially_commit
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test dom`

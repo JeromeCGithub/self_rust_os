@@ -9,5 +9,7 @@ pub const TRAILERS: usize = 256 * 1024;
 pub const TARGET: usize = 16 * 1024;
 /// Bounded request/absolute-redirect assembly space, including scheme and authority.
 pub const REQUEST: usize = 32 * 1024;
+/// Maximum encoded form POST body, independent of response and header budgets.
+pub const REQUEST_BODY: usize = 16 * 1024;
 /// Default streamed body budget. Callers may select a different Options::max_body.
 pub const BODY: usize = 256 * 1024 * 1024;

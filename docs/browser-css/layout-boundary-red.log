@@ -1,0 +1,36 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/css_layout.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/css_layout-c4394b0bd75838cb)
+
+running 7 tests
+test border_box_minimums_include_padding_and_color_decorations_follow_the_cascade ... FAILED
+test malformed_sides_are_ignored_atomically_and_display_can_override_display_none ... FAILED
+test authored_control_dimensions_and_fonts_reach_the_renderer ... ok
+test css_auto_margins_center_a_fixed_width_box ... ok
+test css_four_sided_boxes_have_browser_content_and_border_geometry ... ok
+test flex_rows_respect_gap_and_cross_axis_centering ... ok
+test inline_blocks_share_a_centered_line_instead_of_full_width_backgrounds ... ok
+
+failures:
+
+---- border_box_minimums_include_padding_and_color_decorations_follow_the_cascade stdout ----
+
+thread 'border_box_minimums_include_padding_and_color_decorations_follow_the_cascade' panicked at tests/css_layout.rs:57:5:
+assertion `left == right` failed
+  left: (0, 0, 104, 60)
+ right: (0, 0, 80, 40)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- malformed_sides_are_ignored_atomically_and_display_can_override_display_none stdout ----
+
+thread 'malformed_sides_are_ignored_atomically_and_display_can_override_display_none' panicked at tests/css_layout.rs:11:10:
+called `Option::unwrap()` on a `None` value
+
+
+failures:
+    border_box_minimums_include_padding_and_color_decorations_follow_the_cascade
+    malformed_sides_are_ignored_atomically_and_display_can_override_display_none
+
+test result: FAILED. 5 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test css_layout`

@@ -1,0 +1,9 @@
+
+running 5 tests
+test tests::cursor_crosses_tiles_and_clips_at_1080p_edges ... ok
+test tests::full_redraw_covers_the_partial_last_tile_row ... ok
+test tests::disjoint_content_does_not_redraw_unchanged_windows ... ok
+test tests::idle_and_single_pixel_do_not_damage_the_screen ... ok
+test tests::presentation_clips_partial_tiles_and_preserves_pitch_padding_and_guards ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s

@@ -1,0 +1,10 @@
+PASS: native restricted QuickJS, classes/functions/promises, DOM pixels and bounded microtask recovery
+qemu-system-x86_64: terminating on signal 15 from pid 366712 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 240, in <module>
+    pixel((ox+10,oy+75),(180,233,210),'native-attributes')
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 178, in pixel
+    assert time.monotonic()<deadline, f'{point}: {image.getpixel(point)} != {color}'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: (102, 231): (157, 208, 197) != (180, 233, 210)

@@ -1,0 +1,21 @@
+     Locking 1 package to latest compatible version
+warning: rustos-audio-queue v0.1.0 (/home/jay/personal/os/jbrowse/crates/audio-queue) ignoring invalid dependency `rustos-audio-abi` which is missing a lib target
+   Compiling rustos-audio-queue v0.1.0 (/home/jay/personal/os/jbrowse/crates/audio-queue)
+error[E0432]: unresolved import `rustos_audio_abi`
+ --> tests/queue.rs:1:5
+  |
+1 | use rustos_audio_abi::Error;
+  |     ^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `rustos_audio_abi`
+  |
+  = help: if you wanted to use a crate named `rustos_audio_abi`, use `cargo add rustos_audio_abi` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `rustos_audio_queue`
+ --> tests/queue.rs:2:5
+  |
+2 | use rustos_audio_queue::Ring;
+  |     ^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `rustos_audio_queue`
+  |
+  = help: if you wanted to use a crate named `rustos_audio_queue`, use `cargo add rustos_audio_queue` to add it to your `Cargo.toml`
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `rustos-audio-queue` (test "queue") due to 2 previous errors

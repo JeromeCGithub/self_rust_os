@@ -1,0 +1,65 @@
+    Blocking waiting for file lock on package cache
+    Updating crates.io index
+    Blocking waiting for file lock on package cache
+     Locking 5 packages to latest compatible versions
+      Adding rustos-web-image v0.1.0 (/home/jay/personal/os/jbrowse/crates/web-image)
+      Adding simd-adler32 v0.3.10
+      Adding zune-core v0.4.12
+      Adding zune-inflate v0.2.54
+      Adding zune-png v0.4.10
+   Compiling simd-adler32 v0.3.10
+   Compiling zune-core v0.4.12
+   Compiling rustos-text v0.1.0 (/home/jay/personal/os/jbrowse/crates/text)
+   Compiling zune-inflate v0.2.54
+   Compiling zune-png v0.4.10
+   Compiling rustos-web-image v0.1.0 (/home/jay/personal/os/jbrowse/crates/web-image)
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+warning: field `images` is never read
+  --> src/lib.rs:58:5
+   |
+51 | pub struct Document {
+   |            -------- field in this struct
+...
+58 |     images:Vec<ImageResource>,
+   |     ^^^^^^
+   |
+   = note: `Document` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `rustos-browser` (lib test) generated 1 warning (1 duplicate)
+warning: `rustos-browser` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.71s
+     Running unittests src/lib.rs (rustos-p2-browser/x86_64-unknown-linux-gnu/debug/deps/rustos_browser-c043dba40a1262ab)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/browser.rs (rustos-p2-browser/x86_64-unknown-linux-gnu/debug/deps/browser-59b4254a0eb2ad31)
+
+running 9 tests
+test address_and_link_resolution_reject_privileged_schemes ... ok
+test flow_wraps_long_words_preserves_pre_and_bounds_geometry ... ok
+test css_cascade_inheritance_background_and_hidden_content ... ok
+test html_entities_raw_text_and_external_sheets ... ok
+test decoded_images_have_aspect_geometry_link_hits_and_a_visible_page ... FAILED
+test optional_list_end_tags_do_not_accumulate_indentation ... ok
+test proportional_metrics_drive_wrap_geometry_and_link_hits ... ok
+test omitted_body_still_receives_document_css ... ok
+test malformed_html_recovers_and_limits_are_explicit ... ok
+
+failures:
+
+---- decoded_images_have_aspect_geometry_link_hits_and_a_visible_page stdout ----
+
+thread 'decoded_images_have_aspect_geometry_link_hits_and_a_visible_page' panicked at tests/browser.rs:158:38:
+associate decoded image: Limit
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    decoded_images_have_aspect_geometry_link_hits_and_a_visible_page
+
+test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test browser`

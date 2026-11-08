@@ -18,9 +18,12 @@ uses HTTPS; words become a percent-encoded Google search URL. This submits a
 search, but does not promise that the search engine's modern result page fits
 the supported HTML/CSS subset. Click a page text field to edit it; Enter or its submit button sends a GET form.
 [Google startup and search status](jbrowse-google.md) records the real public-site
-check and the remaining JavaScript-gated results limitation. R reloads the current document. Up/Down scroll;
+check and the remaining JavaScript-gated results limitation. The < and > buttons navigate Back/Forward. R reloads the current document;
+Stop cancels a load, including the first request. Up/Down scroll;
 click the document and use j/k or Space to scroll with the keyboard. Escape
-selects the address again. Backspace edits it. There is one tab and no history.
+selects the address again. Backspace edits it. There is one tab; history refetches up to 32 destinations per direction.
+Drag a native window edge/corner to resize, or click the top-right square beside
+Close to expand/restore. The page reflows and form edits survive resizing.
 
 ## A real website to try
 
@@ -54,7 +57,9 @@ The [HTML/CSS screenshot](screenshots/jbrowse-html-css.png) and
   requests/results, never during network I/O or drawing. The main thread owns the
   window and keeps processing keyboard, pointer and close events during downloads.
 
-No syscall numbers or privileged implementation changed. Existing socket, TLS
+This browser uses ordinary SDK mechanisms; the later [P1 worker profile](browser-runtime-p1.md)
+adds a separate restricted service syscall. The [P2 presentation work](browser-rendering-p2.md)
+adds no privileged implementation. Existing socket, TLS
 time/entropy, thread, event-wait and protected surface mechanisms are sufficient.
 The kernel continues to validate handles, user buffers and process ownership;
 parsing, resource policy and rendering remain entirely in Ring 3. Returning from
@@ -65,31 +70,44 @@ and failure through the existing HTTP transport.
 
 HTML supports UTF-8 text, numeric/common named entities, titles, headings,
 paragraphs, lists, block/inline containers, preformatted text, line breaks,
-rules, image alt text, anchors, inline style and linked stylesheets. Omitted
+rules, static PNG images with alt fallback, anchors, inline style and linked stylesheets. Omitted
 body tags receive an implied body. This is a recovering subset parser, not the
 HTML5 tree construction algorithm. Optional li and dt/dd end tags are recovered
 within their list scope.
 
 CSS supports type, class, ID, compound and descendant selectors, comma lists,
 source order/specificity, inline declarations, inherited color/font size,
-RGB hex/basic named colors, solid backgrounds, integer pixel font sizes,
-uniform margin/padding, width, display:block/inline/none and preformatted
-whitespace. Linked sheets are appended after embedded styles in link order.
+RGB hex/basic named colors, solid/rounded backgrounds, pixel and relative font
+sizes, font shorthand/line height, four-sided margin/padding, auto horizontal
+margins, width/height/minimum sizes, border-box sizing, text alignment,
+inline blocks, simple horizontal flex rows and preformatted
+whitespace. Linked and embedded sheets retain HTML source order, including supported !important priority.
 Unsupported properties/selectors and at-rules are ignored; external sheet errors
-fall back to readable unstyled HTML. Fonts use the existing bitmap UI renderer.
+fall back to readable unstyled HTML. Page text uses embedded proportional DejaVu regular/bold Sans, Serif and Monospace
+faces with shared layout/paint metrics and grayscale antialiasing. Form text uses
+the same proportional metrics, including CSS-sized fields and cursor placement;
+native chrome retains bitmap text. Shaping, bidi and downloadable fonts remain absent.
 
-Documents are limited to 256 KiB, 4096 arena nodes (including an implied body),
+Documents are limited to2 MiB,4096 arena nodes (including an implied body),
 64 open elements and 64 attributes per element. CSS has a 128 KiB aggregate
-budget, 512 rules and four linked sheets of at most 32 KiB each. Layout limits
+budget,512 rules and sixteen linked sheets of at most32 KiB each. Stylesheet
+load failures are reported while other supported styles remain readable. Layout limits
 paint records to 16384, widths to 16384 pixels, and reports truncation. Address
 input and resolved URLs are bounded to 2048 bytes. HTTP uses existing redirect
 and connection deadlines and verified TLS; HTTPS downgrades are refused by the
 transport. Network failure leaves the previous page readable and shows an error.
 
-There is no image decoding, POST forms, cookies, storage, downloads, tabs/history,
-flex/grid, responsive media queries, or browser-compatible font metrics.
-The [inline scripting prototype](jbrowse-javascript.md) adds a bounded JavaScript
-subset; it does not support modern JavaScript applications. Only HTTP(S) navigation is accepted; file/data/javascript links
+There is no JPEG/WebP/SVG, cookies, storage, downloads, multiple tabs,
+complete flex layout, grid or responsive media queries. Bounded URL-encoded POST
+forms are supported by [P5](browser-sessions-p5.md). See
+[reference CSS comparisons](browser-css-comparison.md) for the implemented subset
+and the remaining difference from Firefox's modern Google page, and [P2 limits](browser-rendering-p2.md) for
+image/font budgets and remaining classic browsing work.
+The [native JavaScript integration](browser-javascript-p3.md) executes bounded inline
+classic scripts in a restricted QuickJS child, with an initial DOM binding subset
+and explicit promise checkpoints. It replaces the prototype in the application.
+The [old subset interpreter](jbrowse-javascript.md) remains optional library/test
+code; it is not linked into jbrowse. Full modern web applications remain unsupported. Only HTTP(S) navigation is accepted; file/data/javascript links
 are rejected. HTTPS capability does not imply support for arbitrary modern sites.
 UTF-8 and Windows-1252/Latin-1 responses are supported through typed HTTP charset
 metadata; other declared encodings are rejected. Allocation failure

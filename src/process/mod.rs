@@ -70,9 +70,14 @@ pub struct Process {
     pub(crate) inbox_len: usize,
     pub(crate) io_peer: Option<(Pid, bool)>,
     pub(crate) io_inbox: VecDeque<u32>,
+    /// A connected child may independently host one connected descendant.
+    pub(crate) io_nested_peer: Option<Pid>,
+    pub(crate) io_nested_inbox: VecDeque<u32>,
     pub(crate) pointer_seen: u64,
     pub(crate) files: crate::fs::handles::Files,
     pub(crate) heap_break: u64,
+    /// None for ordinary apps; Some is an irreversible connected-worker principal.
+    pub(crate) worker_heap_limit: Option<u64>,
     pub(crate) tls: Option<TlsImage>,
 }
 pub(crate) struct UserStack {

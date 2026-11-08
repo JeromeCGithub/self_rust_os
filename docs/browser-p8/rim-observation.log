@@ -1,0 +1,8 @@
+/home/jay/personal/os/jbrowse/e2e/jbrowse.py:232: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+  actual_digest=rgb_digest(body.getdata())
+qemu-system-x86_64: terminating on signal 15 from pid 458028 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 234, in <module>
+    assert qemu.poll() is None and time.monotonic()<deadline,'submitted page never reached the framebuffer'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: submitted page never reached the framebuffer

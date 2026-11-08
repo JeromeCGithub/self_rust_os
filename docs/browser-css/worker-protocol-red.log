@@ -1,0 +1,16 @@
+     Locking 1 package to latest compatible version
+      Adding rustos-audio-abi v0.1.0 (/home/jay/personal/os/jbrowse/crates/audio-abi)
+   Compiling rustos-browser-worker v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser-worker)
+error[E0407]: method `send_slice` is not a member of trait `Endpoint`
+   --> tests/protocol.rs:137:5
+    |
+137 | /     fn send_slice(&mut self,bytes:&[u8])->Result<usize,Error>{
+138 | |         self.sends.set(self.sends.get()+1);
+139 | |         if self.overreport {return Ok(bytes.len()+1);}
+140 | |         if !self.blocked {self.blocked=true;return Ok(0);}
+141 | |         let n=bytes.len().min(3);self.inner.sent.extend_from_slice(&bytes[..n]);Ok(n)
+142 | |     }
+    | |_____^ not a member of trait `Endpoint`
+
+For more information about this error, try `rustc --explain E0407`.
+error: could not compile `rustos-browser-worker` (test "protocol") due to 1 previous error

@@ -35,3 +35,8 @@ macro_rules! println {
         $crate::print!("\n");
     }};
 }
+
+#[cfg(feature = "alloc")]
+mod cancel;
+#[cfg(feature = "alloc")]
+pub use cancel::Cancellation;

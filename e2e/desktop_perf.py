@@ -137,7 +137,7 @@ def main():
                     assert time.monotonic() < end, 'keyboard burst took over 150 ms to drain'
                     time.sleep(.01)
                 print(f'keyboard burst drain: {(time.monotonic()-start)*1000:.0f} ms', flush=True)
-                click(450, 65)
+                click(launchers(disk)['SNAKE'], 65)
                 end = time.monotonic() + 10
                 while 'Snake game starting' not in log.read_text(errors='replace'):
                     assert time.monotonic() < end, 'Snake launch timeout'
@@ -146,7 +146,7 @@ def main():
                 # Spin intentionally saturates a core: other processes must
                 # still render and accept focused input while it makes progress.
                 click(92 + 470, 136 + 12)
-                click(550, 65)
+                click(launchers(disk)['SPIN'], 65)
                 end = time.monotonic() + 10
                 while 'spin: counter=' not in log.read_text(errors='replace'):
                     assert time.monotonic() < end, 'CPU-bound process made no progress'

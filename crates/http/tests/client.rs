@@ -4,6 +4,9 @@ use std::collections::VecDeque;
 #[derive(Default)]
 struct Mock {
     time: u64,
+    cancel_at: Option<u64>,
+    cancel_after_send: Option<usize>,
+    fail_after_send: Option<usize>,
     opened: usize,
     closed: usize,
     sent: Vec<u8>,
@@ -16,6 +19,12 @@ struct Mock {
     ports: Vec<u16>,
 }
 impl Transport for Mock {
+    fn cancelled(&self) -> bool {
+        self.cancel_at.is_some_and(|at| self.time >= at)
+            || self
+                .cancel_after_send
+                .is_some_and(|at| self.sent.len() >= at)
+    }
     fn start_tls(&mut self, _: u64, host: &str, _: u64, _: Option<&str>) -> Result<(), Error> {
         self.tls_calls.push(host.to_owned());
         if self.tls {
@@ -33,6 +42,9 @@ impl Transport for Mock {
         Ok(())
     }
     fn send(&mut self, _: u64, data: &[u8]) -> Result<usize, SE> {
+        if self.fail_after_send.is_some_and(|at| self.sent.len() >= at) {
+            return Err(SE::Closed);
+        }
         let n = data.len().min(if self.short == 0 {
             usize::MAX
         } else {
@@ -97,6 +109,374 @@ fn content_length_and_fragmented_headers_short_writes() {
         .unwrap()
         .starts_with("GET /a?q=x HTTP/1.1\r\nHost: 10.0.2.2:8080\r\n"));
     assert_eq!((m.opened, m.closed), (1, 1));
+}
+
+#[test]
+fn cookies_are_selected_for_each_redirect_url_and_injection_fails_closed() {
+    use rustos_http::{request_with_cookies, Request, RequestCookies};
+    struct Cookies {
+        seen: Vec<String>,
+        bad: bool,
+    }
+    impl RequestCookies for Cookies {
+        fn header(&mut self, url: &str) -> Result<&str, Error> {
+            self.seen.push(url.into());
+            Ok(if self.bad {
+                "x=y\r\nHost: evil"
+            } else if url.starts_with("https://10.0.2.2/") {
+                "proof=abc"
+            } else {
+                ""
+            })
+        }
+    }
+    let mut m = Mock {
+        tls: true,
+        short: 3,
+        ..Mock::default()
+    };
+    m.incoming.push_back(
+        b"HTTP/1.1 302 Found\r\nLocation: https://10.0.2.3/other\r\nContent-Length: 0\r\n\r\n"
+            .to_vec(),
+    );
+    m.incoming
+        .push_back(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec());
+    let mut cookies = Cookies {
+        seen: vec![],
+        bad: false,
+    };
+    request_with_cookies(
+        &mut m,
+        "https://10.0.2.2/search",
+        Request::Get,
+        Options::default(),
+        |_| Ok(()),
+        |_| {},
+        &mut cookies,
+    )
+    .unwrap();
+    let sent = String::from_utf8(m.sent.clone()).unwrap();
+    assert_eq!(sent.matches("Cookie: proof=abc\r\n").count(), 1);
+    assert_eq!(
+        cookies.seen,
+        vec!["https://10.0.2.2/search", "https://10.0.2.3/other"]
+    );
+    assert!(!sent.split("GET /other").nth(1).unwrap().contains("Cookie:"));
+    assert_eq!((m.opened, m.closed), (2, 2));
+    let mut bad = Mock {
+        tls: true,
+        ..Mock::default()
+    };
+    cookies.bad = true;
+    assert_eq!(
+        request_with_cookies(
+            &mut bad,
+            "https://10.0.2.2/",
+            Request::Get,
+            Options::default(),
+            |_| Ok(()),
+            |_| {},
+            &mut cookies
+        ),
+        Err(Error::Protocol)
+    );
+    assert!(bad.sent.is_empty());
+    assert_eq!((bad.opened, bad.closed), (1, 1));
+}
+
+#[test]
+fn ranged_get_validates_coordinates_and_exact_body_before_accepting_a_seek() {
+    use rustos_http::{request_with_url, ByteRange, ContentRange, Request};
+    for (last, total) in [(7, 100), (7, 8)] {
+        let mut m = Mock {
+            short: 3,
+            ..Mock::default()
+        };
+        m.incoming.push_back(format!("HTTP/1.1 206 Partial\r\nContent-Range: bytes 4-{last}/{total}\r\nContent-Length: 4\r\n\r\nefgh").into_bytes());
+        let mut data = vec![];
+        let result = request_with_url(
+            &mut m,
+            "http://10.0.2.2/media",
+            Request::GetRange(ByteRange { first: 4, last: 10 }),
+            Options::default(),
+            |part| {
+                data.extend_from_slice(part);
+                Ok(())
+            },
+            |_| {},
+        );
+        if total == 8 {
+            assert_eq!(
+                result.unwrap().range,
+                Some(ContentRange::Satisfied {
+                    first: 4,
+                    last: 7,
+                    total: 8
+                })
+            );
+            assert_eq!(data, b"efgh");
+        } else {
+            assert_eq!(result, Err(Error::Protocol));
+            assert!(data.is_empty());
+        }
+        assert!(String::from_utf8(m.sent)
+            .unwrap()
+            .contains("\r\nRange: bytes=4-10\r\n"));
+        assert_eq!(m.closed, 1);
+    }
+}
+
+#[test]
+fn media_range_rejects_ignored_unsatisfiable_and_malformed_responses_without_body_delivery() {
+    use rustos_http::{request_with_url, ByteRange, Request};
+    for (head,expected) in [
+        ("HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nabcd",Error::RangeIgnored),
+        ("HTTP/1.1 416 Range\r\nContent-Range: bytes */4\r\nContent-Length: 0\r\n\r\n",Error::RangeUnsatisfiable),
+        ("HTTP/1.1 206 Partial\r\nContent-Range: bytes 3-7/8\r\nContent-Length: 5\r\n\r\ndefgh",Error::Protocol),
+        ("HTTP/1.1 206 Partial\r\nContent-Range: bytes 4-8/8\r\n\r\n",Error::Protocol),
+        ("HTTP/1.1 206 Partial\r\nContent-Length: 4\r\n\r\nefgh",Error::Protocol),
+        ("HTTP/1.1 206 Partial\r\nContent-Range: bytes 4-7/8\r\nContent-Range: bytes 4-7/8\r\n\r\n",Error::Protocol),
+    ] {
+        let mut m=Mock::default();m.incoming.push_back(head.as_bytes().to_vec());let mut delivered=0;
+        assert_eq!(request_with_url(&mut m,"http://10.0.2.2/media",Request::GetRange(ByteRange{first:4,last:7}),Options::default(),|part|{delivered+=part.len();Ok(())},|_|{}),Err(expected));
+        assert_eq!(delivered,0);assert_eq!(m.closed,1);
+    }
+}
+
+#[test]
+fn media_range_bounds_chunked_truncation_and_redirects_preserve_cleanup() {
+    use rustos_http::{request_with_url, ByteRange, Request};
+    for range in [
+        ByteRange { first: 8, last: 7 },
+        ByteRange {
+            first: 0,
+            last: u64::MAX,
+        },
+        ByteRange {
+            first: 0,
+            last: 1000,
+        },
+    ] {
+        let mut m = Mock::default();
+        assert!(request_with_url(
+            &mut m,
+            "http://10.0.2.2/media",
+            Request::GetRange(range),
+            Options {
+                max_body: 8,
+                ..Default::default()
+            },
+            |_| Ok(()),
+            |_| {}
+        )
+        .is_err());
+        assert_eq!(m.opened, 0);
+    }
+    let mut m = Mock::default();
+    m.incoming
+        .push_back(b"HTTP/1.1 302 Redirect\r\nLocation: /next\r\n\r\n".to_vec());
+    m.incoming.push_back(b"HTTP/1.1 206 Partial\r\nContent-Range: bytes 4-7/10\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nefg\r\n0\r\n\r\n".to_vec());
+    assert_eq!(
+        request_with_url(
+            &mut m,
+            "http://10.0.2.2/media",
+            Request::GetRange(ByteRange { first: 4, last: 7 }),
+            Options::default(),
+            |_| Ok(()),
+            |_| {}
+        ),
+        Err(Error::Truncated)
+    );
+    assert_eq!(m.closed, 2);
+    assert_eq!(
+        String::from_utf8(m.sent)
+            .unwrap()
+            .matches("Range: bytes=4-7")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn form_post_short_writes_body_and_content_headers_without_url_leakage() {
+    use rustos_http::{request_with_url, Request};
+    let mut m = Mock {
+        short: 3,
+        ..Mock::default()
+    };
+    m.incoming
+        .push_back(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec());
+    let mut out = vec![];
+    let mut effective = String::new();
+    let response = request_with_url(
+        &mut m,
+        "http://10.0.2.2/login?flow=1",
+        Request::FormPost(b"user=guest&password=testpass"),
+        Options::default(),
+        |part| {
+            out.extend_from_slice(part);
+            Ok(())
+        },
+        |url| effective = url.into(),
+    )
+    .unwrap();
+    assert_eq!(response.status, 200);
+    assert_eq!(out, b"ok");
+    let sent = String::from_utf8(m.sent).unwrap();
+    assert!(sent.starts_with("POST /login?flow=1 HTTP/1.1\r\n"));
+    assert!(sent
+        .contains("\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 28\r\n"));
+    assert!(sent.ends_with("\r\n\r\nuser=guest&password=testpass"));
+    assert_eq!(effective, "http://10.0.2.2/login?flow=1");
+    assert_eq!((m.opened, m.closed), (1, 1));
+}
+
+#[test]
+fn post_redirect_method_rules_and_same_origin_body_replay() {
+    use rustos_http::{request_with_url, Request};
+    for status in [301, 302, 303, 307, 308] {
+        let mut m = Mock::default();
+        m.incoming.push_back(
+            format!("HTTP/1.1 {status} Redirect\r\nLocation: /next\r\nContent-Length: 0\r\n\r\n")
+                .into_bytes(),
+        );
+        m.incoming.push_back(b"HTTP/1.1 204 Empty\r\n\r\n".to_vec());
+        request_with_url(
+            &mut m,
+            "http://10.0.2.2/login",
+            Request::FormPost(b"x=1"),
+            Options::default(),
+            |_| Ok(()),
+            |_| {},
+        )
+        .unwrap();
+        let sent = String::from_utf8(m.sent).unwrap();
+        assert!(sent.starts_with("POST /login HTTP/1.1"));
+        if status >= 307 {
+            assert!(sent.contains("POST /next HTTP/1.1"));
+            assert_eq!(sent.matches("x=1").count(), 2);
+        } else {
+            assert!(sent.contains("GET /next HTTP/1.1"));
+            assert_eq!(sent.matches("x=1").count(), 1);
+            assert_eq!(sent.matches("Content-Type:").count(), 1);
+        }
+        assert_eq!((m.opened, m.closed), (2, 2));
+    }
+}
+
+#[test]
+fn post_cross_origin_replay_downgrade_and_oversize_are_rejected_and_closed() {
+    use rustos_http::{request_with_url, Request};
+    for target in [
+        "http://10.0.2.3/next",
+        "http://10.0.2.2:8080/next",
+        "https://10.0.2.2/next",
+    ] {
+        let mut m = Mock::default();
+        m.incoming.push_back(
+            format!("HTTP/1.1 307 Redirect\r\nLocation: {target}\r\nContent-Length: 0\r\n\r\n")
+                .into_bytes(),
+        );
+        assert_eq!(
+            request_with_url(
+                &mut m,
+                "http://10.0.2.2/login",
+                Request::FormPost(b"secret=x"),
+                Options::default(),
+                |_| Ok(()),
+                |_| {}
+            ),
+            Err(Error::CrossOriginRedirect)
+        );
+        assert_eq!((m.opened, m.closed), (1, 1));
+    }
+    let mut m = Mock {
+        tls: true,
+        ..Mock::default()
+    };
+    m.incoming
+        .push_back(b"HTTP/1.1 307 Redirect\r\nLocation: http://10.0.2.2/next\r\n\r\n".to_vec());
+    assert_eq!(
+        request_with_url(
+            &mut m,
+            "https://10.0.2.2/login",
+            Request::FormPost(b"secret=x"),
+            Options::default(),
+            |_| Ok(()),
+            |_| {}
+        ),
+        Err(Error::InsecureRedirect)
+    );
+    assert_eq!(m.closed, 1);
+    let mut m = Mock::default();
+    assert_eq!(
+        request_with_url(
+            &mut m,
+            "http://10.0.2.2/login",
+            Request::FormPost(&vec![b'x'; 16385]),
+            Options::default(),
+            |_| Ok(()),
+            |_| {}
+        ),
+        Err(Error::TooLarge)
+    );
+    assert_eq!(m.opened, 0);
+}
+
+#[test]
+fn post_empty_boundary_bodies_cancelled_upload_and_send_failure_release_sockets() {
+    use rustos_http::{request_with_url, Request};
+    for size in [0, 16384] {
+        let mut m = Mock {
+            short: 7,
+            ..Mock::default()
+        };
+        m.incoming.push_back(b"HTTP/1.1 204 Empty\r\n\r\n".to_vec());
+        let data = vec![b'x'; size];
+        request_with_url(
+            &mut m,
+            "http://10.0.2.2/",
+            Request::FormPost(&data),
+            Options::default(),
+            |_| Ok(()),
+            |_| {},
+        )
+        .unwrap();
+        let end = m.sent.windows(4).position(|p| p == b"\r\n\r\n").unwrap() + 4;
+        assert_eq!(&m.sent[end..], data);
+        assert_eq!(m.closed, 1);
+    }
+    for cancel in [true, false] {
+        let mut m = Mock {
+            short: 7,
+            cancel_after_send: if cancel { Some(512) } else { None },
+            fail_after_send: if cancel { None } else { Some(512) },
+            ..Mock::default()
+        };
+        let data = vec![b'x'; 16384];
+        let result = request_with_url(
+            &mut m,
+            "http://10.0.2.2/",
+            Request::FormPost(&data),
+            Options::default(),
+            |_| Ok(()),
+            |_| {},
+        );
+        assert_eq!(
+            result,
+            Err(if cancel {
+                Error::Cancelled
+            } else {
+                Error::Socket(SE::Closed)
+            })
+        );
+        let end = m.sent.windows(4).position(|p| p == b"\r\n\r\n").unwrap() + 4;
+        assert!(
+            !m.sent[end..].is_empty() && m.sent[end..].len() < data.len(),
+            "stop during upload, not before it"
+        );
+        assert_eq!((m.opened, m.closed), (1, 1));
+    }
 }
 #[test]
 fn chunked_extensions_trailers_and_fragmentation() {
@@ -620,4 +1000,41 @@ fn response_reports_declared_charset_for_browser_decoding() {
         assert_eq!(response.unwrap().charset, Some(expected));
         assert_eq!(mock.opened, mock.closed);
     }
+}
+
+#[test]
+fn cancellation_before_open_and_during_headers_closes_only_owned_sockets() {
+    let mut before = Mock {
+        cancel_at: Some(0),
+        ..Mock::default()
+    };
+    assert_eq!(
+        get(
+            &mut before,
+            "http://127.0.0.1/",
+            Options::default(),
+            |_| Ok(())
+        ),
+        Err(Error::Cancelled)
+    );
+    assert_eq!((before.opened, before.closed), (0, 0));
+    let mut blocked = Mock {
+        cancel_at: Some(2),
+        no_data: true,
+        ..Mock::default()
+    };
+    assert_eq!(
+        get(
+            &mut blocked,
+            "http://127.0.0.1/",
+            Options::default(),
+            |_| Ok(())
+        ),
+        Err(Error::Cancelled)
+    );
+    assert_eq!((blocked.opened, blocked.closed), (1, 1));
+    assert_eq!(
+        blocked.time, 2,
+        "cancellation observed before ordinary request deadline"
+    );
 }

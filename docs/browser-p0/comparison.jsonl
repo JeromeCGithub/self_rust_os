@@ -1,0 +1,5 @@
+{"fixture":"language","source_bytes":219,"prototype":"Unsupported","quickjs":"evaluated","engine_peak_bytes":168248,"engine_live_allocations":48,"interrupt_polls":1,"host_elapsed_us":200}
+{"fixture":"dom","source_bytes":52,"prototype":"Unsupported","quickjs":"Exception","engine_peak_bytes":158216,"engine_live_allocations":45,"interrupt_polls":1,"host_elapsed_us":65}
+{"fixture":"promises","source_bytes":21,"prototype":"Unsupported","quickjs":"pending_jobs_unserviced","engine_peak_bytes":154144,"engine_live_allocations":45,"interrupt_polls":1,"host_elapsed_us":54}
+{"fixture":"loop","source_bytes":11,"prototype":"Unsupported","quickjs":"Interrupted","engine_peak_bytes":154144,"engine_live_allocations":45,"interrupt_polls":100,"host_elapsed_us":1327}
+{"fixture":"quota","source_bytes":26,"prototype":"Syntax","quickjs":"Memory","engine_peak_bytes":158216,"engine_live_allocations":45,"interrupt_polls":1,"host_elapsed_us":49}

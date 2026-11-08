@@ -195,6 +195,19 @@ impl<'a> Canvas<'a> {
             .checked_add(start)?;
         Canvas::new(self.pixels.get_mut(start..end)?, width, height, self.stride)
     }
+    /// Noncryptographic RGB24 fingerprint of a contained region in row order.
+    /// Ignores alpha and scanline padding; useful for comparing opaque surfaces
+    /// with display readback. This does not acknowledge frame presentation.
+    pub fn region_digest(&mut self, bounds: Rect) -> Option<u64> {
+        let region = self.viewport(bounds)?;
+        let mut digest = 14695981039346656037u64;
+        for row in 0..region.height {
+            for &pixel in &region.pixels[row * region.stride..row * region.stride + region.width] {
+                digest = (digest ^ u64::from(pixel & 0x00ffffff)).wrapping_mul(1099511628211);
+            }
+        }
+        Some(digest)
+    }
     /// Content width in pixels.
     pub fn width(&self) -> u32 {
         self.width as u32
@@ -215,6 +228,70 @@ impl<'a> Canvas<'a> {
             let index = y as usize * self.stride + x as usize;
             self.pixels[index] = over(color.0, self.pixels[index]);
         }
+    }
+    /// Blend tightly packed glyph coverage through a clipped viewport. A malformed
+    /// complete mask is rejected atomically, before touching pixels or padding.
+    pub fn alpha_mask(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        mask: &[u8],
+        color: Color,
+    ) -> bool {
+        let Some(size) = (width as usize).checked_mul(height as usize) else {
+            return false;
+        };
+        if size != mask.len() {
+            return false;
+        }
+        let right = (i64::from(x) + i64::from(width)).min(self.width as i64);
+        let bottom = (i64::from(y) + i64::from(height)).min(self.height as i64);
+        for py in i64::from(y).max(0)..bottom {
+            for px in i64::from(x).max(0)..right {
+                let source_y = (py - i64::from(y)) as usize;
+                let source_x = (px - i64::from(x)) as usize;
+                self.pixel(
+                    px as i32,
+                    py as i32,
+                    Color(opacity(color.0, mask[source_y * width as usize + source_x])),
+                );
+            }
+        }
+        true
+    }
+    /// Paint a complete RGBA image with bounded nearest-neighbor scaling and clipping.
+    pub fn rgba_image(&mut self, rect: Rect, width: u32, height: u32, rgba: &[u8]) -> bool {
+        let Some(length) = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|n| n.checked_mul(4))
+        else {
+            return false;
+        };
+        if width == 0 || height == 0 || length != rgba.len() {
+            return false;
+        }
+        if rect.width == 0 || rect.height == 0 {
+            return true;
+        }
+        let right = (i64::from(rect.x) + i64::from(rect.width)).min(self.width as i64);
+        let bottom = (i64::from(rect.y) + i64::from(rect.height)).min(self.height as i64);
+        for py in i64::from(rect.y).max(0)..bottom {
+            for px in i64::from(rect.x).max(0)..right {
+                let sx = (((px - i64::from(rect.x)) as u128 * u128::from(width))
+                    / u128::from(rect.width)) as usize;
+                let sy = (((py - i64::from(rect.y)) as u128 * u128::from(height))
+                    / u128::from(rect.height)) as usize;
+                let at = (sy * width as usize + sx) * 4;
+                self.pixel(
+                    px as i32,
+                    py as i32,
+                    Color::rgba(rgba[at], rgba[at + 1], rgba[at + 2], rgba[at + 3]),
+                );
+            }
+        }
+        true
     }
     /// Blends a clipped rectangle over existing pixels.
     pub fn fill_rect(&mut self, rect: Rect, color: Color) {
@@ -336,6 +413,37 @@ mod tests {
 mod viewport_tests {
     use super::*;
     #[test]
+    fn readback_digest_matches_regions_ignores_alpha_padding_and_never_mutates_pixels() {
+        let mut pixels = [
+            0xff112233, 0xaa445566, 0xdeadbeef, 0xcafefeed, 0x00112233, 0xff445566,
+        ];
+        let original = pixels;
+        let mut canvas = Canvas::new(&mut pixels, 2, 2, 4).unwrap();
+        let digest = canvas.region_digest(Rect::new(0, 0, 2, 2)).unwrap();
+        assert_eq!(digest, 0xd04d521e87241a11);
+        let mut packed = [0x00112233, 0xff445566, 0xff112233, 0x00445566];
+        assert_eq!(
+            digest,
+            Canvas::new(&mut packed, 2, 2, 2)
+                .unwrap()
+                .region_digest(Rect::new(0, 0, 2, 2))
+                .unwrap()
+        );
+        let row = canvas.region_digest(Rect::new(0, 1, 2, 1));
+        assert_eq!(
+            row,
+            canvas
+                .viewport(Rect::new(0, 1, 2, 1))
+                .unwrap()
+                .region_digest(Rect::new(0, 0, 2, 1))
+        );
+        assert!(canvas.region_digest(Rect::new(-1, 0, 1, 1)).is_none());
+        assert!(canvas
+            .region_digest(Rect::new(0, 0, u32::MAX, u32::MAX))
+            .is_none());
+        assert_eq!(pixels, original);
+    }
+    #[test]
     fn viewport_clips_to_content_preserving_toolbar_pitch_and_guards() {
         let mut pixels = [0x12345678; 36];
         let mut canvas = Canvas::new(&mut pixels, 5, 5, 7).unwrap();
@@ -360,6 +468,56 @@ mod viewport_tests {
                     0x12345678
                 }
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod mask_tests {
+    use super::*;
+    #[test]
+    fn clipped_coverage_blends_and_preserves_padding_and_guards() {
+        let mut data = [0xdeadbeef; 12];
+        let mut canvas = Canvas::new(&mut data, 3, 2, 5).unwrap();
+        canvas.clear(Color::rgb(0));
+        assert!(canvas.alpha_mask(
+            -1,
+            0,
+            3,
+            2,
+            &[0, 128, 255, 255, 0, 128],
+            Color::rgb(0xff0000)
+        ));
+        assert!(!canvas.alpha_mask(0, 0, u32::MAX, 2, &[255], Color::rgb(0xffffff)));
+        assert_eq!(
+            data,
+            [
+                0xff800000, 0xffff0000, 0xff000000, 0xdeadbeef, 0xdeadbeef, 0xff000000, 0xff800000,
+                0xff000000, 0xdeadbeef, 0xdeadbeef, 0xdeadbeef, 0xdeadbeef
+            ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+    #[test]
+    fn scaled_transparent_images_clip_without_touching_pitch_or_guards() {
+        let mut data = [0xdeadbeef; 18];
+        let mut canvas = Canvas::new(&mut data, 3, 3, 5).unwrap();
+        canvas.clear(Color::rgb(0));
+        let rgba = [
+            255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 255, 255, 255, 0,
+        ];
+        assert!(canvas.rgba_image(Rect::new(-1, -1, 4, 4), 2, 2, &rgba));
+        assert!(!canvas.rgba_image(Rect::new(0, 0, 2, 2), u32::MAX, u32::MAX, &rgba));
+        assert_eq!(data[0], 0xffff0000);
+        assert_eq!(data[1], 0xff008000);
+        assert_eq!(data[5], 0xff0000ff);
+        assert_eq!(data[6], 0xff000000);
+        for i in [3, 4, 8, 9, 13, 14, 15, 16, 17] {
+            assert_eq!(data[i], 0xdeadbeef);
         }
     }
 }

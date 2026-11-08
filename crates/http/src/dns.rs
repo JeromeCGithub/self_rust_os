@@ -125,6 +125,9 @@ pub(crate) fn resolve(
     host: &str,
     options: Options,
 ) -> Result<[u8; 4], Error> {
+    if t.cancelled() {
+        return Err(Error::Cancelled);
+    }
     if let Ok(ip) = host.parse::<core::net::Ipv4Addr>() {
         return Ok(ip.octets());
     }
@@ -140,6 +143,9 @@ pub(crate) fn resolve(
         let mut sends = 0;
         let mut last = start;
         loop {
+            if t.cancelled() {
+                return Err(Error::Cancelled);
+            }
             if t.ticks().wrapping_sub(start) >= options.timeout_ticks.min(54) {
                 return Err(Error::Timeout);
             }

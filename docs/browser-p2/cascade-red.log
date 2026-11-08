@@ -1,0 +1,39 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running unittests src/lib.rs (rustos-p2-browser/x86_64-unknown-linux-gnu/debug/deps/rustos_browser-c043dba40a1262ab)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/browser.rs (rustos-p2-browser/x86_64-unknown-linux-gnu/debug/deps/browser-59b4254a0eb2ad31)
+
+running 10 tests
+test address_and_link_resolution_reject_privileged_schemes ... ok
+test flow_wraps_long_words_preserves_pre_and_bounds_geometry ... ok
+test decoded_images_have_aspect_geometry_link_hits_and_a_visible_page ... ok
+test css_cascade_inheritance_background_and_hidden_content ... ok
+test html_entities_raw_text_and_external_sheets ... ok
+test linked_and_inline_author_sheets_follow_document_order_and_importance ... FAILED
+test omitted_body_still_receives_document_css ... ok
+test proportional_metrics_drive_wrap_geometry_and_link_hits ... ok
+test optional_list_end_tags_do_not_accumulate_indentation ... ok
+test malformed_html_recovers_and_limits_are_explicit ... ok
+
+failures:
+
+---- linked_and_inline_author_sheets_follow_document_order_and_importance stdout ----
+
+thread 'linked_and_inline_author_sheets_follow_document_order_and_importance' panicked at tests/browser.rs:168:2:
+assertion `left == right` failed
+  left: 16711680
+ right: 255
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    linked_and_inline_author_sheets_follow_document_order_and_importance
+
+test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test browser`

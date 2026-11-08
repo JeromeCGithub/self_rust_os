@@ -1,0 +1,49 @@
+    Updating crates.io index
+     Locking 6 packages to latest compatible versions
+      Adding fontdue v0.9.3 (available: v0.9.5)
+ Downloading crates ...
+  Downloaded equivalent v1.0.3
+  Downloaded foldhash v0.1.5
+  Downloaded ttf-parser v0.21.1
+  Downloaded fontdue v0.9.3
+   Compiling allocator-api2 v0.2.21
+   Compiling equivalent v1.0.3
+   Compiling foldhash v0.1.5
+   Compiling ttf-parser v0.21.1
+   Compiling hashbrown v0.15.5
+   Compiling fontdue v0.9.3
+   Compiling rustos-text v0.1.0 (/home/jay/personal/os/jbrowse/crates/text)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.96s
+     Running unittests src/lib.rs (rustos-p2-text/x86_64-unknown-linux-gnu/debug/deps/rustos_text-a97be3ae1452d2c5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fonts.rs (rustos-p2-text/x86_64-unknown-linux-gnu/debug/deps/fonts-d44de309dd7be31f)
+
+running 2 tests
+test proportional_unicode_glyphs_have_real_coverage_and_matching_metrics ... FAILED
+test invalid_font_data_and_unbounded_sizes_are_rejected ... FAILED
+
+failures:
+
+---- proportional_unicode_glyphs_have_real_coverage_and_matching_metrics stdout ----
+
+thread 'proportional_unicode_glyphs_have_real_coverage_and_matching_metrics' panicked at tests/fonts.rs:4:267:
+native font family: Font
+
+---- invalid_font_data_and_unbounded_sizes_are_rejected stdout ----
+
+thread 'invalid_font_data_and_unbounded_sizes_are_rejected' panicked at tests/fonts.rs:4:267:
+native font family: Font
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    invalid_font_data_and_unbounded_sizes_are_rejected
+    proportional_unicode_glyphs_have_real_coverage_and_matching_metrics
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test fonts`

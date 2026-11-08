@@ -2,6 +2,7 @@
 //! Core services own processes, memory allocation, filesystems and protocols;
 //! drivers own device registers, transport state and device DMA buffers.
 pub mod block;
+pub mod audio;
 pub mod input;
 pub mod net;
 pub mod pci;

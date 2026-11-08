@@ -1,0 +1,6 @@
+qemu-system-x86_64: terminating on signal 15 from pid 542097 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/jbrowse.py", line 364, in <module>
+    assert counters['http_status']==200 and counters['script_errors']==0 and counters['style_errors']==0 and counters['truncated']==0 and counters['linked_headings']>=3 and counters['links']>=3, f'Google did not display a usable result list: {counters}'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Google did not display a usable result list: {'http_status': 429, 'items': 15, 'links': 1, 'controls': 0, 'images': 0, 'truncated': 0, 'script_errors': 1, 'style_errors': 0, 'linked_headings': 0, 'digest': 5969916094181008777}

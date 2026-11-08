@@ -1,0 +1,12 @@
+qemu-system-x86_64: terminating on signal 15 from pid 381458 (python3)
+Traceback (most recent call last):
+  File "/home/jay/personal/os/jbrowse/e2e/browser_perf.py", line 103, in <module>
+    if __name__=='__main__':main()
+                            ~~~~^^
+  File "/home/jay/personal/os/jbrowse/e2e/browser_perf.py", line 86, in main
+    wait('[jbrowse] loaded: Timing next',mark)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jay/personal/os/jbrowse/e2e/browser_perf.py", line 57, in wait
+    assert time.monotonic()<end,'missing '+text
+           ^^^^^^^^^^^^^^^^^^^^
+AssertionError: missing [jbrowse] loaded: Timing next

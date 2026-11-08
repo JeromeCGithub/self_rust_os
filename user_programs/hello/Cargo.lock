@@ -22,6 +22,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "549ce1740e46b291953c4340adcd74c59bcf4308f4cac050fd33ba91b7168f4a"
 
 [[package]]
+name = "rustos-audio-abi"
+version = "0.1.0"
+
+[[package]]
 name = "rustos-http"
 version = "0.1.0"
 dependencies = [
@@ -56,6 +60,7 @@ version = "0.1.0"
 dependencies = [
  "font8x8",
  "linked_list_allocator",
+ "rustos-audio-abi",
  "rustos-http",
  "rustos-net-abi",
  "rustos-platform-abi",

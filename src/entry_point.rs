@@ -72,6 +72,7 @@ fn run_kernel(
 
     // Optional NIC bring-up owns its fixed DMA frames before scheduler startup.
     self_rust_os::net::init(mapper, &mut frame_allocator, phys_mem_offset);
+    self_rust_os::audio::init(&mut frame_allocator, phys_mem_offset);
 
     // Mount the root filesystem (needs heap for FAT32).
     // If the disk is not formatted, this will panic; the disk fixture

@@ -1,16 +1,32 @@
-//! Streaming HTTP and HTTPS GET requests. URL parsing, DNS and HTTP run in Ring 3.
+//! Streaming HTTP and HTTPS requests. URL parsing, DNS and HTTP run in Ring 3.
 //! The callback receives decoded body bytes; sockets close on success or error.
 //! HTTPS uses the optional TLS feature, verified certificates and platform time/RNG.
 use crate::{net, sys};
-pub use rustos_http::{Charset, Error, Options, Response};
+pub use rustos_http::{
+    ByteRange, Charset, ContentRange, Error, Options, Request, RequestCookies, Response,
+};
 
 #[derive(Default)]
 struct Sockets {
     #[cfg(feature = "tls")]
     tls: Option<(u64, crate::tls::Connection)>,
     failure: Option<Error>,
+    #[cfg(feature = "alloc")]
+    cancel: Option<crate::io::Cancellation>,
 }
 impl rustos_http::Transport for Sockets {
+    fn cancelled(&self) -> bool {
+        #[cfg(feature = "alloc")]
+        {
+            self.cancel
+                .as_ref()
+                .is_some_and(|token| token.is_cancelled())
+        }
+        #[cfg(not(feature = "alloc"))]
+        {
+            false
+        }
+    }
     fn open(&mut self, kind: net::Kind) -> Result<u64, net::Error> {
         net::open(kind)
     }
@@ -73,8 +89,11 @@ impl rustos_http::Transport for Sockets {
         timeout: u64,
         ca: Option<&str>,
     ) -> Result<(), Error> {
-        let connection =
-            crate::tls::Connection::upgrade(h, host, timeout, ca).map_err(tls_error)?;
+        let connection = match self.cancel.clone() {
+            Some(token) => crate::tls::Connection::upgrade_cancellable(h, host, timeout, ca, token),
+            None => crate::tls::Connection::upgrade(h, host, timeout, ca),
+        }
+        .map_err(tls_error)?;
         self.tls = Some((h, connection));
         Ok(())
     }
@@ -100,12 +119,16 @@ pub fn get_with(
 /// Human-readable curl/SDK error without exposing protocol internals to callers.
 pub fn error_message(error: Error) -> &'static str {
     match error {
+        Error::Cancelled => "request cancelled",
         Error::UnsupportedScheme => "unsupported URL scheme",
         Error::Tls => "TLS protocol error",
         Error::Certificate => "TLS certificate rejected",
         Error::Entropy => "secure randomness unavailable",
         Error::Clock => "UTC clock unavailable",
         Error::InsecureRedirect => "HTTPS downgrade refused",
+        Error::CrossOriginRedirect => "POST redirect to another origin refused",
+        Error::RangeIgnored => "server ignored the media byte range",
+        Error::RangeUnsatisfiable => "media byte range unavailable",
         Error::InvalidUrl => "invalid HTTP or HTTPS URL",
         Error::Dns => "DNS lookup failed",
         Error::Timeout => "request timed out",
@@ -122,6 +145,7 @@ pub fn error_message(error: Error) -> &'static str {
 #[cfg(feature = "tls")]
 fn tls_error(error: crate::tls::Error) -> Error {
     match error {
+        crate::tls::Error::Cancelled => Error::Cancelled,
         crate::tls::Error::Certificate => Error::Certificate,
         crate::tls::Error::Entropy => Error::Entropy,
         crate::tls::Error::Clock => Error::Clock,
@@ -141,4 +165,80 @@ pub fn get_with_url(
     effective: impl FnMut(&str),
 ) -> Result<Response, Error> {
     rustos_http::get_with_url(&mut Sockets::default(), url, options, body, effective)
+}
+
+/// GET with owned cancellation through DNS, TCP, TLS handshake and HTTP framing.
+/// Cancellation closes the owned socket and never relaxes certificate validation.
+#[cfg(feature = "alloc")]
+pub fn get_cancellable(
+    url: &str,
+    options: Options,
+    body: impl FnMut(&[u8]) -> Result<(), Error>,
+    effective: impl FnMut(&str),
+    cancel: crate::io::Cancellation,
+) -> Result<Response, Error> {
+    request_cancellable(url, Request::Get, options, body, effective, cancel)
+}
+
+/// GET or bounded form POST with the same certificate, cancellation and cleanup
+/// policy as GET. Body data remains borrowed only for this synchronous call.
+#[cfg(feature = "alloc")]
+pub fn request_cancellable(
+    url: &str,
+    request: Request<'_>,
+    options: Options,
+    body: impl FnMut(&[u8]) -> Result<(), Error>,
+    effective: impl FnMut(&str),
+    cancel: crate::io::Cancellation,
+) -> Result<Response, Error> {
+    let mut sockets = Sockets {
+        cancel: Some(cancel),
+        ..Sockets::default()
+    };
+    rustos_http::request_with_url(&mut sockets, url, request, options, body, effective)
+}
+
+/// Request with an application-owned cookie source. The HTTP client consults it
+/// separately for every redirect URL; it validates and copies header bytes.
+#[cfg(feature = "alloc")]
+pub fn request_cancellable_with_cookies(
+    url: &str,
+    request: Request<'_>,
+    options: Options,
+    body: impl FnMut(&[u8]) -> Result<(), Error>,
+    effective: impl FnMut(&str),
+    cancel: crate::io::Cancellation,
+    cookies: &mut impl RequestCookies,
+) -> Result<Response, Error> {
+    let mut sockets = Sockets {
+        cancel: Some(cancel),
+        ..Sockets::default()
+    };
+    rustos_http::request_with_cookies(
+        &mut sockets,
+        url,
+        request,
+        options,
+        body,
+        effective,
+        cookies,
+    )
+}
+
+/// Borrowed GET/form POST for clients that do not need an allocated cancel token.
+pub fn request_with_url(
+    url: &str,
+    request: Request<'_>,
+    options: Options,
+    body: impl FnMut(&[u8]) -> Result<(), Error>,
+    effective: impl FnMut(&str),
+) -> Result<Response, Error> {
+    rustos_http::request_with_url(
+        &mut Sockets::default(),
+        url,
+        request,
+        options,
+        body,
+        effective,
+    )
 }

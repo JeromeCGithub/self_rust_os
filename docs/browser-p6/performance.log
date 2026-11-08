@@ -1,0 +1,45 @@
+{"trial": 0, "window": 0.9330658479884733, "first_page": 1.3939005729916971, "navigation": 0.7919682549982099}
+{"trial": 1, "window": 0.9934036139893578, "first_page": 1.4542978589888662, "navigation": 0.7402130230038892}
+{"trial": 2, "window": 0.9351856739958748, "first_page": 1.3954624489997514, "navigation": 0.7413613910030108}
+{
+  "passed": true,
+  "trials": 3,
+  "phases": {
+    "window": {
+      "median_seconds": 0.9351856739958748,
+      "maximum_seconds": 0.9934036139893578,
+      "budget_seconds": 1.0
+    },
+    "first_page": {
+      "median_seconds": 1.3954624489997514,
+      "maximum_seconds": 1.4542978589888662,
+      "budget_seconds": 2.0
+    },
+    "navigation": {
+      "median_seconds": 0.7413613910030108,
+      "maximum_seconds": 0.7919682549982099,
+      "budget_seconds": 1.0
+    }
+  },
+  "samples": [
+    {
+      "window": 0.9330658479884733,
+      "first_page": 1.3939005729916971,
+      "navigation": 0.7919682549982099
+    },
+    {
+      "window": 0.9934036139893578,
+      "first_page": 1.4542978589888662,
+      "navigation": 0.7402130230038892
+    },
+    {
+      "window": 0.9351856739958748,
+      "first_page": 1.3954624489997514,
+      "navigation": 0.7413613910030108
+    }
+  ],
+  "cpus": 8,
+  "clock": "host monotonic",
+  "profile": "1GiB, TCG, 1920x1080, independent local HTTP/CSS"
+}
+qemu-system-x86_64: terminating on signal 15 from pid 442599 (python3)

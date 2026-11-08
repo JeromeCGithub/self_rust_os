@@ -38,6 +38,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "allocator-api2"
+version = "0.2.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -271,6 +277,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "equivalent"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
+
+[[package]]
 name = "ff"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -293,10 +305,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
+name = "foldhash"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
+
+[[package]]
 name = "font8x8"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "875488b8711a968268c7cf5d139578713097ca4635a76044e8fe8eedf831d07e"
+
+[[package]]
+name = "fontdue"
+version = "0.9.3"
+dependencies = [
+ "hashbrown",
+ "ttf-parser",
+]
 
 [[package]]
 name = "generic-array"
@@ -342,6 +368,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hashbrown"
+version = "0.15.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash",
+]
+
+[[package]]
 name = "hkdf"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -373,6 +410,7 @@ name = "jbrowse"
 version = "0.1.0"
 dependencies = [
  "rustos-browser",
+ "rustos-browser-worker",
  "userlib",
 ]
 
@@ -748,10 +786,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustos-audio-abi"
+version = "0.1.0"
+
+[[package]]
 name = "rustos-browser"
 version = "0.1.0"
 dependencies = [
- "rustos-script",
+ "rustos-text",
+ "rustos-web-image",
+]
+
+[[package]]
+name = "rustos-browser-worker"
+version = "0.1.0"
+dependencies = [
+ "userlib",
 ]
 
 [[package]]
@@ -774,8 +824,11 @@ name = "rustos-process-abi"
 version = "0.1.0"
 
 [[package]]
-name = "rustos-script"
+name = "rustos-text"
 version = "0.1.0"
+dependencies = [
+ "fontdue",
+]
 
 [[package]]
 name = "rustos-thread-abi"
@@ -790,6 +843,14 @@ dependencies = [
  "rustls-rustcrypto",
  "sha2",
  "webpki-roots",
+]
+
+[[package]]
+name = "rustos-web-image"
+version = "0.1.0"
+dependencies = [
+ "zune-core",
+ "zune-png",
 ]
 
 [[package]]
@@ -869,6 +930,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "simd-adler32"
+version = "0.3.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+
+[[package]]
 name = "smallvec"
 version = "1.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -919,6 +986,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ttf-parser"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c591d83f69777866b9126b24c6dd9a18351f177e49d625920d19f989fd31cf8"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -953,10 +1026,12 @@ dependencies = [
  "font8x8",
  "getrandom",
  "linked_list_allocator",
+ "rustos-audio-abi",
  "rustos-http",
  "rustos-net-abi",
  "rustos-platform-abi",
  "rustos-process-abi",
+ "rustos-text",
  "rustos-thread-abi",
  "rustos-tls",
  "spin",
@@ -1105,4 +1180,29 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "zune-core"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f423a2c17029964870cfaabb1f13dfab7d092a62a29a89264f4d36990ca414a"
+
+[[package]]
+name = "zune-inflate"
+version = "0.2.54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73ab332fe2f6680068f3582b16a24f90ad7096d5d39b974d1c0aff0125116f02"
+dependencies = [
+ "simd-adler32",
+]
+
+[[package]]
+name = "zune-png"
+version = "0.4.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d29c085769c6f29effea890f093120ac019375fdc789d2a496ba8ba96c77509"
+dependencies = [
+ "zune-core",
+ "zune-inflate",
 ]

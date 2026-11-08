@@ -1,0 +1,34 @@
+   Compiling rustos-quickjs v0.1.0 (/home/jay/personal/os/jbrowse/crates/quickjs)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running unittests src/lib.rs (/home/jay/personal/os/jbrowse/crates/quickjs/target/x86_64-unknown-linux-gnu/debug/deps/rustos_quickjs-46ea807b7d2949db)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_lifecycle.rs (/home/jay/personal/os/jbrowse/crates/quickjs/target/x86_64-unknown-linux-gnu/debug/deps/native_lifecycle-9855dbd412c7cc20)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/runtime.rs (/home/jay/personal/os/jbrowse/crates/quickjs/target/x86_64-unknown-linux-gnu/debug/deps/runtime-6f0a940a58dc638a)
+
+running 1 test
+test native_host_calls_copy_values_and_keep_state_owned_until_engine_drops ... FAILED
+
+failures:
+
+---- native_host_calls_copy_values_and_keep_state_owned_until_engine_drops stdout ----
+
+thread 'native_host_calls_copy_values_and_keep_state_owned_until_engine_drops' panicked at tests/runtime.rs:123:93:
+called `Result::unwrap()` on an `Err` value: Unavailable
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    native_host_calls_copy_values_and_keep_state_owned_until_engine_drops
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test runtime`

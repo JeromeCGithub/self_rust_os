@@ -1,0 +1,22 @@
+   Compiling rustos-browser v0.1.0 (/home/jay/personal/os/jbrowse/crates/browser)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running tests/page_context.rs (/home/jay/personal/os/jbrowse/crates/browser/target/x86_64-unknown-linux-gnu/debug/deps/page_context-e43aa23628c98d80)
+
+running 1 test
+test controller_rechecks_untrusted_effects_atomically_and_never_downgrades_tls ... FAILED
+
+failures:
+
+---- controller_rechecks_untrusted_effects_atomically_and_never_downgrades_tls stdout ----
+
+thread 'controller_rechecks_untrusted_effects_atomically_and_never_downgrades_tls' panicked at tests/page_context.rs:27:76:
+called `Result::unwrap()` on an `Err` value: Limit
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    controller_rechecks_untrusted_effects_atomically_and_never_downgrades_tls
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test page_context`

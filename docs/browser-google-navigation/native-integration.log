@@ -1,0 +1,9 @@
+qemu-system-x86_64: terminating on signal 15 from pid 542217 (python3)
+PASS: native restricted QuickJS, classes/functions/promises, DOM pixels and bounded microtask recovery
+PASS: password pixels/editing, exact POST body, 303-to-GET redirect and reload without POST replay
+PASS: native attributes, CSS class/style invalidation, base64 and real scripted link navigation
+PASS: maximize/restore, DE panel reservations, pointer coordinates beyond 1023 and edge resize with client redraw
+PASS: native PNG pixels, alpha/scaling, image link hits and failure fallback
+PASS: native proportional antialiased fonts, CSS families and Unicode fixture
+PASS: stalled HTTP/TLS cancellation, fresh destinations and framebuffer commits
+PASS: HTML/CSS pixels, links, editable GET forms, Enter/button search submission, scrolling, failure recovery, terminal survival and relaunch

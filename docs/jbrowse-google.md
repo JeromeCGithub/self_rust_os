@@ -5,16 +5,18 @@ a URL. An explicit first argument still overrides the start page. The real Googl
 homepage was fetched over the guest's verified HTTPS stack and its search field
 was edited and submitted in QEMU.
 
-**Usable Google results remain incomplete.** The tested search response is a
-JavaScript-gated page. The current bounded interpreter cannot execute it; jbrowse
-shows an explicit unsupported-JavaScript page instead of a blank document.
-This is not a successful Google search-results acceptance pass. No results are
-fabricated, no alternative search provider is substituted, and no host browser
-or proxy renders content for the guest.
+**Usable Google results remain incomplete.** The [navigation/cookie follow-up](browser-google-navigation.md)
+fixes a generated-script stack overflow and adds page URL, clock, host-only cookie
+and script navigation support. The actual native search now runs Google's
+verification redirect, then receives HTTP429 with an unusual-traffic page. A full
+Chromium reference also reaches `/sorry/`. This is a failed results gate. There
+are still missing browser APIs, including the CAPTCHA page's scripts/events.
+No results are fabricated, no alternative provider is substituted, and no host
+browser renders content for the guest.
 
 The [homepage screenshot](screenshots/jbrowse-google.png) shows Google's actual
 HTML with native form controls. The [search response screenshot](screenshots/jbrowse-google-response.png)
-shows the remaining limitation. The [local GET-search screenshot](screenshots/jbrowse-form-search.png)
+records the earlier unsupported-JavaScript limitation. The [local GET-search screenshot](screenshots/jbrowse-form-search.png)
 is an independent fixture, clearly separate from Google results.
 
 ## Generic implementation
@@ -27,7 +29,7 @@ is an independent fixture, clearly separate from Google results.
   fragment, replaces the action query, URL-encodes names/values, and excludes
   disabled/unnamed controls. Duplicate names retain their order. Readonly text is
   serialized but cannot be edited.
-- POST and other unsupported methods return an explicit error. Actions accept
+- GET and bounded URL-encoded POST are supported (see [P5 forms](browser-sessions-p5.md)); other methods return an explicit error. Actions accept
   only HTTP(S). Forms are capped at 16 per document and 64 fields per form;
   names, values, labels and actions have 2048-byte limits, as does the final URL.
 - HTTP response metadata now includes a typed declared charset. The browser
@@ -44,26 +46,29 @@ These mechanisms are in the browser engine, application and Ring 3 HTTP SDK.
 There is no Google-specific syscall, privileged renderer, or host-side fetch path
 in the application. No kernel source or syscall ABI changed.
 
-This remains a limited native browser. Form rendering is simple block/inline
-flow, not Google's exact layout. Image logos use alt text. File/password/radio/
-checkbox controls, selects, arbitrary event handlers, full form ownership rules,
-legacy form encodings and POST are not implemented. Native typing currently
-follows the SDK's ASCII keyboard transport; UTF-8 form values still encode safely.
+This remains a limited native browser. CSS layout differs from Firefox; see the
+[measured comparisons](browser-css-comparison.md). Static PNG and proportional
+fonts are supported; password fields and POST are supported by P5. Radio/checkbox
+controls, selects, arbitrary event handlers, full form ownership rules and legacy
+form encodings remain incomplete. Native typing follows the SDK's ASCII keyboard
+transport; UTF-8 form values still encode safely.
 
 ## Reproduction and acceptance status
 
 ```bash
 ./tools/build-grub-disk.sh target/jbrowse-google.img
 RUSTOS_TEST_DISK=target/jbrowse-google.img RUSTOS_JBROWSE_GOOGLE=1 RUSTOS_JBROWSE_SCRIPTS=1 python3 -B e2e/jbrowse.py
-# Strict goal check: remains failing on the public JavaScript-gated response.
+# Strict goal check: remains failing on the public unusual-traffic response.
 RUSTOS_TEST_DISK=target/jbrowse-google.img RUSTOS_JBROWSE_GOOGLE=1 RUSTOS_JBROWSE_REQUIRE_GOOGLE_RESULTS=1 python3 -B e2e/jbrowse.py
 ```
 
 The ordinary fixture path supplies an explicit local initial URL, so it does not
 depend on Google's availability. Google mode launches without an argument,
 waits for the real rendered form, types `rust operating system`, submits it and
-captures the response. The strict mode additionally rejects the unsupported-script
-fallback and must not be presented as green until usable results actually work.
+captures the response. The strict mode rejects the unsupported-script fallback, non-200 responses,
+script/style errors, truncated layout and fewer than three rendered linked
+headings/destinations. This is still a minimum results detector, not the complete
+three-query/follow/Back/refinement acceptance gate.
 
 The local fixture asserts the actual received query for Enter and button
 submission, rendered response pixels, and recovery. Navigation waits use a fresh
@@ -73,8 +78,9 @@ Public testing is separate from this deterministic coverage.
 Red evidence: four form/encoding cases initially failed, the charset observer
 reported None instead of Windows1252, Google did not load automatically, and
 `#fff` produced `0x0fffff` instead of white. These now pass. The strict real Google
-results check remains a disclosed failure, with the exact message
-`Google results remain blocked by unsupported JavaScript`.
+results check remains a disclosed failure. The current rejection is
+`Google did not display a usable result list`, with HTTP429 and zero linked
+headings; earlier evidence retains the unsupported-JavaScript failure.
 
 Host tests run with the pinned nightly outside the root bare-metal Cargo config:
 
@@ -84,7 +90,6 @@ cargo +nightly-2025-01-30 test --manifest-path /path/to/jbrowse/crates/browser/C
 cargo +nightly-2025-01-30 test --manifest-path /path/to/jbrowse/crates/http/Cargo.toml --target x86_64-unknown-linux-gnu
 ```
 
-See [the JavaScript prototype and engine research](jbrowse-javascript.md) for the
-missing fuller engine port and DOM support. Resolving that runtime gap and
-retesting the real results page are required before claiming the Google search
-goal is complete. Manual host GUI checks also remain outstanding.
+See the [current navigation/cookie evidence](browser-google-navigation.md) and
+[complete roadmap](browser-support-plan.md) for the remaining work. Manual host
+GUI checks remain outstanding.

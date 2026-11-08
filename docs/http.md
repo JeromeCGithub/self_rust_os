@@ -25,9 +25,9 @@ request returns. Input is bounded to 512 bytes.
 The separate [CURL application](../user_programs/curl/src/main.rs), installed as
 `/BIN/CURL.BIN`, uses the same SDK. Launch CURL from the desktop and enter a URL
 at `curl>`. An empty line exits. It writes decoded bytes to the application
-console. It prompts because the current spawn ABI has no argv support.
+console. It currently uses an interactive prompt; the OS also supports program arguments.
 
-The WM discovers up to 16 installed launchers, independently of its existing
+The DE discovers up to 16 installed launchers, independently of the compositor's
 six-window backing limit. CURL is installed alphabetically before Forge.
 
 ## Library
@@ -56,6 +56,17 @@ failures are typed errors. Already streamed bytes are not rolled back on failure
 The callback may stop a transfer by returning an error. It should not start a
 nested request on the same small userspace stack.
 
+`request_with_url(url, Request::Get | Request::FormPost(body), Options, callback,
+effective_url)` supports a borrowed URL-encoded form body of at most16KiB. The
+content type and Content-Length are generated internally. `request_cancellable`
+adds an owned cancellation token when `alloc` is enabled; existing GET APIs retain
+their signatures. See [P5 form/POST policy and evidence](browser-sessions-p5.md).
+
+`Request::GetRange(ByteRange {first, last})` adds a bounded single inclusive byte
+range. A seek succeeds only for matching206 Content-Range metadata and exactly
+the expected decoded bytes.200/416 are typed range failures, not seek data.
+See [range subset, limits and native evidence](browser-youtube-p7.md).
+
 The standalone protocol crate accepts a `Transport` implementation. Host tests
 supply sockets with short writes, fragmented receives and controlled time; guest
 applications use the SDK adapter. Large parser phases explicitly remain separate
@@ -73,7 +84,7 @@ Plain HTTP needs no allocator; TLS-enabled programs reserve a private 16 MiB hea
   or the configured shorter deadline. Replies marked truncated or with DNS errors
   fail explicitly; DNS-over-TCP, IPv6/AAAA, caching and CNAME-only follow-up queries
   are not implemented. IDs derive from ticks and socket handles, not secure entropy.
-- HTTP/1.1 GET with `Host`, `Connection: close`, and `Accept-Encoding: identity`.
+- HTTP/1.1 GET or URL-encoded form POST with `Host`, `Connection: close`, and `Accept-Encoding: identity`.
   The client handles partial writes and HTTP/1.0 or HTTP/1.1 responses, bounded
   informational responses, Content-Length, chunked bodies/extensions/trailers,
   close-delimited bodies and no-body statuses 204/304. Chunk framing is removed
@@ -83,6 +94,8 @@ Plain HTTP needs no allocator; TLS-enabled programs reserve a private 16 MiB hea
   Redirects may change host and port. Redirect bodies are discarded. HTTP to HTTPS
   is allowed; HTTPS to HTTP fails with `InsecureRedirect` before opening the target.
   Redirects can reach other addresses accessible to the application.
+  POST becomes GET for301/302/303. For307/308 a POST body is replayed only to the
+  same scheme/hostname/effective port; other origins return `CrossOriginRedirect`.
 - Default connection deadline is 180 PIT ticks (about 9.9 seconds), including
   connect, TLS handshake, writes and response reading. Every redirect gets a new deadline. A
   callback's execution time belongs to the application. Maximum decoded body is
@@ -94,13 +107,13 @@ Plain HTTP needs no allocator; TLS-enabled programs reserve a private 16 MiB hea
   record buffers and a private allocator; see [TLS architecture](tls.md).
 - Duplicate Content-Length, TE plus Content-Length, unsupported transfer/content
   encodings, upgrades and obsolete folded headers are rejected. No decompression,
-  authentication, cookies, POST/upload, proxy, HTTP/2 or HTTP/3.
+  authentication, cookies, multipart/file upload, proxy, HTTP/2 or HTTP/3.
 - Verified TLS 1.3 for HTTPS: hostname, certificate chain, validity dates, signatures
   and server usage checks; SNI and HTTP/1.1 ALPN. No insecure mode or plaintext fallback.
 
 HTTP framing references [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112.html);
 DNS wire format references [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035).
-This is a bounded GET client, not full curl compatibility. Public success depends
+This is a bounded GET/form-POST client, not full curl compatibility. Public success depends
 on the host's connectivity, DNS and the target supporting IPv4 and our TLS profile.
 
 ## Memory and size policy

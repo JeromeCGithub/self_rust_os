@@ -1,0 +1,45 @@
+    Blocking waiting for file lock on package cache
+   Compiling rustos-http v0.1.0 (/home/jay/personal/os/jbrowse/crates/http)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (rustos-p1-http/x86_64-unknown-linux-gnu/debug/deps/rustos_http-d9a863a6a61eed8a)
+
+running 2 tests
+test dns::tests::name_pointer_cycle_is_bounded ... ok
+test dns::tests::query_and_compressed_a_response ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/client.rs (rustos-p1-http/x86_64-unknown-linux-gnu/debug/deps/client-ef7c307443d7165f)
+
+running 23 tests
+test cancellation_before_open_and_during_headers_closes_only_owned_sockets ... ok
+test chunked_extensions_trailers_and_fragmentation ... ok
+test dns_query_matching_cname_and_udp_cleanup ... ok
+test content_length_and_fragmented_headers_short_writes ... ok
+test accepts_long_chunk_extensions_and_trailers ... ok
+test dns_timeout_retries_and_closes ... ok
+test eof_framing_status_and_informational_response ... ok
+test https_uses_tls_and_default_port_before_sending_http ... ok
+test invalid_urls_never_open_sockets ... ok
+test final_url_after_redirect_is_observed_once_for_relative_resources ... ok
+test incomplete_and_ambiguous_messages_fail_and_close ... ok
+test unavailable_tls_never_sends_plaintext ... ok
+test timeout_output_failure_and_body_limit_release_socket ... ok
+test follows_long_redirects_with_partial_request_writes ... ok
+test large_body_streams_without_collecting_and_can_cancel ... ok
+test no_body_204_and_304 ... ok
+test relative_redirect_and_loop_are_bounded ... ok
+test response_reports_declared_charset_for_browser_decoding ... ok
+test rejects_https_downgrade_and_preserves_relative_scheme ... ok
+test malformed_status_chunk_and_header_limits ... ok
+test accepts_modern_security_headers_and_larger_header_blocks ... ok
+test larger_header_line_and_total_limits_still_close_the_socket ... ok
+test streams_up_to_the_expanded_default_body_limit ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s
+
+   Doc-tests rustos_http
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

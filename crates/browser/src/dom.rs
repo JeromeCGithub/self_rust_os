@@ -1,0 +1,338 @@
+//! Pointer-free document effects exchanged with the restricted script worker.
+use crate::*;
+use alloc::string::ToString;
+pub const MAX_CHANGES: usize = 256;
+pub const MAX_CHANGE_BYTES: usize = 8192;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Change {
+    Title(String),
+    Text {
+        node: u32,
+        value: String,
+    },
+    Style {
+        node: u32,
+        property: String,
+        value: String,
+    },
+    /// HTML attribute mutation; None removes the attribute. Names are lowercase.
+    Attribute {
+        node: u32,
+        name: String,
+        value: Option<String>,
+    },
+}
+#[derive(Default, Debug, PartialEq, Eq)]
+pub struct Changes {
+    pub failures: u32,
+    pub changes: Vec<Change>,
+}
+impl Changes {
+    /// Serialize bounded UTF-8 effects. No native pointer/handle enters the wire.
+    pub fn encode(&self) -> Result<Vec<u8>, Error> {
+        if self.changes.len() > MAX_CHANGES {
+            return Err(Error::Limit);
+        }
+        let mut bytes = Vec::from(&b"JDM1"[..]);
+        bytes.extend_from_slice(&self.failures.to_le_bytes());
+        bytes.extend_from_slice(&(self.changes.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&[0; 2]);
+        for change in &self.changes {
+            let (kind, node, property, value): (u8, u32, &str, &str) = match change {
+                Change::Title(value) => (0, 0, "", value),
+                Change::Text { node, value } => (1, *node, "", value),
+                Change::Style {
+                    node,
+                    property,
+                    value,
+                } => (2, *node, property.as_str(), value),
+                Change::Attribute { node, name, value } => (
+                    if value.is_some() { 3 } else { 4 },
+                    *node,
+                    name.as_str(),
+                    value.as_deref().unwrap_or(""),
+                ),
+            };
+            if property.len() > 128 || value.len() > MAX_CHANGE_BYTES {
+                return Err(Error::Limit);
+            }
+            let length = 9 + property.len() + value.len();
+            if length > MAX_CHANGE_BYTES.saturating_sub(bytes.len()) {
+                return Err(Error::Limit);
+            }
+            bytes.push(kind);
+            bytes.extend_from_slice(&node.to_le_bytes());
+            bytes.extend_from_slice(&(property.len() as u16).to_le_bytes());
+            bytes.extend_from_slice(&(value.len() as u16).to_le_bytes());
+            bytes.extend_from_slice(property.as_bytes());
+            bytes.extend_from_slice(value.as_bytes());
+        }
+        Ok(bytes)
+    }
+    /// Reject truncation, reserved fields, unknown kinds, invalid UTF-8 and tails.
+    pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        if bytes.len() < 12
+            || bytes.len() > MAX_CHANGE_BYTES
+            || &bytes[..4] != b"JDM1"
+            || bytes[10..12] != [0; 2]
+        {
+            return Err(Error::Limit);
+        }
+        let failures = u32::from_le_bytes(bytes[4..8].try_into().map_err(|_| Error::Limit)?);
+        let count = u16::from_le_bytes(bytes[8..10].try_into().map_err(|_| Error::Limit)?) as usize;
+        if count > MAX_CHANGES {
+            return Err(Error::Limit);
+        }
+        let mut changes = Vec::new();
+        let mut at = 12;
+        for _ in 0..count {
+            let header = bytes.get(at..at + 9).ok_or(Error::Limit)?;
+            let node = u32::from_le_bytes(header[1..5].try_into().map_err(|_| Error::Limit)?);
+            let property = u16::from_le_bytes([header[5], header[6]]) as usize;
+            let length = u16::from_le_bytes([header[7], header[8]]) as usize;
+            at += 9;
+            if property > 128 {
+                return Err(Error::Limit);
+            }
+            let key = core::str::from_utf8(bytes.get(at..at + property).ok_or(Error::Limit)?)
+                .map_err(|_| Error::Limit)?;
+            at += property;
+            let value = core::str::from_utf8(bytes.get(at..at + length).ok_or(Error::Limit)?)
+                .map_err(|_| Error::Limit)?
+                .to_string();
+            at += length;
+            changes.push(match header[0] {
+                0 if node == 0 && property == 0 => Change::Title(value),
+                1 if property == 0 => Change::Text { node, value },
+                2 if property > 0 => Change::Style {
+                    node,
+                    property: key.to_string(),
+                    value,
+                },
+                3 if property > 0 => Change::Attribute {
+                    node,
+                    name: key.to_string(),
+                    value: Some(value),
+                },
+                4 if property > 0 && value.is_empty() => Change::Attribute {
+                    node,
+                    name: key.to_string(),
+                    value: None,
+                },
+                _ => return Err(Error::Limit),
+            });
+        }
+        if at != bytes.len() {
+            return Err(Error::Limit);
+        }
+        Ok(Self { failures, changes })
+    }
+}
+impl Document {
+    /// Count nonempty headings whose destination has a rendered text link.
+    /// This content-free diagnostic distinguishes a result list from an empty
+    /// script/verification response; it is not a site-compatibility claim.
+    pub fn linked_heading_count(&self, page: &Page) -> usize {
+        let rendered: alloc::collections::BTreeSet<_> = page
+            .items
+            .iter()
+            .filter(|item| !item.text.trim().is_empty())
+            .filter_map(|item| item.link.as_deref())
+            .collect();
+        let visible = |id: usize| {
+            self.nodes.get(id).is_some_and(|node| {
+                node.tag == "a"
+                    && node
+                        .attr("href")
+                        .is_some_and(|href| rendered.contains(href))
+            })
+        };
+        self.connected_nodes()
+            .into_iter()
+            .filter(|&id| {
+                let node = &self.nodes[id];
+                if !["h1", "h2", "h3", "h4", "h5", "h6"].contains(&node.tag.as_str())
+                    || self
+                        .text_content(id)
+                        .map_or(true, |text| text.trim().is_empty())
+                {
+                    return false;
+                }
+                let mut parent = Some(id);
+                for _ in 0..=MAX_DEPTH {
+                    let Some(id) = parent else {
+                        break;
+                    };
+                    if visible(id) {
+                        return true;
+                    }
+                    parent = self.nodes.get(id).and_then(|node| node.parent);
+                }
+                let mut todo = node.children.clone();
+                for _ in 0..MAX_NODES {
+                    let Some(id) = todo.pop() else {
+                        break;
+                    };
+                    if visible(id) {
+                        return true;
+                    }
+                    if let Some(node) = self.nodes.get(id) {
+                        todo.extend_from_slice(&node.children);
+                    }
+                }
+                false
+            })
+            .count()
+    }
+    /// Validate all effects on a bounded copy before publishing any page mutation.
+    pub fn apply_changes(&mut self, changes: &Changes) -> Result<(), Error> {
+        changes.encode()?;
+        let mut next = self.clone();
+        for change in &changes.changes {
+            next.apply_change(change)?;
+        }
+        *self = next;
+        Ok(())
+    }
+    /// Apply one already-owned bounded effect, with atomic validation on failure.
+    pub fn apply_change(&mut self, change: &Change) -> Result<(), Error> {
+        match change {
+            Change::Title(value) => {
+                if value.len() > MAX_CHANGE_BYTES {
+                    return Err(Error::Limit);
+                }
+                self.title = value.clone();
+            }
+            Change::Text { node, value } => {
+                if value.len() > MAX_CHANGE_BYTES {
+                    return Err(Error::Limit);
+                }
+                let node = self.nodes.get_mut(*node as usize).ok_or(Error::Limit)?;
+                node.text = value.clone();
+                // Detached arena entries keep their IDs/lifetimes but are no
+                // longer reachable through this node or rendered as new roots.
+                node.children.clear();
+            }
+            Change::Style {
+                node,
+                property,
+                value,
+            } => {
+                if ![
+                    "color",
+                    "background-color",
+                    "display",
+                    "font-size",
+                    "font-family",
+                    "font-weight",
+                    "width",
+                    "height",
+                ]
+                .contains(&property.as_str())
+                    || value.len() > 128
+                    || value.contains([';', '{', '}'])
+                {
+                    return Err(Error::Limit);
+                }
+                let node = self.nodes.get_mut(*node as usize).ok_or(Error::Limit)?;
+                let index = node.attributes.iter().position(|(key, _)| key == "style");
+                if index.is_none() && node.attributes.len() >= 64 {
+                    return Err(Error::Limit);
+                }
+                let mut declarations = index
+                    .map(|i| css::declarations(&node.attributes[i].1))
+                    .unwrap_or_default();
+                declarations.retain(|(key, _)| key != property);
+                declarations.push((property.clone(), value.clone()));
+                let mut style = String::new();
+                for (key, value) in declarations {
+                    style.push_str(&key);
+                    style.push(':');
+                    style.push_str(&value);
+                    style.push(';');
+                }
+                if style.len() > MAX_CHANGE_BYTES {
+                    return Err(Error::Limit);
+                }
+                if let Some(i) = index {
+                    node.attributes[i].1 = style;
+                } else {
+                    node.attributes.push(("style".to_string(), style));
+                }
+            }
+            Change::Attribute { node, name, value } => {
+                if name.is_empty()
+                    || name.len() > 128
+                    || !name.bytes().all(|b| {
+                        b.is_ascii_lowercase() || b.is_ascii_digit() || b"_:.-".contains(&b)
+                    })
+                    || value.as_ref().is_some_and(|v| v.len() > MAX_CHANGE_BYTES)
+                {
+                    return Err(Error::Limit);
+                }
+                let id = *node as usize;
+                let node = self.nodes.get_mut(id).ok_or(Error::Limit)?;
+                if node.tag.is_empty() {
+                    return Err(Error::Limit);
+                }
+                let old = node.attributes.clone();
+                let index = node.attributes.iter().position(|(key, _)| key == name);
+                match (index, value) {
+                    (Some(i), Some(value)) => node.attributes[i].1 = value.clone(),
+                    (Some(i), None) => {
+                        node.attributes.remove(i);
+                    }
+                    (None, Some(value)) if node.attributes.len() < 64 => {
+                        node.attributes.push((name.clone(), value.clone()))
+                    }
+                    (None, Some(_)) => return Err(Error::Limit),
+                    (None, None) => {}
+                }
+                // Forms are a derived view. Recollect before exposing success,
+                // and restore attributes if a form budget rejects this mutation.
+                match forms::collect(self) {
+                    Ok(forms) => self.forms = forms,
+                    Err(error) => {
+                        self.nodes[id].attributes = old;
+                        return Err(error);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    /// Stable IDs of currently connected nodes, in document tree order.
+    pub fn connected_nodes(&self) -> Vec<usize> {
+        let mut todo: Vec<_> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.parent.is_none())
+            .map(|(id, _)| id)
+            .rev()
+            .collect();
+        let mut result = Vec::new();
+        while let Some(id) = todo.pop() {
+            result.push(id);
+            todo.extend(self.nodes[id].children.iter().rev().copied());
+        }
+        result
+    }
+    /// Bounded textContent of a live arena entry, including its connected subtree.
+    pub fn text_content(&self, node: usize) -> Result<String, Error> {
+        if node >= self.nodes.len() {
+            return Err(Error::Limit);
+        }
+        let mut todo = alloc::vec![node];
+        let mut text = String::new();
+        while let Some(id) = todo.pop() {
+            let node = self.nodes.get(id).ok_or(Error::Limit)?;
+            if node.text.len() > MAX_CHANGE_BYTES.saturating_sub(text.len()) {
+                return Err(Error::Limit);
+            }
+            text.push_str(&node.text);
+            todo.extend(node.children.iter().rev().copied());
+        }
+        Ok(text)
+    }
+}

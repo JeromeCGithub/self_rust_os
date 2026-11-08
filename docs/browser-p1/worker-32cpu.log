@@ -1,0 +1,114 @@
+[H[J[1;1HGRUB starting
+[grub] entered 64-bit Rust entry
+[grub] multiboot2 magic OK: 0x36d76289
+[grub] memory map: 2 regions, 1023 MiB usable
+[grub] bootloader framebuffer: 1920x1080x32 type=1 addr=0xfd000000 pitch=7680
+[grub] FbInfo: 1920x1080 pitch=7680 addr=0xfd000000
+[grub] kernel image ends at 0x179000
+[grub] frame allocator: 1 regions after reserving kernel
+[grub] mapped 1024 MiB of physical memory at 0xffff800000000000
+[grub] mapping framebuffer: 2025 pages at phys 0xfd000000
+[grub] framebuffer mapped at virt 0xffff900000000000
+[kernel] RustOS booting...
+[kernel] Initialization complete!
+[kernel] Heap OK
+[kernel] Keyboard queue OK
+[mouse] initialized (IRQ12, 3-byte packets)
+[mouse] absolute pointer enabled (QEMU vmmouse)
+[net] Ethernet unavailable: NoDevice
+[kernel] mounting root filesystem...
+[fs] mounting FAT32 partition: lba_start=2048 sectors=260096
+[kernel] root filesystem mounted
+[kernel] Heap initialized, starting scheduler...
+[kernel] mapped ELF image: 12 pages; 43145 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 0 (49520 bytes)
+[smp] online=32
+[kernel] mapped ELF image: 12 pages; 43145 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 1 (49520 bytes)
+[kernel] sys_spawn: '/BIN/ZSANDBOX.BIN' -> pid 1
+[sched] process 1 exited with code 0
+[sched] reaped zombie 1
+[kernel] mapped ELF image: 12 pages; 43145 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 2 (49520 bytes)
+[kernel] sys_spawn: '/BIN/ZSANDBOX.BIN' -> pid 2
+[sched] process 2 exited with code 0
+[sched] reaped zombie 2
+[kernel] mapped ELF image: 12 pages; 43145 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 3 (49520 bytes)
+[kernel] sys_spawn: '/BIN/ZSANDBOX.BIN' -> pid 3
+[sched] process 3 exited with code 0
+[sched] reaped zombie 3
+[kernel] mapped ELF image: 12 pages; 43145 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 4 (49520 bytes)
+[kernel] sys_spawn: '/BIN/ZSANDBOX.BIN' -> pid 4
+[sched] process 4 exited with code 0
+[sched] reaped zombie 4
+[kernel] mapped ELF image: 207 pages; 836257 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 5 (846592 bytes)
+[kernel] sys_spawn: '/BIN/JWORKER.SVC' -> pid 5
+[kernel] sys_write: "[sandbox] active_worker_frames="
+[kernel] sys_write: "3342"
+[kernel] sys_write: "
+"
+[sched] process 5 killed
+[sched] reaped zombie 5
+[kernel] mapped ELF image: 207 pages; 836257 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 6 (846592 bytes)
+[kernel] sys_spawn: '/BIN/JWORKER.SVC' -> pid 6
+[kernel] sys_write: "[sandbox] active_worker_frames="
+[kernel] sys_write: "3342"
+[kernel] sys_write: "
+"
+[sched] process 6 killed
+[sched] reaped zombie 6
+[kernel] mapped ELF image: 207 pages; 836257 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 7 (846592 bytes)
+[kernel] sys_spawn: '/BIN/JWORKER.SVC' -> pid 7
+[kernel] sys_write: "[sandbox] active_worker_frames="
+[kernel] sys_write: "3342"
+[kernel] sys_write: "
+"
+[sched] process 7 killed
+[sched] reaped zombie 7
+[kernel] mapped ELF image: 12 pages; 43145 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 8 (49520 bytes)
+[kernel] sys_spawn: '/BIN/ZSANDBOX.BIN' -> pid 8
+[fault] pid=Some(8) vector=6 error=0x0 address=0x0
+[sched] process 8 exited with code 6
+[sched] reaped zombie 8
+[kernel] mapped ELF image: 12 pages; 43145 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 9 (49520 bytes)
+[kernel] sys_spawn: '/BIN/ZSANDBOX.BIN' -> pid 9
+[sched] process 9 killed
+[sched] reaped zombie 9
+[kernel] mapped ELF image: 207 pages; 836257 file bytes
+[kernel] mapped 1024 stack pages at 0x3ffc00000-0x400000000
+[kernel] mapped framebuffer at 0x410000000 (2025 pages)
+[sched] spawned process 10 (846592 bytes)
+[kernel] sys_spawn: '/BIN/JWORKER.SVC' -> pid 10
+[sched] process 10 exited with code 64
+[sched] reaped zombie 10
+[kernel] sys_write: "[sandbox] PASS restrictions, engine recovery, cancellation, crash, deadline, malformed IPC and frame recovery"
+[kernel] sys_write: "
+"
+[sched] process 0 exited with code 0

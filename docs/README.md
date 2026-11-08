@@ -25,10 +25,24 @@ current behavior; architecture targets are not evidence of implemented features.
 | [Network performance](network-performance.md) | TCP window optimization, DMA, measurements and future event delivery |
 | [Networking validation](networking-validation.md) | Red/green evidence, packet captures and remaining limits |
 | [Ethernet networking plan](networking-plan.md) | Delivered ping/client sockets and roadmap toward DNS, HTTP and TLS |
+| [Browser CSS comparisons](browser-css-comparison.md) | Firefox/Chromium comparisons, native CSS box fixes, larger documents and packed worker transfers; public gates remain open |
+| [Browser P8 compatibility](browser-compatibility-p8.md) | Pinned task corpus, actual displayed-page probes and explicit failed/untested public gates |
+| [Browser P7 ranges](browser-youtube-p7.md) | Validated native HTTP/HTTPS media byte ranges; the real YouTube playback gate remains open |
+| [Browser P6 audio](browser-media-p6.md) | Bounded native PCM, userspace WAV player, pause/seek and captured-sound evidence; video remains open |
+| [Browser performance](browser-performance.md) | Fixed native startup/page/navigation budgets, on-demand font outlines and before/after evidence |
+| [Browser P5 forms](browser-sessions-p5.md) | Masked password controls and bounded POST/redirect foundations; authenticated sessions remain open |
+| [Google navigation and cookies](browser-google-navigation.md) | Generated-script stack fix, bounded page/session effects, native cookie navigation and live HTTP429 failure |
+| [Browser P4 Google gate](browser-google-p4.md) | Native DOM attributes/base64, scripted link navigation and the still-open results gate |
+| [Browser P3 JavaScript](browser-javascript-p3.md) | Restricted QuickJS DOM effects, bounded promise checkpoints, nested owned IPC and open web API gates |
+| [Browser P2 presentation](browser-rendering-p2.md) | Proportional native fonts, bounded PNG, stylesheet order and navigation; remaining classic browsing gates |
+| [Browser P1 runtime](browser-runtime-p1.md) | Restricted native worker, framed IPC, heap limits, cancellation and navigation/resource recovery |
+| [Browser P0 engine decision](browser-engine-p0.md) | Native QuickJS feasibility, ownership, full-engine investigation and remaining platform work |
+| [Browser P0 validation](browser-p0-validation.md) | Red/green evidence, fixed fixture comparison, guest results and preserved site gaps |
 | [Complete browser roadmap](browser-support-plan.md) | Phased plan and acceptance gates for classic browsing, Google results, YouTube, Facebook and broader compatibility |
 | [jbrowse scripting prototype](jbrowse-javascript.md) | Bounded inline JavaScript subset, typed DOM capabilities, engine research and limits |
 | [Google startup and forms](jbrowse-google.md) | Automatic Google homepage, generic GET forms, charset decoding and the remaining results-page limitation |
 | [jbrowse browser](jbrowse.md) | Native Ring 3 HTML/CSS browser, supported subset, limits and real-site testing |
+| [Window resizing](window-resize.md) | Compositor-owned edge resize/maximize/restore, version-2 SDK protocol and tested browser reflow |
 | [Window and UI toolkit](ui.md) | Native window API, canvas/widgets, glass materials and protocol |
 | [Expanded native capabilities](capabilities-validation.md) | Growable heap, larger images, offset writes, VFAT, environment and FP/compiler TLS evidence |
 | [Program arguments](arguments-validation.md) | argc/argv startup ABI, shell quoting and focused validation |

@@ -3,25 +3,63 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use rustos_browser::{decode_html, resolve, Document, Encoding, Page, MAX_HTML};
+use rustos_browser::{
+    decode_html, resolve, Document, Encoding, Page, ScriptKind, Submission, MAX_HTML,
+};
 use userlib::http;
+
+/// Session policy and credentials belong to the loader thread. No page worker
+/// can access sockets or cookies belonging to a different host/path.
+#[derive(Default)]
+pub struct Session {
+    cookies: rustos_browser::cookies::CookieJar,
+    header: String,
+    now: u64,
+}
+impl http::RequestCookies for Session {
+    fn header(&mut self, url: &str) -> Result<&str, http::Error> {
+        self.now = userlib::system::unix_time().map_err(|_| http::Error::Clock)?;
+        self.header = self.cookies.header(url, self.now);
+        Ok(&self.header)
+    }
+}
 
 pub struct Loaded {
     pub url: String,
     pub title: String,
     pub page: Page,
+    pub document: Document,
     pub status: u16,
     pub script_errors: usize,
+    pub image_errors: usize,
+    pub stylesheet_errors: usize,
 }
-fn fetch(url: &str, limit: usize) -> Result<(String, Vec<u8>, http::Response), String> {
+fn fetch(
+    session: &mut Session,
+    url: &str,
+    limit: usize,
+    cancel: &userlib::io::Cancellation,
+) -> Result<(String, Vec<u8>, http::Response), String> {
+    fetch_request(session, url, http::Request::Get, limit, cancel)
+}
+fn fetch_request(
+    session: &mut Session,
+    url: &str,
+    request: http::Request<'_>,
+    limit: usize,
+    cancel: &userlib::io::Cancellation,
+) -> Result<(String, Vec<u8>, http::Response), String> {
     let mut bytes = Vec::new();
     let mut effective = String::new();
     let options = http::Options {
         max_body: limit,
         ..http::Options::default()
     };
-    let response = http::get_with_url(
+    session.now =
+        userlib::system::unix_time().map_err(|_| "Cookie clock unavailable".to_string())?;
+    let response = http::request_cancellable_with_cookies(
         url,
+        request,
         options,
         |part| {
             bytes
@@ -31,12 +69,52 @@ fn fetch(url: &str, limit: usize) -> Result<(String, Vec<u8>, http::Response), S
             Ok(())
         },
         |url| effective = url.to_string(),
+        cancel.clone(),
+        session,
     )
     .map_err(|e| http::error_message(e).to_string())?;
     Ok((effective, bytes, response))
 }
-pub fn load(url: &str) -> Result<Loaded, String> {
-    let (url, bytes, response) = fetch(url, MAX_HTML)?;
+pub fn load(
+    session: &mut Session,
+    submission: &Submission,
+    cancel: &userlib::io::Cancellation,
+    fonts: &userlib::ui::font::FontSet,
+) -> Result<Loaded, String> {
+    let mut request = match submission {
+        Submission::Get(_) => http::Request::Get,
+        Submission::Post { body, .. } => http::Request::FormPost(body.as_bytes()),
+    };
+    let mut target = submission.url().to_string();
+    for follows in 0..=4 {
+        if cancel.is_cancelled() {
+            return Err("request cancelled".to_string());
+        }
+        match load_document(session, &target, request, cancel, fonts)? {
+            Outcome::Loaded(loaded) => return Ok(loaded),
+            Outcome::Navigate(next) => {
+                if follows == 4 {
+                    return Err("Script navigation limit exceeded".to_string());
+                }
+                target = next;
+                request = http::Request::Get;
+            }
+        }
+    }
+    Err("Script navigation limit exceeded".to_string())
+}
+enum Outcome {
+    Loaded(Loaded),
+    Navigate(String),
+}
+fn load_document(
+    session: &mut Session,
+    target: &str,
+    request: http::Request<'_>,
+    cancel: &userlib::io::Cancellation,
+    fonts: &userlib::ui::font::FontSet,
+) -> Result<Outcome, String> {
+    let (url, bytes, response) = fetch_request(session, target, request, MAX_HTML, cancel)?;
     let encoding = match response.charset {
         Some(http::Charset::Utf8) => Some(Encoding::Utf8),
         Some(http::Charset::Windows1252) => Some(Encoding::Windows1252),
@@ -46,40 +124,130 @@ pub fn load(url: &str) -> Result<Loaded, String> {
     let html =
         decode_html(&bytes, encoding).map_err(|_| "Page character decoding failed".to_string())?;
     let mut doc = Document::parse(&html).map_err(|_| "HTML resource limit exceeded".to_string())?;
-    // Inline CSS has already been parsed; linked sheets follow in link order.
-    // Unsupported/failed optional sheets leave a readable HTML fallback.
-    for sheet in doc.stylesheets.clone() {
-        if let Ok(sheet) = resolve(&url, &sheet) {
-            if let Ok((_, bytes, response)) = fetch(&sheet, 32 * 1024) {
-                if response.status != 200 {
-                    continue;
-                }
-                if let Ok(css) = core::str::from_utf8(&bytes) {
-                    let _ = doc.add_css(css);
+    // Source-order author sheets; resource transport policy stays in the app.
+    let stylesheet_errors = doc.apply_stylesheets(|source| {
+        let source = resolve(&url, source).ok()?;
+        let (_, bytes, response) = fetch(session, &source, 32 * 1024, cancel).ok()?;
+        if response.status != 200 {
+            return None;
+        }
+        core::str::from_utf8(&bytes).ok().map(str::to_string)
+    });
+    if stylesheet_errors > 0 {
+        userlib::println!("[jbrowse] stylesheet errors: {}", stylesheet_errors);
+    }
+    if cancel.is_cancelled() {
+        return Err("request cancelled".to_string());
+    }
+    // Page scripts execute only in a restricted child. Reply data is validated
+    // and committed atomically; no JS engine or native binding lives in this app.
+    let script_errors = if doc.nodes.iter().any(|node| {
+        matches!(
+            node.script_kind(),
+            Some(ScriptKind::Classic | ScriptKind::Module)
+        )
+    }) {
+        if html.len() > rustos_browser_worker::MAX_SOURCE {
+            userlib::println!(
+                "[jbrowse] script document budget exceeded bytes={} maximum={}",
+                html.len(),
+                rustos_browser_worker::MAX_SOURCE
+            );
+            1
+        } else {
+            let cookie_snapshot = session.cookies.snapshot(&url, session.now);
+            let context = rustos_browser::page_context::PageRequest {
+                html: &html,
+                url: &url,
+                cookie_snapshot: &cookie_snapshot,
+                epoch_seconds: session.now,
+            };
+            let result = context
+                .encode()
+                .map_err(|_| rustos_browser_worker::Error::Input)
+                .and_then(|input| {
+                    rustos_browser_worker::native::Native::start(|| cancel.is_cancelled())
+                        .and_then(|mut worker| worker.render_page(&input, || cancel.is_cancelled()))
+                });
+            match result {
+                Ok(bytes) => match rustos_browser::page_context::PageReply::decode(&bytes) {
+                    Ok(reply) => {
+                        match reply.commit(&mut doc, &mut session.cookies, &url, session.now) {
+                            Ok(Some(next)) => {
+                                userlib::println!("[jbrowse] script navigation");
+                                return Ok(Outcome::Navigate(next));
+                            }
+                            Ok(None) => reply.dom.failures as usize,
+                            Err(_) => {
+                                userlib::println!("[jbrowse] native page effects rejected");
+                                1
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        userlib::println!("[jbrowse] native DOM reply rejected");
+                        1
+                    }
+                },
+                Err(error) => {
+                    userlib::println!("[jbrowse] native worker failure: {:?}", error);
+                    1
                 }
             }
         }
+    } else {
+        0
+    };
+    if cancel.is_cancelled() {
+        return Err("request cancelled".to_string());
     }
-    let scripts = doc.run_scripts();
-    let script_errors = scripts.failures.len();
     if script_errors > 0 {
         userlib::println!("[jbrowse] script errors: {}", script_errors);
+    }
+    let mut image_errors = 0;
+    let requests: Vec<_> = doc
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| node.tag == "img")
+        .filter_map(|(id, node)| node.attr("src").map(|src| (id, src.to_string())))
+        .take(16)
+        .collect();
+    for (node, source) in requests {
+        if cancel.is_cancelled() {
+            return Err("request cancelled".to_string());
+        }
+        let image = resolve(&url, &source)
+            .ok()
+            .and_then(|source| fetch(session, &source, 1024 * 1024, cancel).ok())
+            .filter(|(_, _, response)| response.status == 200)
+            .and_then(|(_, bytes, _)| rustos_browser::Image::decode(&bytes).ok());
+        if image
+            .and_then(|image| doc.set_image(node, alloc::sync::Arc::new(image)).ok())
+            .is_none()
+        {
+            image_errors += 1;
+        }
     }
     let title = if doc.title.is_empty() {
         url.clone()
     } else {
         doc.title.clone()
     };
-    let mut page = doc.layout(640);
+    let mut page = doc.layout_with(640, fonts);
     if script_errors > 0 && page.is_empty() {
         userlib::println!("[jbrowse] unsupported script page");
-        page=Document::parse("<h1>Page needs more JavaScript support</h1><p>The request succeeded, but this browser cannot display this page yet.</p><p>The current scripting prototype does not run full web applications.</p><p>You can edit the address to visit another page.</p>").map_err(|_|"Could not create error page".to_string())?.layout(640);
+        doc=Document::parse("<h1>Page needs more JavaScript support</h1><p>The request succeeded, but this browser cannot display this page yet.</p><p>The current native DOM bindings do not run full web applications.</p><p>You can edit the address to visit another page.</p>").map_err(|_|"Could not create error page".to_string())?;
+        page = doc.layout_with(640, fonts);
     }
-    Ok(Loaded {
+    Ok(Outcome::Loaded(Loaded {
         url,
         title,
         page,
+        document: doc,
         status: response.status,
         script_errors,
-    })
+        image_errors,
+        stylesheet_errors,
+    }))
 }
