@@ -42,6 +42,8 @@ features = ["spin_no_std"]
 #   cargo build --features grub
 # then assemble the disk image with `tools/build-grub-disk.sh`.
 grub = []
+# Opt-in headless Initator boot while the legacy desktop migrates.
+native-init = ["grub"]
 
 [profile.dev]
 panic = "abort"

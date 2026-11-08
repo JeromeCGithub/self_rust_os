@@ -315,3 +315,20 @@ The [jbrowse guide](jbrowse.md#validation-and-reproduction) lists independent ho
 engine/UI tests, QEMU pixel and navigation assertions, and an optional real CERN
 website check. Use a fresh disposable disk. The ordinary desktop suite resolves
 launchers by the same FAT order as DE, so new user applications remain testable.
+
+## Initator M1
+
+`tests/process_supervision.rs` covers owned readiness, consume-after-usercopy,
+complete identities and typed termination. `tests/native_supervision.rs` covers
+first PID 1, private RAM presentation, parent permissions, orphan adoption and
+connected-child completion ownership. Host policy tests live in
+`crates/service-core`; native record tests in `crates/process-abi`. Run their
+manifests from `/tmp` with the pinned nightly and explicit host target.
+
+After the native-profile build, `e2e/init.py` runs real Ring 3 assertions in private
+image copies. The full acceptance matrix and commands are in the
+[validation record](initator-progress.md). Fatal cases inspect QEMU registers for
+all CPUs halted, rather than passing on a timeout. Lifecycle/exhaustion cases
+assert exact frame recovery; headless supervision asserts tick-stamped restart
+backoff, identity, cause, budget and continued sibling progress. Keep those checks
+and the legacy desktop suite separate; neither boot path proves the other.

@@ -49,12 +49,16 @@ pub enum BlockReason {
 pub struct Process {
     /// Resource/privilege identity.
     pub pid: Pid,
+    /// Completion owner assigned before publishing the process.
+    pub(crate) parent: Option<Pid>,
+    pub(crate) adoption_pending: bool,
     /// Live or zombie process status.
     pub state: ProcessState,
     /// Owned P4 frame.
     pub p4_frame: PhysFrame,
     /// Process completion status.
     pub exit_code: u64,
+    pub(crate) exit_cause: rustos_process_abi::supervision::Cause,
     /// Private surface frames (included in owned_frames), empty for PID 0.
     pub surface: Vec<PhysFrame>,
     /// Console drawing cursor.
@@ -140,6 +144,7 @@ impl ProcessTable {
             .iter_mut()
             .find(|slot| slot.as_ref().map(|p| p.pid as usize) == Some(pid))
     }
+    pub(crate) fn iter_mut(&mut self) -> core::slice::IterMut<'_, Option<Process>> { self.slots.iter_mut() }
     pub(crate) fn iter(&self) -> core::slice::Iter<'_, Option<Process>> {
         self.slots.iter()
     }

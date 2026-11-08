@@ -207,6 +207,7 @@ pub(super) fn stop_owned_child_locked(sched: &mut Scheduler, parent: Pid) {
             p.state = ProcessState::Zombie;
             p.files.clear();
             p.exit_code = 9;
+            p.exit_cause = rustos_process_abi::supervision::Cause::Killed;
         }
         crate::net::cleanup(child);
         crate::audio::cleanup(child);
@@ -265,6 +266,7 @@ pub(super) fn reap_connection_locked(sched: &mut Scheduler, pid: Pid) {
         if current != pid {
             retire_process(sched, current);
         }
+        if sched.init_pid.is_some() { break; }
         let Some(child) = downstream else {
             break;
         };

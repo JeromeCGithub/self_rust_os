@@ -1,0 +1,21 @@
+[package]
+name = "flicker"
+version = "0.1.0"
+edition = "2021"
+description = "Trusted service lifecycle and orphan fixture"
+license = "MIT OR Apache-2.0"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+
+[dependencies]
+userlib = { path = "../userlib" }
+
+[[bin]]
+name = "flicker"
+path = "../userlib/src/application.rs"

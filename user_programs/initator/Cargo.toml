@@ -1,0 +1,22 @@
+[package]
+name = "initator"
+version = "0.1.0"
+edition = "2021"
+description = "Native PID 1 foreground service supervisor"
+license = "MIT OR Apache-2.0"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+
+[dependencies]
+rustos-service-core = { path = "../../crates/service-core" }
+userlib = { path = "../userlib" }
+
+[[bin]]
+name = "initator"
+path = "../userlib/src/application.rs"

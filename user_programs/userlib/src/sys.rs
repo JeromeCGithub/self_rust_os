@@ -570,6 +570,8 @@ pub fn wait_message(timeout_ticks: u64) -> Result<bool, MessageError> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Events(u64);
 impl Events {
+    /// An owned child has retained completion; consume through the child API.
+    pub const CHILD: Self = Self(rustos_thread_abi::EVENT_CHILD);
     pub const MAILBOX: Self = Self(rustos_thread_abi::EVENT_MAILBOX);
     pub const STDIO_READ: Self = Self(rustos_thread_abi::EVENT_STDIO_READ);
     pub const STDIO_WRITE: Self = Self(rustos_thread_abi::EVENT_STDIO_WRITE);

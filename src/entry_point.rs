@@ -1,7 +1,9 @@
 //! Main for little self made rust OS.
 //!
 //! This is the kernel entry point. It initializes all subsystems (GDT, IDT, PICs,
-//! paging, heap) and then loads the desktop compositor from the boot disk.
+//! paging, heap), then loads the selected initial executable from the boot disk.
+//! The native-init profile starts headless Initator as PID 1; the default desktop
+//! profile retains the PID 0 compositor until the graphical session migration.
 //!
 //! Two boot paths are supported:
 //! - legacy (default): the `bootloader` crate's `entry_point!` via `cargo bootimage`;
@@ -108,13 +110,26 @@ fn run_kernel(
     serial_println!("[kernel] Heap initialized, starting scheduler...");
     println!("--- Starting Scheduler ---");
 
-    // Initialize the preemptive scheduler and spawn the initial process
-    // (the window manager). The scheduler takes ownership of the frame allocator.
+    // Initialize the scheduler and publish exactly one initial userspace process.
+    // The scheduler takes ownership of the frame allocator.
     // This never returns; the timer IRQ drives preemptive multitasking.
     self_rust_os::scheduler::init(phys_mem_offset, frame_allocator);
-    #[expect(clippy::expect_used)]
-    self_rust_os::scheduler::spawn_process(&self_rust_os::scheduler::load_program_from_disk("/bin/WM.BIN").expect("WM.BIN missing from boot disk"), 0)
-        .expect("Failed to spawn initial process. Reboot required.");
+    #[cfg(feature = "native-init")]
+    let initial_path = {
+        if let Err(error) = self_rust_os::scheduler::configure_native_init() {
+            panic!("Failed to configure native init: {}", error);
+        }
+        "/BIN/INITATOR.SVC"
+    };
+    #[cfg(not(feature = "native-init"))]
+    let initial_path = "/BIN/WM.BIN";
+    let initial_image = match self_rust_os::scheduler::load_program_from_disk(initial_path) {
+        Ok(image) => image,
+        Err(error) => panic!("Initial executable {} unavailable: {}", initial_path, error),
+    };
+    if let Err(error) = self_rust_os::scheduler::spawn_process(&initial_image, 0) {
+        panic!("Failed to spawn initial process: {}", error);
+    }
     // Now that the scheduler has a runnable process, unmask the timer IRQ.
     // The timer was kept masked since lib::init() to prevent timer_entry from
     // running with no scheduler state (double fault).

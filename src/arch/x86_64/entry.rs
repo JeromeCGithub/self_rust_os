@@ -438,7 +438,7 @@ extern "C" fn fault_dispatch(saved: u64, error: u64, vector: u64) -> u64 {
         error,
         address
     );
-    scheduler::exit_current(vector);
+    scheduler::fault_current(vector);
     scheduler::switch_next(0)
 }
 

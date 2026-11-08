@@ -257,3 +257,26 @@ and PID-owned exclusive streams. The SDK and `jplay` decode/read/seek WAV in Rin
 no codec/player policy executes in the kernel. Audio progress is polled, and the
 33 fixed device-lifetime DMA frames are reused across streams. This does not
 provide browser video, mixing, microphone input or verified host-speaker sound.
+
+## Opt-in Initator service boot (M1)
+
+`RUSTOS_BOOT_PROFILE=native-init` selects a separate headless GRUB profile. The
+kernel reserves PID 0 and starts `/BIN/INITATOR.SVC` as the first userspace process,
+PID 1. It receives private RAM drawing pages and no physical display mapping.
+Initator supervises two compiled foreground services, Glow and Flicker; graph
+configuration, user/session managers and graphical cutover follow the
+[roadmap](init-system-plan.md). The ordinary desktop profile above remains default.
+
+Native parent identity is recorded before publication. Owned child readiness and
+consumption retain terminal status until successful copy/reap, and init receives
+live-orphan adoption events or already-dead orphan completion. PID-control calls
+check parent authority in this profile; new typed control always checks ownership.
+PID values never wrap/reuse; the wire key also contains a checked generation.
+These mechanisms do not yet provide general credentials, protected filesystem
+configuration, or hostile-service isolation.
+
+If native PID 1 exits, faults or loses its last thread, the kernel parks other
+CPUs with a lock-independent NMI path, attempts a serial diagnostic through
+`try_lock` without waiting on that lock, and halts with all allocations retained. This is a terminal failure,
+not a restart, durable shutdown or hardware poweroff. See the
+[implementation and validation record](initator-progress.md).

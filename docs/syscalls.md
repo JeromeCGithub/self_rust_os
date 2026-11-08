@@ -451,3 +451,38 @@ a promise that arbitrary existing resources are revoked/closed. Ordinary apps'
 rights are unchanged. The native service bootstraps with an empty environment and
 no pre-opened resources beyond its private endpoint. See
 [P1 design and executed validation](browser-runtime-p1.md).
+
+## Owned child supervision (version 1)
+
+Operations 35–37 are native lifecycle mechanisms. They do not grant authority
+through numeric PID alone. Typed wrappers are `userlib::supervision`.
+
+| Number | Operation | Arguments | Result |
+| --- | --- | --- | --- |
+| 35 | current identity | all zero | generation in high 32 bits, PID in low 32 bits |
+| 36 | consume child event | writable pointer, exactly 40 bytes, zero | 0 empty, 1 event, general error |
+| 37 | terminate owned child | complete identity, zero, zero | 0 success, general error |
+
+Current identities use generation 1; monotonically allocated PIDs are never
+reused and exhaustion fails. A stale/unsupported generation is rejected. The
+40-byte little-endian record contains version u32 at 0, event tag u32 at 4,
+identity u64 at 8, cause u32 at 16, zero reserved u32 at 20, status u64 at 24,
+and eight zero reserved bytes at 32. Version is 1, completed tag is 2; causes are
+0 explicit exit, 1 forced termination, 2 fault. Adopted tag 1 reports a live child
+reparented to native PID 1; it has zero cause and status. If that child has already
+exited, completion supersedes adoption. No kernel address is included.
+
+Readiness syscall 109 accepts CHILD bit 32, which means an owned child's
+completion remains pending. It does not consume status. Invalid/unmapped/read-only
+output or wrong size/reserved words leave the record untouched. Successful
+consumption reaps exactly one owned zombie through deferred reclamation. The
+new termination operation checks direct ownership, complete identity and live
+state under scheduler serialization. Legacy-profile kill/wait remains permissive
+for the current compositor. The native profile checks parent ownership through these operations too. Profile
+selection is immutable after process publication. Native orphan adoption retains
+both live notifications and zombie statuses; the manager must terminate/reap
+unconfigured live orphans. Native GRUB bootstrap starts Initator as PID 1; its
+exit/fault/last-thread exit parks the remaining CPUs and halts with allocations retained. This is a trusted
+service profile, not a complete capability or multiuser isolation system.
+Both profiles reject PID values above `u32::MAX` and nonzero unused arguments to
+kill/wait before side effects. See [M1 evidence](initator-progress.md).

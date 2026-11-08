@@ -66,6 +66,9 @@ mod tests {
             30,
             33,
             34,
+            35,
+            36,
+            37,
             64,
             65,
             66,
@@ -86,7 +89,7 @@ mod tests {
         ] {
             assert!(!permits(n, 0), "ambient syscall {}", n);
         }
-        for events in [0, 1, 7, 8, 16, u64::MAX] {
+        for events in [0, 1, 7, 8, 16, 32, u64::MAX] {
             assert!(!permits(109, events));
         }
     }
