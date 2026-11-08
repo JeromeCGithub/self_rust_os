@@ -182,3 +182,54 @@ fn restart_history_bound_is_validated_before_start() {
     assert_eq!(s.next_start(32), None);
     assert_eq!(s.state(0), Some(State::Failed));
 }
+
+#[test]
+fn inactive_catalog_only_starts_explicitly_admitted_services() {
+    let mut s = Supervisor::new_stopped([policy(Restart::Always); 3]).unwrap();
+    assert_eq!(s.next_start(0), None);
+    assert_eq!(s.state(0), Some(State::Inactive));
+    assert!(s.request_start(3).is_err());
+    s.request_start(1).unwrap();
+    let start = running(&mut s, 0, 10);
+    assert_eq!(start.unit, 1);
+    s.request_start(1).unwrap();
+    assert_eq!(s.next_start(0), None);
+    s.completed(key(10), Completion::Killed, 1);
+    s.request_start(1).unwrap();
+    assert_eq!(s.next_start(2), None, "activation cannot bypass backoff");
+    assert_eq!(running(&mut s, 3, 11).unit, 1);
+    assert_eq!(s.state(0), Some(State::Inactive));
+    assert_eq!(s.state(2), Some(State::Inactive));
+}
+
+#[test]
+fn reactivation_waits_for_cleanup_and_preserves_rate_limit_history() {
+    let mut p = policy(Restart::Always);
+    p.burst = 1;
+    let mut s = Supervisor::new_stopped([p]).unwrap();
+    s.request_start(0).unwrap();
+    let start = s.next_start(0).unwrap();
+    s.stop(0).unwrap();
+    assert!(
+        s.request_start(0).is_err(),
+        "cancelled spawn must drain first"
+    );
+    assert_eq!(s.spawned(start, key(10), 0), Ok(true));
+    assert!(
+        s.request_start(0).is_err(),
+        "stopping process still owns slot"
+    );
+    s.completed(key(10), Completion::Killed, 1);
+    s.request_start(0).unwrap();
+    assert_eq!(
+        s.next_start(1),
+        None,
+        "stop/start cannot reset burst history"
+    );
+    assert_eq!(s.state(0), Some(State::Failed));
+    s.request_start(0).unwrap();
+    assert!(
+        s.next_start(100).is_some(),
+        "old attempts eventually expire"
+    );
+}

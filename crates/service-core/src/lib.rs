@@ -1,5 +1,14 @@
-//! Allocation-free supervision policy shared by native Initator and host tests.
+//! Native supervision policy and bounded configuration, independent of OS syscalls.
 #![no_std]
+extern crate alloc;
+/// Native unit definitions and bounded validation.
+pub mod config;
+/// Immutable unit catalogs and dependency graph validation.
+pub mod graph;
+/// Shared native/host adapter for process actions and dependency jobs.
+pub mod manager;
+/// Target activation jobs and ownership-aware failure cleanup.
+pub mod transaction;
 
 /// Kernel-issued process identity; a reused number must have a new generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +112,29 @@ impl<const N: usize> Supervisor<N> {
             instances: [Instance::NEW; N],
             next_run: 1,
         })
+    }
+    /// Construct an inactive catalog for dependency-controlled admission.
+    pub fn new_stopped(policies: [Policy; N]) -> Result<Self, Invalid> {
+        let mut manager = Self::new(policies)?;
+        for instance in &mut manager.instances {
+            instance.wanted = false;
+            instance.state = State::Inactive;
+        }
+        Ok(manager)
+    }
+    /// Request activation without bypassing restart limits or pending cleanup.
+    pub fn request_start(&mut self, unit: usize) -> Result<(), Invalid> {
+        let instance = self.instances.get_mut(unit).ok_or(Invalid)?;
+        if matches!(instance.state, State::Stopping(_))
+            || matches!(instance.state, State::Spawning(_)) && !instance.wanted
+        {
+            return Err(Invalid);
+        }
+        instance.wanted = true;
+        if matches!(instance.state, State::Inactive | State::Failed) {
+            instance.state = State::Ready;
+        }
+        Ok(())
     }
     /// Reserve one eligible launch; each successful reservation counts as an attempt.
     /// Call only after events or the earliest deadline, not on periodic ticks.

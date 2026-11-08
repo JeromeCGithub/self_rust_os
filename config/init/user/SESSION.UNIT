@@ -1,0 +1,4 @@
+# Template only. User-session execution is introduced by the Nest milestone.
+Version=1
+Kind=target
+Name=session

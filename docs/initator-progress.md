@@ -1,5 +1,8 @@
 # Initator M1: implementation and validation
 
+This is the M1 record. [M2](initator-m2-progress.md) supersedes its compiled catalog
+with [configured units](initator-units.md); the kernel supervision ABI is unchanged.
+
 M1 provides an opt-in headless native PID 1 supervising two trusted foreground
 services. It does not implement the later configuration/graph, IPC, login, user
 manager or graphical-session milestones. See [the complete roadmap](init-system-plan.md).

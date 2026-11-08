@@ -30,6 +30,16 @@ def main():
         marker.write_bytes(case.encode())
         subprocess.run(['mcopy', '-o', '-i', f'{disk}@@1048576', str(marker),
                         '::/ETC/INIT.RUN'], check=True)
+        if case in ('two-services', 'orphans', 'fault-service'):
+            # Test behavior belongs in the service's literal argument vector.
+            # PID 1 no longer interprets application-specific mode files.
+            definition = (ROOT / 'config/init/system/FLICKER.UNIT').read_text()
+            argument = {'two-services': '--fail', 'orphans': '--orphans',
+                        'fault-service': '--fault'}[case]
+            source = private / 'FLICKER.UNIT'
+            source.write_text(definition + f'Arg={argument}\n')
+            subprocess.run(['mcopy', '-o', '-i', f'{disk}@@1048576', str(source),
+                            '::/ETC/INIT/SYSTEM/FLICKER.UNIT'], check=True)
         if case == 'missing-init':
             subprocess.run(['mdel', '-i', f'{disk}@@1048576', '::/BIN/INITATOR.SVC'], check=True)
         elif case == 'bad-init':
@@ -84,8 +94,8 @@ def main():
                 if not case.startswith('fatal-'):
                     assert '[initator-fatal]' not in raw, raw[-6000:]
                 if case == 'steady' and '[glow] beat=3' in output:
-                    starts = re.findall(r'\[initator\] started unit=(\d+) run=(\d+) pid=(\d+)', output)
-                    assert len(starts) == 2 and {x[0] for x in starts} == {'0', '1'}, starts
+                    starts = re.findall(r'\[initator\] started name=(\w+) unit=\d+ run=(\d+) pid=(\d+)', output)
+                    assert len(starts) == 2 and {x[0] for x in starts} == {'glow', 'flicker'}, starts
                     assert '[initator] completion' not in output, output[-4000:]
                     assert '[initator] PID 1 entered Ring 3' in output
                     assert '[flicker] started' in output
@@ -115,13 +125,18 @@ def main():
                     elif '[init-probe] departing' in output:
                         after = output.split('[init-probe] departing', 1)[1]
                         assert '[glow] beat=' not in after, 'PID 1 died but another service kept running'
-                if case in ('two-services', 'orphans', 'fault-service') and '[initator-test] restart-limit reached; glow remains running' in output:
-                    starts = re.findall(r'\[initator\] started unit=(\d+) run=(\d+) pid=(\d+)', output)
-                    a = [x for x in starts if x[0] == '0']
-                    b = [x for x in starts if x[0] == '1']
+                # M2 can exhaust an optional service's retries before boot settles;
+                # that terminal job is Degraded. After a completed boot, the unit's
+                # terminal state is Failed. Both must satisfy the same three-run,
+                # timing, typed-cause, identity and surviving-sibling assertions.
+                terminal = re.search(r'\[initator\] (?:state name=flicker unit=\d+ state=Failed|activation outcome=Degraded)', output)
+                if case in ('two-services', 'orphans', 'fault-service') and terminal:
+                    starts = re.findall(r'\[initator\] started name=(\w+) unit=\d+ run=(\d+) pid=(\d+)', output)
+                    a = [x for x in starts if x[0] == 'glow']
+                    b = [x for x in starts if x[0] == 'flicker']
                     assert len(a) == 1 and len(b) == 3, starts
                     assert len({x[2] for x in starts}) == 4, starts
-                    timed_starts = re.findall(r'\[initator\] started unit=1 run=\d+ pid=(\d+) tick=(\d+)', output)
+                    timed_starts = re.findall(r'\[initator\] started name=flicker unit=\d+ run=\d+ pid=(\d+) tick=(\d+)', output)
                     timed_exits = dict(re.findall(r'\[initator\] completion pid=(\d+) cause=(?:Exited|Fault) status=(?:23|17|6) tick=(\d+)', output))
                     assert len(timed_starts) == 3, 'native restart timing must be observable'
                     for index in (1, 2):
@@ -136,7 +151,7 @@ def main():
                     if case == 'orphans':
                         assert output.count('cause=Exited status=17') == 3, output[-6000:]
                         assert output.count('cause=Killed status=9') == 3, output[-6000:]
-                    after = output.split('[initator-test] restart-limit reached; glow remains running', 1)[1]
+                    after = output[terminal.end():]
                     if '[glow] beat=' in after:
                         print('PASS: native PID 1, two services, three failed runs, restart cap, surviving sibling:', log)
                         return

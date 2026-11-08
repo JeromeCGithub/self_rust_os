@@ -62,72 +62,40 @@ impl Drop for File {
     }
 }
 
-/// Directory metadata with its full UTF-8 name.
 #[cfg(feature = "alloc")]
-pub struct DirectoryEntry {
-    /// Preserved Unicode long name, or uppercase short name.
-    pub name: alloc::string::String,
-    /// FAT directory attribute.
-    pub is_directory: bool,
-    /// File length in bytes.
-    pub size: u64,
-}
+#[path = "fs/directory.rs"]
+mod directory;
+#[cfg(feature = "alloc")]
+pub use directory::DirectoryEntry;
+
 /// Read a complete directory listing, including VFAT long names. Retries bounded
 /// size races; no partially copied record is returned to callers.
 #[cfg(feature = "alloc")]
 pub fn read_dir(path: &str) -> Result<alloc::vec::Vec<DirectoryEntry>, ()> {
-    use alloc::{string::ToString, vec::Vec};
+    read_dir_bounded(path, 16 * 1024 * 1024, 16 * 1024 * 1024 / 24)
+}
+/// Read a complete listing within explicit wire-byte and record budgets.
+/// The byte budget is checked before allocation and copy; an oversized listing
+/// fails instead of returning a prefix. Names and result vectors use fallible allocation.
+#[cfg(feature = "alloc")]
+pub fn read_dir_bounded(
+    path: &str,
+    max_bytes: usize,
+    max_entries: usize,
+) -> Result<alloc::vec::Vec<DirectoryEntry>, ()> {
     let path = sys::path_buf(path).ok_or(())?;
-    for _ in 0..4 {
-        // SAFETY: Query reads the complete live NUL path and writes no output.
-        let size = unsafe { sys::syscall(33, path.as_ptr() as u64, 0, 0) };
-        if size == sys::SYSCALL_ERROR || size > 16 * 1024 * 1024 {
-            return Err(());
-        }
-        let mut bytes = Vec::new();
-        bytes.try_reserve_exact(size as usize).map_err(|_| ())?;
-        bytes.resize(size as usize, 0);
-        // SAFETY: All advertised output is initialized, uniquely borrowed and
-        // writable for the call. The kernel publishes only complete records.
-        let count =
-            unsafe { sys::syscall(33, path.as_ptr() as u64, bytes.as_mut_ptr() as u64, size) };
+    directory::read_with(max_bytes, max_entries, |output| {
+        let (address, length) = output
+            .map(|bytes| (bytes.as_mut_ptr() as u64, bytes.len() as u64))
+            .unwrap_or((0, 0));
+        // SAFETY: The complete live NUL path remains readable during the call.
+        // Query writes nothing. Copy advertises only the uniquely borrowed,
+        // initialized writable output and no reference escapes this syscall.
+        let count = unsafe { sys::syscall(33, path.as_ptr() as u64, address, length) };
         if count == sys::SYSCALL_ERROR {
-            continue;
+            Err(())
+        } else {
+            usize::try_from(count).map_err(|_| ())
         }
-        if count > size {
-            return Err(());
-        }
-        let mut position = 0;
-        let mut entries = Vec::new();
-        while position < count as usize {
-            let header = bytes.get(position..position + 16).ok_or(())?;
-            let length = u16::from_le_bytes([header[0], header[1]]) as usize;
-            let name_length = u16::from_le_bytes([header[2], header[3]]) as usize;
-            if length < 17
-                || length % 8 != 0
-                || 16 + name_length >= length
-                || position + length > count as usize
-            {
-                return Err(());
-            }
-            let name = core::str::from_utf8(
-                bytes
-                    .get(position + 16..position + 16 + name_length)
-                    .ok_or(())?,
-            )
-            .map_err(|_| ())?
-            .to_string();
-            if bytes[position + 16 + name_length] != 0 {
-                return Err(());
-            }
-            entries.push(DirectoryEntry {
-                name,
-                is_directory: header[4] & 16 != 0,
-                size: u64::from_le_bytes(header[8..16].try_into().map_err(|_| ())?),
-            });
-            position += length;
-        }
-        return Ok(entries);
-    }
-    Err(())
+    })
 }

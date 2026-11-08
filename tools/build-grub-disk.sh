@@ -116,3 +116,7 @@ ls -la "${IMG}"
 mmd -i "${IMG}@@${PART_OFFSET}" ::/BIN ::/ETC ::/HOME ::/TMP
 python3 "${ROOT}/tools/install_user_programs.py" "${ROOT}/user_programs" "${IMG}@@${PART_OFFSET}"
 mcopy -i "${IMG}@@${PART_OFFSET}" "${ROOT}/user_programs/de/wallpaper.ppm" ::/ETC/WALL.PPM
+
+if [ "${RUSTOS_BOOT_PROFILE:-desktop}" = native-init ]; then
+    python3 "${ROOT}/tools/install_init_units.py" "${ROOT}/config/init" "${IMG}@@${PART_OFFSET}"
+fi

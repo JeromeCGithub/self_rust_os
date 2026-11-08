@@ -13,7 +13,9 @@ Delivery update: M1 is implemented as an opt-in profile; see
 the original inspection context. Implementation names are `Initator`
 (`user_programs/initator`), future `Nest` (user manager) and future `Spark`
 (control tool); illustrative `init`/`usermgr`/`initctl` paths below are design names.
-M2–M7 remain future milestones.
+M2 is implemented; see [the native unit interface](initator-units.md) and
+[its validation and limits](initator-m2-progress.md). M3–M7
+remain future milestones.
 
 The requested outcome is a native Ring 3 PID 1 that orchestrates boot and supervises
 system services, followed by a separate user manager that supervises login sessions
@@ -616,7 +618,7 @@ RestartDelayTicks=18
 RestartMaxDelayTicks=180
 RestartBurst=3
 RestartWindowTicks=1800
-StopTimeoutTicks=90
+HealthyResetTicks=1800
 ```
 
 Values are UTF-8 after the first `=`; trim outer ASCII whitespace, preserve
@@ -1436,7 +1438,7 @@ policy. Test builder placement/exclusion before modifying tooling.
 **Tests/QEMU:** host tests for bad UTF-8/NUL/unknown/duplicate keys, duplicate FAT
 aliases, missing units, self/transitive/mixed cycles, order-only versus activation,
 optional failure, required failure and rollback preserving preexisting units.
-`e2e/init.py --case dependencies` injects private config files, proves B cannot
+`e2e/init_units.py --case configured` injects private config files, proves B cannot
 start before required A activation, and a cyclic boot graph starts no daemons.
 Use actual file results/process traces, not only parser log lines.
 
