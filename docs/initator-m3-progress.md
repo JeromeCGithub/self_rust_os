@@ -4,9 +4,10 @@ M1 [PR #54](https://github.com/JeromeCGithub/self_rust_os/pull/54) and M2
 [PR #55](https://github.com/JeromeCGithub/self_rust_os/pull/55) are open and unmerged.
 M2 documentation CI passed. Its validation is in
 [the M2 record](initator-m2-progress.md). Branch `feat/initator-m3` starts from M2
-commit `e56297c`; M3 has no PR yet. The original worktree is unchanged.
+commit `e56297c`; M3 is [PR #56](https://github.com/JeromeCGithub/self_rust_os/pull/56).
+The original worktree is preserved.
 
-**M3 is implemented and its required local checks pass; PR delivery is next.** Channels, readiness,
+**M3 is implemented, locally validated, and submitted as PR #56.** Channels, readiness,
 watchdogs, volatile logging, Spark control, the Linux host backend and the native
 launch worker are implemented. The original checkpoint evidence below is retained
 as historical evidence; the [latest additions](#post-checkpoint-implementation)
@@ -306,8 +307,8 @@ which is test-only and not installed in ordinary profiles. Full scenario lists a
 in the runner's `--help`. Headless supervision assertions and exact serial event
 traces demonstrate these changes more directly than a screenshot of the console.
 No current required check remains failing. The documented existing target warning
-and manual host GUI gap remain. Final review and the single M3 PR based on
-`feat/initator-m2` are the remaining delivery actions; no merge is performed.
+and manual host GUI gap remain. The single M3 PR targets `feat/initator-m2`; it remains open and unmerged.
+Documentation CI is checked separately from the local runtime evidence.
 
 The global channel quota does not reserve capacity against hostile allocators.
 Processes remain trusted until M5 resource/authority enforcement; endpoint ownership
