@@ -1,7 +1,17 @@
 // Test-only PID 1 replacement, installed only into disposable E2E image copies.
+extern crate alloc;
 mod abi;
+mod ipc_probe;
 use userlib::{recordln, supervision, sys};
 fn main(argc: usize, argv: &[&str]) {
+    if argc > 1 && argv[1] == "--ipc-quick" {
+        ipc_probe::quick_peer();
+        return;
+    }
+    if argc > 1 && argv[1] == "--ipc-peer" {
+        ipc_probe::peer();
+        return;
+    }
     if argc > 1 && argv[1] == "--unit-probe" {
         assert_eq!(
             argv,
@@ -36,6 +46,12 @@ fn main(argc: usize, argv: &[&str]) {
     assert_eq!(supervision::current().expect("identity").pid, 1);
     let mut mode = [0; 32];
     let n = sys::read_file("/ETC/INIT.RUN", &mut mode).expect("test mode");
+    if &mode[..n] == b"ipc-lifecycle" {
+        ipc_probe::lifecycle();
+    }
+    if &mode[..n] == b"ipc" {
+        ipc_probe::run();
+    }
     if &mode[..n] == b"abi" {
         abi::run();
     }

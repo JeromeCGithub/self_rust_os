@@ -3,5 +3,26 @@
 version = 4
 
 [[package]]
+name = "rustos-ipc-abi"
+version = "0.1.0"
+dependencies = [
+ "rustos-process-abi",
+]
+
+[[package]]
+name = "rustos-process-abi"
+version = "0.1.0"
+
+[[package]]
+name = "rustos-service-abi"
+version = "0.1.0"
+dependencies = [
+ "rustos-ipc-abi",
+]
+
+[[package]]
 name = "rustos-service-core"
 version = "0.1.0"
+dependencies = [
+ "rustos-service-abi",
+]

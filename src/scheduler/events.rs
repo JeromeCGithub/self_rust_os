@@ -14,6 +14,13 @@ fn ready(s: &Scheduler, pid: Pid, mask: u64) -> u64 {
         return ERROR;
     };
     let mut result = 0;
+    if mask & abi::EVENT_PORT != 0 {
+        match s.ipc.peek(rustos_ipc_abi::ProcessKey { pid, generation: 1 }) {
+            Ok(Some(_)) => result |= abi::EVENT_PORT,
+            Ok(None) => {},
+            Err(_) => return ERROR,
+        }
+    }
     if mask & abi::EVENT_CHILD != 0
         && s.processes.iter().flatten().any(|p| p.parent == Some(pid) && (p.state == ProcessState::Zombie || p.adoption_pending))
     {

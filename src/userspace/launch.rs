@@ -70,3 +70,55 @@ pub(crate) fn spawn(path: u64, request: u64) -> u64 {
     envp.extend(environment.iter().map(String::as_str));
     super::syscall::spawn_at(&path, fields[1] == 1, &argv, &envp)
 }
+
+/// Copy the complete v2 request, vectors and endpoint records before filesystem
+/// loading can release entry. Rights/owner/quota checks repeat under the scheduler
+/// lock immediately before child resource construction and publication.
+pub(crate) fn spawn_bound(path: u64, request: u64) -> u64 {
+    use rustos_ipc_abi as abi;
+    let mut bytes = [0; abi::SPAWN_SIZE];
+    if !super::usercopy::from_user(request, &mut bytes) {
+        return ERROR;
+    }
+    let Ok(request) = abi::Spawn::decode(&bytes) else {
+        return ERROR;
+    };
+    let mut records = [0; abi::MAX_BINDINGS * abi::BINDING_SIZE];
+    let length = request.binding_count as usize * abi::BINDING_SIZE;
+    if !super::usercopy::from_user(request.bindings, &mut records[..length]) {
+        return ERROR;
+    }
+    let mut bindings = Vec::new();
+    if bindings
+        .try_reserve_exact(request.binding_count as usize)
+        .is_err()
+    {
+        return ERROR;
+    }
+    for record in records[..length].chunks_exact(abi::BINDING_SIZE) {
+        let Ok(binding) = abi::Binding::decode(record) else {
+            return ERROR;
+        };
+        bindings.push(binding);
+    }
+    let mut budget = 0;
+    let Ok(arguments) = strings(request.argv, request.argc, &mut budget) else {
+        return ERROR;
+    };
+    let Ok(environment) = strings(request.envp, request.envc, &mut budget) else {
+        return ERROR;
+    };
+    let Some(path) = crate::fs::handles::path(path, crate::fs::handles::PathKind::Existing) else {
+        return ERROR;
+    };
+    let mut argv = Vec::new();
+    let mut envp = Vec::new();
+    if argv.try_reserve_exact(arguments.len()).is_err()
+        || envp.try_reserve_exact(environment.len()).is_err()
+    {
+        return ERROR;
+    }
+    argv.extend(arguments.iter().map(String::as_str));
+    envp.extend(environment.iter().map(String::as_str));
+    super::syscall::spawn_at_bound(&path, &argv, &envp, &bindings)
+}

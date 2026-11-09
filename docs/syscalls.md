@@ -486,3 +486,81 @@ exit/fault/last-thread exit parks the remaining CPUs and halts with allocations 
 service profile, not a complete capability or multiuser isolation system.
 Both profiles reject PID values above `u32::MAX` and nonzero unused arguments to
 kill/wait before side effects. See [M1 evidence](initator-progress.md).
+
+
+## Native owned channels and bound spawn (M3 work in progress)
+
+These operations are implemented in [scheduler IPC](../src/scheduler/ipc.rs),
+[the channel object registry](../crates/ipc-core/src/lib.rs),
+[the shared ABI](../crates/ipc-abi/src/lib.rs) and
+[typed owned SDK endpoints](../user_programs/userlib/src/ipc.rs).
+They are independent of the legacy compositor mailbox (20/21) and connected stdio.
+The [M3 record](initator-m3-progress.md) lists executed tests and remaining gates.
+
+| Number | Operation | Arguments | Result |
+| --- | --- | --- | --- |
+| 120 | pair | writable output pointer, exact size 16, zero | 0; output contains two little-endian u64 handles |
+| 121 | send | owned handle, input pointer, byte length 0–256 | 0 accepted, 2 full, 3 peer closed, general error |
+| 122 | next | writable output pointer, exact size 288, zero | 0 empty, 1 event, general error |
+| 123 | close | owned handle, zero, zero | 0 or general error |
+| 124 | interest | owned handle, full interest mask, zero | 0 or general error |
+| 125 | take bootstrap | nonzero u32 tag, zero, zero | owned handle or general error; tag consumed once |
+| 126 | spawn bound | executable path pointer, request pointer, exact size 64 | new PID or general error; atomic explicit endpoint moves |
+
+A handle is positive and at most `i64::MAX`; it grants no access outside its owner.
+Kernel-supplied identities have generation one and monotonically allocated,
+non-reused PIDs. Rights bits are Send=1, Receive=2, Transfer=4; unknown/empty
+rights fail. A pair starts with all rights. Transfer requires Transfer authority
+and can only remove rights; there is no implicit endpoint inheritance.
+Limits are 128 global channel objects, 128 handles per owner, eight queued messages
+per direction and eight spawn bindings. Pair creation reserves bounded storage
+fallibly; enqueue allocates nothing. Exhaustion returns error without partial
+publication. These quotas do not reserve protected capacity against malicious
+factory users; stronger resource/authority enforcement remains M5.
+
+The event record is explicitly little endian: version u32=1 at 0, kind u32 at 4
+(Message=1, PeerClosed=2, Writable=3), receiving handle u64 at 8, authenticated
+sender identity u64 at 16, payload length u32 at 24, zero reserved u32 at 28,
+then 256 payload bytes at 32. Unused payload bytes are zero. Signals have zero
+sender/length/payload. Invalid complete output buffers leave events pending;
+copy succeeds before consumption under scheduler serialization. Endpoints are
+selected fairly across ready handles. Messages precede one peer-closed event;
+consuming EOF does not leave permanent readiness. Whole-process termination closes
+owned endpoints; the final close frees channel storage.
+
+Syscall 109 accepts PORT=64 (supported mask now 127) alongside CHILD=32. It
+atomically observes deliverable events or parks the calling thread. Syscall 124
+sets the entire interest mask: Read=1, Write=2. Read is initially enabled;
+pausing it preserves queued messages and suppresses their readiness. EOF waits
+until queued messages drain. Write requests one signal when capacity becomes
+available; consuming it disarms that interest. Rearm explicitly. This avoids
+permanently writable endpoints causing busy loops.
+
+The 64-byte spawn request contains eight u64 words: version=2, flags=0, argv
+pointer/count, environment pointer/count, bindings pointer/count. String vectors
+use syscall 30's native descriptor format and limits. A binding is 24 bytes:
+source handle u64, nonzero bootstrap tag u32, attenuated rights u32, eight zero
+reserved bytes. Duplicate sources/tags, foreign handles, unknown rights, excessive
+counts and malformed complete buffers fail. The loader snapshots user data before
+loading, then revalidates grants under scheduler serialization before commitment.
+All failures preserve parent handles and roll back frames; successful moves occur
+before child PCB/thread publication. Receive-less grants discard queued incoming
+data. Transferred endpoints reset read interest and cancel pending writable interest.
+
+Syscall 30's 48-byte v1 frame is unchanged, including connected stdio. Bound spawn
+currently requires flags zero: combining moved grants with the old fallible
+post-publication connected-stdio attachment would violate rollback guarantees.
+SDK spawn takes mutable endpoint bindings, invalidates moved parent wrappers only
+on success, and retains them on failure. Owned endpoints are non-Clone and close
+on Drop. Bootstrap tags can create an SDK owner only once.
+
+The userspace [service protocol](../crates/service-abi/src/lib.rs) uses notify tag
+1 and log tag 2. Its 24-byte header contains version u32=1, kind u32, nonzero run
+u64, payload length u32 and detail u32. Init=1 carries eight watchdog ticks bytes
+(zero disables) and detail notify bit; Ready=2/Heartbeat=3 have no payload/detail.
+Log=4 carries up to 232 UTF-8 bytes, detail severity 1–4, and rejects controls.
+Init/watchdog constraints and exact frame lengths are validated. The manager checks
+receiving endpoint, authenticated sender, run and lifecycle before policy effects.
+The separate control request codec reserves kinds 16–21 and tag 3; its native
+transport/response/dispatch and Spark are not implemented yet. No public control
+endpoint or shutdown syscall is provided by this work.

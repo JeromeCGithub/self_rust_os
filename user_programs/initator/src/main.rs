@@ -1,5 +1,6 @@
 // Initator: native PID 1. Policy lives in the host-tested service core.
 extern crate alloc;
+mod ports;
 use alloc::{string::String, vec::Vec};
 use rustos_service_core::{
     config::{MAX_CATALOG_BYTES, MAX_FILE_BYTES, MAX_UNITS},
@@ -194,6 +195,7 @@ fn main() {
         );
         recovery();
     }
+    let mut ports = ports::Ports::new();
     let mut last_outcome = Outcome::Running;
     let mut states = [None; MAX_UNITS];
     loop {
@@ -220,6 +222,7 @@ fn main() {
                         supervision::Cause::Killed => Completion::Killed,
                         supervision::Cause::Fault => Completion::Fault(status as u16),
                     };
+                    ports.mark_exit(process);
                     manager.completed(
                         ProcessKey {
                             pid: process.pid,
@@ -231,6 +234,11 @@ fn main() {
                 }
             }
         }
+        ports
+            .resume(sys::ticks())
+            .expect("resume bounded port intake");
+        ports.drain(&mut manager).expect("owned native port events");
+        ports.finish_exits();
         let mut issued_action = false;
         if let Some(action) = manager
             .next_action(sys::ticks())
@@ -243,22 +251,11 @@ fn main() {
                         .catalog()
                         .unit(start.unit)
                         .expect("admitted catalog index");
-                    let path = unit.executable.as_deref().expect("service executable");
-                    let mut args = [""; 32];
-                    let mut env = [""; 32];
-                    for (slot, value) in args.iter_mut().zip(&unit.arguments) {
-                        *slot = value;
-                    }
-                    for (slot, value) in env.iter_mut().zip(&unit.environment) {
-                        *slot = value;
-                    }
-                    let result = sys::spawn_with_env(
-                        path,
-                        &args[..unit.arguments.len()],
-                        &env[..unit.environment.len()],
-                    );
+                    let result = ports::Run::launch(unit, start);
                     match result {
-                        Ok(pid) => {
+                        Ok(run) => {
+                            let key = run.key();
+                            let pid = key.pid;
                             // M1's ABI allocates monotonic PIDs with generation 1;
                             // callers never infer identity from a recycled PID.
                             println!(
@@ -270,8 +267,11 @@ fn main() {
                                 sys::ticks()
                             );
                             manager
-                                .spawned(start, ProcessKey { pid, generation: 1 }, sys::ticks())
+                                .spawned(start, key, sys::ticks())
                                 .expect("reserved launch ownership");
+                            ports
+                                .install(start.unit, run)
+                                .expect("owned per-run service grants");
                         }
                         Err(()) => {
                             println!(
@@ -291,8 +291,12 @@ fn main() {
                         .expect("stop catalog index")
                         .name;
                     println!(
-                        "[initator] stopping name={} unit={} pid={}",
-                        name, unit, process.pid
+                        "[initator] stopping name={} unit={} pid={} tick={} reason={:?}",
+                        name,
+                        unit,
+                        process.pid,
+                        sys::ticks(),
+                        manager.run_status(unit).and_then(|r| r.failure)
                     );
                     // A process may already have exited; its durable completion
                     // remains the acknowledgement. Never acknowledge merely kill().
@@ -328,13 +332,19 @@ fn main() {
         if issued_action {
             continue;
         }
-        let timeout = match manager.next_deadline() {
+        let deadline = manager
+            .next_deadline()
+            .into_iter()
+            .chain(ports.next_deadline())
+            .min();
+        let timeout = match deadline {
             None => 0,
             Some(deadline) => match deadline.checked_sub(sys::ticks()) {
                 Some(remaining) if remaining > 0 => remaining,
                 _ => continue,
             },
         };
-        sys::wait_events(sys::Events::CHILD, timeout).expect("child/deadline wait");
+        sys::wait_events(sys::Events::CHILD | sys::Events::PORT, timeout)
+            .expect("child/deadline wait");
     }
 }

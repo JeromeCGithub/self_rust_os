@@ -46,6 +46,7 @@ pub struct Engine {
     catalog: Catalog,
     owners: [u64; 64],
     active: u64,
+    resources: u64,
     sequence: u64,
     order: [usize; 64],
     order_len: usize,
@@ -57,6 +58,7 @@ impl Engine {
             catalog,
             owners: [0; 64],
             active: 0,
+            resources: 0,
             sequence: 0,
             order: [0; 64],
             order_len: 0,
@@ -168,7 +170,7 @@ impl Engine {
                     .rev()
                     .copied()
                     .find(|&id| {
-                        self.active & (1u64 << id) != 0 && (desired | retain) & (1u64 << id) == 0
+                        self.resources & (1u64 << id) != 0 && (desired | retain) & (1u64 << id) == 0
                     })
                 {
                     tx.pending_stop = Some(id);
@@ -292,12 +294,15 @@ impl Engine {
             return Err(Error::InvalidResult);
         }
         if result.is_ok() {
-            if self.order_len >= self.order.len() {
-                return Err(Error::Limit);
+            if self.resources & (1u64 << unit) == 0 {
+                if self.order_len >= self.order.len() {
+                    return Err(Error::Limit);
+                }
+                self.resources |= 1u64 << unit;
+                self.order[self.order_len] = unit;
+                self.order_len += 1;
             }
             self.active |= 1u64 << unit;
-            self.order[self.order_len] = unit;
-            self.order_len += 1;
             tx.phases[unit] = Phase::Done;
         } else {
             tx.phases[unit] = Phase::Failed;
@@ -311,6 +316,7 @@ impl Engine {
         }
         tx.pending_stop = None;
         self.active &= !(1u64 << unit);
+        self.resources &= !(1u64 << unit);
         self.remove_order(unit);
         Ok(())
     }
@@ -333,6 +339,7 @@ impl Engine {
             return Err(Error::InvalidResult);
         }
         self.active &= !(1u64 << unit);
+        self.resources &= !(1u64 << unit);
         self.remove_order(unit);
         if let Some(tx) = self.transaction.as_mut() {
             if tx.outcome == Outcome::Running {
@@ -346,23 +353,75 @@ impl Engine {
         }
         Ok(())
     }
-    /// A retryable exit during activation keeps that job pending. A replacement
-    /// must publish readiness before its dependents may proceed. Outside an
-    /// activation, persistent ownership drives normal automatic restarts.
-    pub fn retrying(&mut self, unit: usize) -> Result<Option<u64>, Error> {
+    /// Reserve ownership before a runtime launch can publish a process. A stop
+    /// must account for this reservation until spawn failure or actual completion.
+    pub fn reserve_run(&mut self, unit: usize) -> Result<(), Error> {
+        let selected = self.transaction.as_ref().is_some_and(|tx| {
+            tx.outcome == Outcome::Running
+                && tx.cleanup.is_none()
+                && tx.phases.get(unit) == Some(&Phase::Starting)
+        });
+        if !self
+            .catalog
+            .unit(unit)
+            .is_some_and(|u| u.kind == crate::config::Kind::Service)
+            || (!self.wanted(unit) && !selected)
+            || self.resources & (1u64 << unit) != 0
+        {
+            return Err(Error::InvalidResult);
+        }
+        if self.order_len >= self.order.len() {
+            return Err(Error::Limit);
+        }
+        self.resources |= 1u64 << unit;
+        self.order[self.order_len] = unit;
+        self.order_len += 1;
+        Ok(())
+    }
+    /// Publication establishes actual process-start order without making it ready.
+    pub fn process_spawned(&mut self, unit: usize) -> Result<(), Error> {
+        if unit >= self.catalog.len() || self.resources & (1u64 << unit) == 0 {
+            return Err(Error::InvalidResult);
+        }
+        self.remove_order(unit);
+        self.order[self.order_len] = unit;
+        self.order_len += 1;
+        Ok(())
+    }
+    /// Withdraw readiness while retaining ownership of a process being terminated.
+    pub fn hold_for_restart(&mut self, unit: usize) -> Result<Option<u64>, Error> {
+        if !self
+            .catalog
+            .unit(unit)
+            .is_some_and(|u| u.kind == crate::config::Kind::Service)
+        {
+            return Err(Error::InvalidResult);
+        }
         let pending = self
             .transaction
             .as_ref()
             .filter(|tx| {
                 tx.outcome == Outcome::Running
                     && tx.cleanup.is_none()
-                    && tx.phases.get(unit) == Some(&Phase::Done)
+                    && tx.phases[unit] == Phase::Done
             })
             .map(|tx| tx.id);
-        self.unavailable(unit)?;
+        self.active &= !(1u64 << unit);
         if pending.is_some() {
             if let Some(tx) = self.transaction.as_mut() {
                 tx.phases[unit] = Phase::Starting;
+            }
+        }
+        Ok(pending)
+    }
+    /// Actual retryable completion releases resources but keeps activation pending.
+    pub fn retrying(&mut self, unit: usize) -> Result<Option<u64>, Error> {
+        let pending = self.hold_for_restart(unit)?;
+        self.resources &= !(1u64 << unit);
+        self.remove_order(unit);
+        if let Some(tx) = self.transaction.as_mut() {
+            if tx.pending_stop == Some(unit) {
+                tx.pending_stop = None;
             }
         }
         Ok(pending)
@@ -376,18 +435,32 @@ impl Engine {
                 .catalog
                 .unit(unit)
                 .is_some_and(|u| u.kind == crate::config::Kind::Service)
-            || self.order_len >= self.order.len()
+            || self.resources & (1u64 << unit) == 0 && self.order_len >= self.order.len()
         {
             return Err(Error::InvalidResult);
         }
         self.active |= 1u64 << unit;
-        self.order[self.order_len] = unit;
-        self.order_len += 1;
+        if self.resources & (1u64 << unit) == 0 {
+            self.resources |= 1u64 << unit;
+            self.order[self.order_len] = unit;
+            self.order_len += 1;
+        }
         Ok(())
     }
-    /// Persistent activation ownership, independent of process liveness.
+    /// Desired activation ownership, including an admitted stop's withdrawal.
+    /// Active resources remain until their ordered native completion is acknowledged.
     pub fn wanted(&self, unit: usize) -> bool {
-        unit < self.catalog.len() && self.retained_except(None) & (1u64 << unit) != 0
+        if unit >= self.catalog.len() {
+            return false;
+        }
+        let mask = match self.transaction.as_ref() {
+            Some(tx) if tx.stopping && tx.outcome == Outcome::Running => tx
+                .cleanup
+                .map(|(desired, retain, _)| desired | retain)
+                .unwrap_or(0),
+            _ => self.retained_except(None),
+        };
+        mask & (1u64 << unit) != 0
     }
     pub fn outcome(&self) -> Outcome {
         self.transaction

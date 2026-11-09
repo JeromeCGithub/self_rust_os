@@ -37,8 +37,10 @@ pub const EVENT_KEYBOARD: u64 = 8;
 pub const EVENT_POINTER: u64 = 16;
 /// An owned child has a retained completion.
 pub const EVENT_CHILD: u64 = 32;
+/// An owned native channel has a message, peer closure or requested writable event.
+pub const EVENT_PORT: u64 = 64;
 /// Supported readiness mask. Zero and unknown bits are invalid requests.
-pub const EVENT_ALL: u64 = 63;
+pub const EVENT_ALL: u64 = 127;
 /// ABI version.
 pub const VERSION: u32 = 1;
 /// Default worker stack, excluding the guard page.

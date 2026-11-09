@@ -5,9 +5,11 @@ one immutable catalog, then activates the unit named `boot`. Configuration and
 job policy execute in Ring 3. The kernel sees explicit executable paths, literal
 launch vectors, exact process identities, child events and deadline waits.
 
-The [roadmap](init-system-plan.md) separates this M2 interface from future IPC,
-login, user sessions and graphical supervision. [M2 evidence](initator-m2-progress.md)
-records actual validation. [M1 evidence](initator-progress.md) describes the earlier
+The [roadmap](init-system-plan.md) separates the implemented M2 catalog from
+M3 readiness/IPC work and future login, user sessions and graphical supervision.
+[M2 evidence](initator-m2-progress.md) records its validation; the
+[M3 progress record](initator-m3-progress.md) distinguishes tested additions from
+remaining work. [M1 evidence](initator-progress.md) describes the earlier
 compiled catalog and the unchanged native child ABI.
 
 ## Files and fields
@@ -58,7 +60,9 @@ Wants=chime
 | `Requires` | Pulls in another unit and requires its successful activation before this job |
 | `Wants` | Pulls in another unit; failure can degrade the target without failing it |
 | `After` | Orders selected jobs only; never pulls a unit in or implies its success |
-| `Ready` | Only `spawned`, the default, is supported |
+| `Ready` | `spawned` (default) or `notify`; notify waits for the exact run's authenticated Ready message |
+| `StartTimeoutTicks` | Positive deadline from launch reservation, default 90; includes synchronous loading and notify initialization |
+| `WatchdogTicks` | Optional positive interval; requires `Ready=notify`, starts at Ready and refreshes only on valid work-path Heartbeat |
 | `WorkingDirectory` | Only `/`, the default, is supported until atomic per-launch cwd exists |
 | `Restart` | `never` (default), `on-failure`, or `always` |
 | `RestartDelayTicks` | Positive initial backoff, default 18 |
@@ -74,7 +78,8 @@ environment names are rejected. `Requires=a` together with `After=a` is valid.
 Values follow the first `=`. Outer ASCII whitespace is trimmed, interior spaces
 are literal; UTF-8 is supported in arguments/values/paths. CRLF, blank lines and
 full-line `#` comments work. Control characters, unknown keys, malformed numbers,
-unsupported readiness/watchdogs/stop timeouts and other cwd values are rejected.
+unsupported readiness modes, stop timeouts and other cwd values are rejected.
+Timing fields must fit `1..=i64::MAX`; deadline arithmetic is checked.
 There is no shell quoting, expansion, interpolation, inline-comment language or
 command substitution. For example `Arg=$(literal)*` is one unchanged argument.
 Do not put secrets in diagnostic unit names; launch vectors are not logged.
@@ -118,8 +123,9 @@ errno, so retrying failed launch syscalls during activation is deferred. A proce
 that was successfully spawned can restart according to its policy. If its exit is
 observed while activation is still pending, dependents wait through retry backoff;
 terminal failure blocks them. The native loop drains child events between effects.
-Readiness means successful spawn, not application initialization, and an exit
-immediately after an observation is always possible. M3 adds explicit readiness.
+With `Ready=spawned`, readiness means successful spawn. With `Ready=notify`,
+the service remains Starting until an authenticated Ready for its current run.
+An exit immediately after an observation is always possible.
 
 Optional failures yield Degraded; required failures yield Failed. Cleanup stops
 only exclusively acquired services, in reverse actual activation order, and waits
@@ -147,3 +153,35 @@ watchdogs, cooperative stop, shutdown/poweroff, durable logs, user identities an
 Nest sessions remain future milestones. M2 adds no syscall numbers or privileges.
 FAT configuration is trusted image input until access enforcement exists; limits
 bound PID 1's own allocations but do not redesign kernel filesystem enumeration.
+
+
+## Explicit readiness and watchdogs (M3 work in progress)
+
+A notifying service uses `userlib::service::Client::bootstrap()` to take its
+nondelegable notify and optional log grants. It dispatches native port events to
+`on_event` until Init establishes its run. It calls `ready()` after initialization,
+then `heartbeat()` only after completed work when a watchdog is configured.
+A failed send does not commit client readiness; retry explicitly on writable
+interest. No background pinger makes a stalled service look healthy.
+
+The manager sends Init after registering the child's process identity and per-run
+endpoints. A payload run number cannot confer authority: the receiving endpoint,
+kernel-supplied sender, exact process identity and current run must all agree.
+Ready at or after the startup deadline is late; duplicate Ready does not refresh
+a watchdog. Heartbeat is invalid before Ready or without a configured watchdog.
+Logs use a separate channel and cannot authorize readiness.
+
+Startup/watchdog failure withdraws readiness and requests one termination for the
+owned process. Child completion acknowledges cleanup; issuing kill does not.
+An exit before Ready, including status zero, counts as failed initialization.
+Restart backoff/budgets still apply; healthy-history reset begins at readiness.
+Requires orders activation but is not a continuing liveness binding: an already
+active dependent survives prerequisite restart. Compositor/session failure policy
+requires the later explicit session lifecycle work.
+
+Native logging is a bounded volatile 256-record journal, not stdout capture or
+persistent storage. Records contain authenticated unit/run/process attribution,
+monotonic tick, severity and at most 232 UTF-8 bytes without control characters.
+Overwritten history reports a cursor gap. Per-run log/notify budgets pause receive
+interest and resume on deadlines; logging performs no disk or console output.
+Spark query/control integration is still pending; see the M3 progress record.

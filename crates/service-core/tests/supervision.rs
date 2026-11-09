@@ -233,3 +233,62 @@ fn reactivation_waits_for_cleanup_and_preserves_rate_limit_history() {
         "old attempts eventually expire"
     );
 }
+
+#[test]
+fn explicit_readiness_is_a_distinct_state_and_stale_or_duplicate_ready_is_rejected() {
+    let mut s = Supervisor::new([policy(Restart::OnFailure)]).unwrap();
+    let start = s.next_start(0).unwrap();
+    s.spawned_waiting(start, key(10), 0).unwrap();
+    assert_eq!(s.state(0), Some(State::Starting(key(10))));
+    assert!(s.mark_ready(key(11), 1).is_err());
+    s.mark_ready(key(10), 2).unwrap();
+    assert_eq!(s.state(0), Some(State::Running(key(10))));
+    assert!(s.mark_ready(key(10), 3).is_err());
+}
+#[test]
+fn an_exit_before_ready_is_a_failed_start_and_never_resets_healthy_history() {
+    let mut p = policy(Restart::OnFailure);
+    p.burst = 1;
+    p.window = 1000;
+    let mut s = Supervisor::new([p]).unwrap();
+    let start = s.next_start(0).unwrap();
+    s.spawned_waiting(start, key(10), 0).unwrap();
+    assert!(s.completed(key(10), Completion::Exit(0), 50));
+    assert_eq!(
+        s.state(0),
+        Some(State::Backoff(52)),
+        "exit zero before Ready is startup failure"
+    );
+    assert_eq!(
+        s.next_start(52),
+        None,
+        "initialization time is not healthy service uptime"
+    );
+    assert_eq!(s.state(0), Some(State::Failed));
+}
+#[test]
+fn healthy_reset_clock_starts_at_readiness_and_internal_failure_preserves_restart_desire() {
+    for (exit, can_restart) in [(110, false), (150, true)] {
+        let mut p = policy(Restart::OnFailure);
+        p.burst = 1;
+        p.window = 1000;
+        let mut s = Supervisor::new([p]).unwrap();
+        let start = s.next_start(0).unwrap();
+        s.spawned_waiting(start, key(10), 0).unwrap();
+        s.mark_ready(key(10), 100).unwrap();
+        s.completed(key(10), Completion::Fault(6), exit);
+        assert_eq!(s.next_start(exit + 2).is_some(), can_restart);
+    }
+    let mut s = Supervisor::new([policy(Restart::Always)]).unwrap();
+    let start = s.next_start(0).unwrap();
+    s.spawned_waiting(start, key(10), 0).unwrap();
+    assert_eq!(s.fail_run(0), Ok(Some(key(10))));
+    assert!(
+        s.mark_ready(key(10), 1).is_err(),
+        "timed out run cannot become ready"
+    );
+    s.completed(key(10), Completion::Killed, 1);
+    assert_eq!(s.state(0), Some(State::Backoff(3)));
+    s.stop(0).unwrap();
+    assert_eq!(s.next_deadline(), None);
+}

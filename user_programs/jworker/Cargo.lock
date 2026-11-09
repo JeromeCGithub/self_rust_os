@@ -66,6 +66,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustos-ipc-abi"
+version = "0.1.0"
+dependencies = [
+ "rustos-process-abi",
+]
+
+[[package]]
 name = "rustos-net-abi"
 version = "0.1.0"
 
@@ -82,6 +89,13 @@ name = "rustos-quickjs"
 version = "0.1.0"
 dependencies = [
  "libm",
+]
+
+[[package]]
+name = "rustos-service-abi"
+version = "0.1.0"
+dependencies = [
+ "rustos-ipc-abi",
 ]
 
 [[package]]
@@ -120,9 +134,11 @@ dependencies = [
  "linked_list_allocator",
  "rustos-audio-abi",
  "rustos-http",
+ "rustos-ipc-abi",
  "rustos-net-abi",
  "rustos-platform-abi",
  "rustos-process-abi",
+ "rustos-service-abi",
  "rustos-thread-abi",
  "spin",
 ]

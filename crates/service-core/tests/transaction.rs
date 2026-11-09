@@ -309,3 +309,28 @@ fn loss_during_cleanup_acknowledges_stop_without_requiring_a_second_event() {
     assert!(!e.active(a));
     assert!(e.unavailable(64).is_err());
 }
+
+#[test]
+fn admitted_stop_withdraws_desire_before_cleanup_while_preserving_other_root_references() {
+    let a = service("a", "");
+    let b = service("b", "Requires=a\n");
+    let mut e = engine(&[("A.UNIT", &a), ("B.UNIT", &b)]);
+    let (a, b) = (id(&e, "a"), id(&e, "b"));
+    e.begin_start("a").unwrap();
+    complete(&mut e);
+    e.begin_start("b").unwrap();
+    complete(&mut e);
+    e.begin_stop("b").unwrap();
+    assert!(
+        !e.wanted(b),
+        "stop intent disarms deadlines before native completion"
+    );
+    assert!(e.wanted(a), "another retained root still owns a");
+    assert!(
+        e.active(b),
+        "withdrawn desire is not a forged process completion"
+    );
+    complete(&mut e);
+    e.begin_stop("a").unwrap();
+    assert!(!e.wanted(a));
+}

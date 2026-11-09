@@ -107,6 +107,13 @@ pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: 
         return thread_dispatch(num, arg1, arg2, arg3);
     }
     match num {
+        120..=125 => crate::scheduler::ipc_syscall(num, arg1, arg2, arg3),
+        rustos_ipc_abi::SYS_SPAWN_BOUND => {
+            if arg3 != rustos_ipc_abi::SPAWN_SIZE as u64 {
+                return SYSCALL_ERROR;
+            }
+            crate::userspace::launch::spawn_bound(arg1, arg2)
+        }
         rustos_process_abi::isolation::SYS_RESTRICT => {
             crate::scheduler::restrict_worker(arg1, arg2, arg3)
         }
@@ -615,6 +622,24 @@ fn sys_spawn(
 
 /// Complete a validated process launch. All strings borrow kernel-owned data.
 pub(crate) fn spawn_at(path: &str, connected: bool, argv: &[&str], envp: &[&str]) -> u64 {
+    spawn_at_common(path, connected, argv, envp, &[])
+}
+/// Bound spawning uses its own v2 operation; connected stdio remains v1 only.
+pub(crate) fn spawn_at_bound(
+    path: &str,
+    argv: &[&str],
+    envp: &[&str],
+    bindings: &[rustos_ipc_abi::Binding],
+) -> u64 {
+    spawn_at_common(path, false, argv, envp, bindings)
+}
+fn spawn_at_common(
+    path: &str,
+    connected: bool,
+    argv: &[&str],
+    envp: &[&str],
+    bindings: &[rustos_ipc_abi::Binding],
+) -> u64 {
     // Resolve relative paths as filesystem mechanism; executable search remains
     // shell policy. The loader receives one explicit canonical absolute path.
     let binary = match crate::scheduler::load_program_from_disk(&path) {
@@ -631,7 +656,7 @@ pub(crate) fn spawn_at(path: &str, connected: bool, argv: &[&str], envp: &[&str]
         return PROCESS_EXIT_SENTINEL;
     }
     // Create the process (read-only size 0 = all writable for now).
-    match crate::scheduler::spawn_process_with_environment(&binary, 0, argv, envp) {
+    match crate::scheduler::spawn_process_with_bindings(&binary, 0, argv, envp, bindings) {
         Ok(pid) => {
             if connected && !crate::scheduler::connect_stdio(pid) {
                 let _ = crate::scheduler::kill(pid);

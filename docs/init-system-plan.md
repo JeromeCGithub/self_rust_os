@@ -14,8 +14,9 @@ the original inspection context. Implementation names are `Initator`
 (`user_programs/initator`), future `Nest` (user manager) and future `Spark`
 (control tool); illustrative `init`/`usermgr`/`initctl` paths below are design names.
 M2 is implemented; see [the native unit interface](initator-units.md) and
-[its validation and limits](initator-m2-progress.md). M3–M7
-remain future milestones.
+[its validation and limits](initator-m2-progress.md). M3 is partially implemented;
+see [current work and outstanding gates](initator-m3-progress.md). M4–M7 remain
+future milestones.
 
 The requested outcome is a native Ring 3 PID 1 that orchestrates boot and supervises
 system services, followed by a separate user manager that supervises login sessions
