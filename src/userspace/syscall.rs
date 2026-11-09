@@ -114,6 +114,12 @@ pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: 
             }
             crate::userspace::launch::spawn_bound(arg1, arg2)
         }
+        rustos_ipc_abi::SYS_SPAWN_IMAGE => {
+            if arg3 != rustos_ipc_abi::IMAGE_SPAWN_SIZE as u64 {
+                return SYSCALL_ERROR;
+            }
+            crate::userspace::launch::spawn_image(arg1, arg2)
+        }
         rustos_process_abi::isolation::SYS_RESTRICT => {
             crate::scheduler::restrict_worker(arg1, arg2, arg3)
         }

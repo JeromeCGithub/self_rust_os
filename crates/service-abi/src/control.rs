@@ -8,6 +8,7 @@ pub enum Access {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operation<'a> {
     Status { index: u32 },
+    Job { job: u64 },
     Logs { cursor: u64, offset: u16 },
     Start(&'a str),
     Stop(&'a str),
@@ -23,6 +24,7 @@ impl<'a> Request<'a> {
     pub fn encode(self, output: &mut [u8; MAX_FRAME]) -> Result<usize, Error> {
         self.validate()?;
         let (tag, length) = match self.operation {
+            Operation::Job { .. } => (22, 8),
             Operation::Status { .. } => (16u32, 4),
             Operation::Start(name) => (17, name.len()),
             Operation::Stop(name) => (18, name.len()),
@@ -36,6 +38,7 @@ impl<'a> Request<'a> {
         output[8..16].copy_from_slice(&self.id.to_le_bytes());
         output[16..20].copy_from_slice(&(length as u32).to_le_bytes());
         match self.operation {
+            Operation::Job { job: 0 } => return Err(Error::Invalid),
             Operation::Status { index } => {
                 output[HEADER..HEADER + 4].copy_from_slice(&index.to_le_bytes())
             }
@@ -45,6 +48,9 @@ impl<'a> Request<'a> {
             }
             Operation::Start(name) | Operation::Stop(name) | Operation::Restart(name) => {
                 output[HEADER..HEADER + length].copy_from_slice(name.as_bytes());
+            }
+            Operation::Job { job } => {
+                output[HEADER..HEADER + 8].copy_from_slice(&job.to_le_bytes())
             }
             Operation::Shutdown => {}
         }
@@ -79,6 +85,9 @@ impl<'a> Request<'a> {
                 offset: u16::from_le_bytes([body[8], body[9]]),
             },
             21 if length == 0 => Operation::Shutdown,
+            22 if length == 8 => Operation::Job {
+                job: word64(body, 0)?,
+            },
             _ => return Err(Error::Invalid),
         };
         let request = Self {
@@ -93,6 +102,7 @@ impl<'a> Request<'a> {
             return Err(Error::Invalid);
         }
         match self.operation {
+            Operation::Job { job: 0 } => return Err(Error::Invalid),
             Operation::Status { index } if index >= 64 => return Err(Error::Limit),
             Operation::Logs { offset, .. } if offset as usize > MAX_TEXT => {
                 return Err(Error::Limit)
@@ -107,7 +117,7 @@ impl<'a> Request<'a> {
         Ok(())
     }
 }
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     let initial = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
     !name.is_empty()
         && name.len() <= 48

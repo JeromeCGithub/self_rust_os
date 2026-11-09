@@ -64,13 +64,17 @@ pub fn run() {
         );
     }
     let intruder = sys::spawn_with_args("/BIN/ZINIT.SVC", &["--intruder"]).expect("intruder");
+    // PORT occupies bit 64 in M3. Invalid-mask tests must use an unsupported
+    // bit, including a mixed supported/unsupported request, not block on PORT.
+    let unsupported = rustos_thread_abi::EVENT_ALL + 1;
     for (number, a, b, c) in [
         (35, 1, 0, 0),
         (35, 0, 1, 0),
         (35, 0, 0, 1),
         (37, (2u64 << 32) | u64::from(child), 0, 0),
         (109, 0, 0, 0),
-        (109, 64, 0, 0),
+        (109, unsupported, 0, 0),
+        (109, unsupported | rustos_thread_abi::EVENT_CHILD, 0, 0),
         (109, 32, u64::MAX, 0),
     ] {
         assert_eq!(raw(number, a, b, c), sys::SYSCALL_ERROR);

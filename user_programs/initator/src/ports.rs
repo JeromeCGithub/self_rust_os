@@ -1,7 +1,7 @@
 //! Per-run native grants. Kernel endpoint identity supplies provenance; unit/run
 //! claims in payloads never select a different service. Log intake performs no I/O.
 use rustos_service_core::{
-    config::{Readiness, Unit},
+    config::Readiness,
     journal::{Budget, Intake, Journal},
     manager::{Manager, Notification},
     ProcessKey, Start,
@@ -17,6 +17,7 @@ const LOG_RECORDS: usize = 256;
 pub struct Run {
     notify: Endpoint,
     log: Endpoint,
+    control: Option<crate::control_port::Connection>,
     key: ipc::ProcessKey,
     run: u64,
     init: abi::Message<'static>,
@@ -28,11 +29,28 @@ pub struct Run {
     log_resume: Option<u64>,
 }
 impl Run {
-    pub fn launch(unit: &Unit, start: Start) -> Result<Self, ()> {
+    pub fn launch(unit: &crate::launcher::Spec, start: Start) -> Result<Self, ()> {
+        if start.run == 0 {
+            return Err(());
+        }
+        let image = unit.image()?;
+        if unit.cancelled() {
+            return Err(());
+        }
         // Complete fallible local setup before publishing a child. After a
         // successful spawn the returned Run must account for that live process.
         let notify_budget = Budget::new(8, 1).map_err(|_| ())?;
         let log_budget = Budget::new(4, 1).map_err(|_| ())?;
+        if start.run == 0 {
+            return Err(());
+        }
+        let control_budget = Budget::new(4, 1).map_err(|_| ())?;
+        let (control, mut child_control) = if unit.control.is_some() {
+            let [parent, child] = Endpoint::pair()?;
+            (Some(parent), Some(child))
+        } else {
+            (None, None)
+        };
         let [notify, mut child_notify] = Endpoint::pair()?;
         let [log, mut child_log] = Endpoint::pair()?;
         let mut args = [""; 32];
@@ -43,27 +61,52 @@ impl Run {
         for (slot, value) in env.iter_mut().zip(&unit.environment) {
             *slot = value;
         }
-        let path = unit.executable.as_deref().ok_or(())?;
-        let pid = ipc::spawn(
+        let path = unit.executable.as_str();
+        let mut bindings = alloc::vec::Vec::new();
+        bindings.try_reserve_exact(3).map_err(|_| ())?;
+        let duplex = Rights::from_bits(3).map_err(|_| ())?;
+        bindings.push(Binding {
+            endpoint: &mut child_notify,
+            tag: abi::NOTIFY_TAG,
+            rights: duplex,
+        });
+        bindings.push(Binding {
+            endpoint: &mut child_log,
+            tag: abi::LOG_TAG,
+            rights: Rights::SEND,
+        });
+        if let Some(child) = child_control.as_mut() {
+            bindings.push(Binding {
+                endpoint: child,
+                tag: abi::CONTROL_TAG,
+                rights: duplex,
+            });
+        }
+        if unit.cancelled() {
+            return Err(());
+        }
+        let pid = ipc::spawn_image(
             path,
+            &image,
             &args[..unit.arguments.len()],
             &env[..unit.environment.len()],
-            &mut [
-                Binding {
-                    endpoint: &mut child_notify,
-                    tag: abi::NOTIFY_TAG,
-                    rights: Rights::from_bits(3).map_err(|_| ())?,
-                },
-                Binding {
-                    endpoint: &mut child_log,
-                    tag: abi::LOG_TAG,
-                    rights: Rights::SEND,
-                },
-            ],
+            &mut bindings,
         )?;
+        let key = ipc::ProcessKey { pid, generation: 1 };
+        let control = match (control, unit.control) {
+            (Some(endpoint), Some(access)) => Some(crate::control_port::Connection::new(
+                endpoint,
+                key,
+                start.run,
+                access,
+                control_budget,
+            )),
+            _ => None,
+        };
         Ok(Self {
             notify,
             log,
+            control,
             key: ipc::ProcessKey { pid, generation: 1 },
             run: start.run,
             init: abi::Message::Init {
@@ -156,25 +199,43 @@ impl Ports {
         }
         Ok(())
     }
+    pub fn refresh_control(&mut self, manager: &Manager) {
+        for run in self.runs.iter_mut().flatten().filter(|run| !run.closing) {
+            if let Some(control) = run.control.as_mut() {
+                control.refresh(manager);
+            }
+        }
+    }
     pub fn next_deadline(&self) -> Option<u64> {
         self.runs
             .iter()
             .flatten()
-            .flat_map(|r| [r.notify_resume, r.log_resume])
+            .flat_map(|r| {
+                [
+                    r.notify_resume,
+                    r.log_resume,
+                    r.control.as_ref().and_then(|c| c.deadline()),
+                ]
+            })
             .flatten()
             .min()
     }
-    pub fn drain(&mut self, manager: &mut Manager) -> Result<(), ()> {
+    pub fn drain(&mut self, manager: &mut Manager, wake: ipc::Handle) -> Result<(), ()> {
         for _ in 0..64 {
             let Some(event) = ipc::next()? else {
                 break;
             };
-            let Some((unit, notify)) = self.runs.iter().enumerate().find_map(|(unit, slot)| {
+            if event.endpoint == wake {
+                continue;
+            }
+            let Some((unit, role)) = self.runs.iter().enumerate().find_map(|(unit, slot)| {
                 let run = slot.as_ref()?;
                 if run.notify.raw() == Some(event.endpoint) {
-                    Some((unit, true))
+                    Some((unit, 0))
                 } else if run.log.raw() == Some(event.endpoint) {
-                    Some((unit, false))
+                    Some((unit, 1))
+                } else if run.control.as_ref().and_then(|c| c.raw()) == Some(event.endpoint) {
+                    Some((unit, 2))
                 } else {
                     None
                 }
@@ -183,6 +244,15 @@ impl Ports {
                 continue;
             };
             let run = self.runs[unit].as_mut().ok_or(())?;
+            if role == 2 {
+                if !run.closing {
+                    if let Some(control) = run.control.as_mut() {
+                        control.event(&event, manager, &self.journal);
+                    }
+                }
+                continue;
+            }
+            let notify = role == 0;
             if event.kind == Kind::Writable {
                 if notify {
                     run.initialize()?;

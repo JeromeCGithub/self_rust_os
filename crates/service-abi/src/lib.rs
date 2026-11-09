@@ -1,5 +1,6 @@
 //! Application protocol over authenticated native endpoints; payload IDs are not authority.
 #![no_std]
+pub use rustos_ipc_abi::ProcessKey as PeerKey;
 pub const NOTIFY_TAG: u32 = 1;
 pub const LOG_TAG: u32 = 2;
 pub const CONTROL_TAG: u32 = 3;
@@ -257,3 +258,4 @@ impl ClientState {
 }
 
 pub mod control;
+pub mod replies;

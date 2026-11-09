@@ -334,3 +334,58 @@ fn admitted_stop_withdraws_desire_before_cleanup_while_preserving_other_root_ref
     e.begin_stop("a").unwrap();
     assert!(!e.wanted(a));
 }
+
+#[test]
+fn control_endpoints_count_against_the_shared_native_handle_headroom() {
+    let mut files: Vec<(String, String)> = (0..38)
+        .map(|n| {
+            (
+                format!("U{n:02}.UNIT"),
+                service(&format!("u{n:02}"), "ControlAccess=status\n"),
+            )
+        })
+        .collect();
+    files.push((
+        "BOOT.UNIT".into(),
+        format!(
+            "Version=1\nKind=target\nName=boot\n{}",
+            (0..37)
+                .map(|n| format!("Requires=u{n:02}\n"))
+                .collect::<String>()
+        ),
+    ));
+    let views: Vec<_> = files
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_str()))
+        .collect();
+    let mut e = engine(&views);
+    e.begin_start("boot").unwrap();
+    assert_eq!(complete(&mut e).len(), 37);
+    // 37*3=111 parent handles; the protected admission budget is 112.
+    assert_eq!(e.begin_start("u37"), Err(Error::Limit));
+    assert_eq!(e.next_command(), None);
+}
+
+#[test]
+fn restart_has_one_job_and_stops_only_its_service_even_when_another_root_retains_it() {
+    let a = service("a", "");
+    let b = service("b", "Requires=a\n");
+    let mut e = engine(&[("A.UNIT", &a), ("B.UNIT", &b)]);
+    e.begin_start("b").unwrap();
+    complete(&mut e);
+    let a = id(&e, "a");
+    let b = id(&e, "b");
+    let job = e.begin_restart("a").unwrap();
+    assert_eq!(e.next_command(), Some(Command::Stop(a)));
+    assert_eq!(e.next_command(), None);
+    assert_eq!(e.outcome(), Outcome::Running);
+    assert!(e.active(b));
+    assert_eq!(e.begin_stop("b"), Err(Error::Busy));
+    e.stopped(job, a).unwrap();
+    assert_eq!(e.next_command(), Some(Command::Start(a)));
+    assert_eq!(e.job_id(), Some(job));
+    e.started(job, a, Ok(())).unwrap();
+    assert_eq!(e.next_command(), None);
+    assert_eq!(e.outcome(), Outcome::Succeeded);
+    assert!(e.active(a) && e.active(b));
+}

@@ -156,6 +156,29 @@ pub fn spawn(
     environment: &[&str],
     bindings: &mut [Binding<'_>],
 ) -> Result<u32, ()> {
+    spawn_inner(path, None, arguments, environment, bindings)
+}
+/// Create a process from a caller-owned image. The kernel snapshots and validates
+/// all bytes; `name` supplies literal argv[0], with no filesystem lookup/search.
+pub fn spawn_image(
+    name: &str,
+    image: &[u8],
+    arguments: &[&str],
+    environment: &[&str],
+    bindings: &mut [Binding<'_>],
+) -> Result<u32, ()> {
+    if image.is_empty() {
+        return Err(());
+    }
+    spawn_inner(name, Some(image), arguments, environment, bindings)
+}
+fn spawn_inner(
+    path: &str,
+    image: Option<&[u8]>,
+    arguments: &[&str],
+    environment: &[&str],
+    bindings: &mut [Binding<'_>],
+) -> Result<u32, ()> {
     if arguments.len() >= rustos_process_abi::MAX_VECTOR
         || environment.len() > rustos_process_abi::MAX_VECTOR
         || bindings.len() > abi::MAX_BINDINGS
@@ -182,7 +205,7 @@ pub fn spawn(
             .map_err(|_| ())?,
         );
     }
-    let request = abi::Spawn {
+    let launch = abi::Spawn {
         argv: argv.as_ptr() as u64,
         argc: argv.len() as u64,
         envp: if envp.is_empty() {
@@ -197,22 +220,38 @@ pub fn spawn(
             grants.as_ptr() as u64
         },
         binding_count: grants.len() as u64,
-    }
-    .encode()
-    .map_err(|_| ())?;
-    let path = sys::path_buf(path).ok_or(())?;
-    // SAFETY: The NUL path, exact initialized request, contiguous padding-free
-    // string/binding records and every referenced immutable string remain live
-    // throughout this synchronous call. Kernel copies all records/strings and
-    // revalidates ownership before publication; no user reference is retained.
-    let result = unsafe {
-        sys::syscall(
+    };
+    let mut request = [0; abi::IMAGE_SPAWN_SIZE];
+    let path_buffer = if image.is_none() {
+        Some(sys::path_buf(path).ok_or(())?)
+    } else {
+        None
+    };
+    let (number, pointer, size) = if let Some(image) = image {
+        request = abi::ImageSpawn {
+            launch,
+            image_length: image.len() as u64,
+        }
+        .encode()
+        .map_err(|_| ())?;
+        (
+            abi::SYS_SPAWN_IMAGE,
+            image.as_ptr() as u64,
+            abi::IMAGE_SPAWN_SIZE,
+        )
+    } else {
+        request[..abi::SPAWN_SIZE].copy_from_slice(&launch.encode().map_err(|_| ())?);
+        (
             abi::SYS_SPAWN_BOUND,
-            path.as_ptr() as u64,
-            request.as_ptr() as u64,
-            abi::SPAWN_SIZE as u64,
+            path_buffer.as_ref().ok_or(())?.as_ptr() as u64,
+            abi::SPAWN_SIZE,
         )
     };
+    // SAFETY: The complete path/image and initialized request/record arrays,
+    // including each referenced immutable argument/environment string, remain
+    // mapped and live through this synchronous call. The kernel validates and
+    // snapshots the full ranges before construction; it retains no user reference.
+    let result = unsafe { sys::syscall(number, pointer, request.as_ptr() as u64, size as u64) };
     let pid = u32::try_from(result).map_err(|_| ())?;
     for binding in bindings.iter_mut() {
         binding.endpoint.handle = None;

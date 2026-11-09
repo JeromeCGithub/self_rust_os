@@ -11,6 +11,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / 'tools'))
+from init_rollback import verify_early_exit
 from qemu_platform import arguments
 from qemu_test import copy_disk, disk_image, console_text
 
@@ -41,6 +42,23 @@ def fixture(case):
         mode = '--log-exit' if case == 'log-exit' else '--watchdog'
         files['C.UNIT'] = unit('wick', '/BIN/FLICKER.SVC', policy + f'Arg={mode}\n')
         files['BOOT.UNIT'] += 'Wants=wick\n'
+        return files
+    if case == 'control-pressure':
+        return {
+            'A.UNIT': unit('beacon','/BIN/GLOW.SVC'),
+            'C.UNIT': unit('spark','/BIN/SPARK.SVC','ControlAccess=status\nArg=--probe-pressure\n'),
+            'D.UNIT': unit('wick','/BIN/FLICKER.SVC','Ready=notify\nStartTimeoutTicks=18\nWatchdogTicks=6\nArg=--watchdog\nRestart=on-failure\nRestartDelayTicks=2\nRestartMaxDelayTicks=8\nRestartBurst=3\nRestartWindowTicks=1000\nHealthyResetTicks=90\n'),
+            'BOOT.UNIT': 'Version=1\nKind=target\nName=boot\nRequires=beacon\nRequires=spark\nWants=wick\n',
+        }
+    if case in ('control-status', 'control-manage', 'control-restart'):
+        access = 'status' if case == 'control-status' else 'manage'
+        probe = 'restart' if case == 'control-restart' else access
+        files = {
+            'A.UNIT': unit('beacon', '/BIN/GLOW.SVC'),
+            'C.UNIT': unit('spark', '/BIN/SPARK.SVC', f'ControlAccess={access}\nArg=--probe-{probe}\n'),
+            'BOOT.UNIT': 'Version=1\nKind=target\nName=boot\nRequires=beacon\nRequires=spark\n',
+        }
+        if case == 'control-manage': files['D.UNIT'] = unit('fern', '/BIN/FLICKER.SVC', 'RestartBurst=32\n')
         return files
     if case == 'service-budget':
         files={f'U{n:02}.UNIT':unit(f'u{n:02}','/BIN/GLOW.SVC') for n in range(57)}
@@ -89,7 +107,7 @@ def fixture(case):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--case', choices=['configured','packaged','cycle','unknown','malformed',
-        'required-failure','optional-failure','vectors','too-many','total-budget','oversize','encoding','early-exit','service-budget','order-only','notify','notify-timeout','watchdog','heartbeat','wrong-ready','log-ready','foreign-ready','log-flood','log-exit'], default='configured')
+        'required-failure','optional-failure','vectors','too-many','total-budget','oversize','encoding','early-exit','service-budget','order-only','notify','notify-timeout','watchdog','heartbeat','wrong-ready','log-ready','foreign-ready','log-flood','log-exit','control-status','control-manage','control-pressure','control-restart'], default='configured')
     parser.add_argument('--timeout', type=float, default=60)
     args = parser.parse_args()
     cpus = int(os.environ.get('RUSTOS_CPUS','1'))
@@ -111,6 +129,9 @@ def main():
         if args.case in ('notify','notify-timeout','watchdog','heartbeat','wrong-ready','log-ready','foreign-ready','log-flood','log-exit'):
             subprocess.run(['mcopy','-o','-i',image,
                 str(ROOT/'user_programs/flicker/flicker.bin'),'::/BIN/FLICKER.SVC'],check=True)
+        if args.case.startswith('control-'):
+            for program in ('initator', 'spark', 'flicker'):
+                subprocess.run(['mcopy','-o','-i',image,str(ROOT/f'user_programs/{program}/{program}.bin'),f'::/BIN/{program.upper()}.SVC'],check=True)
         if args.case == 'vectors':
             subprocess.run(['mcopy','-o','-i',image,
                 str(ROOT/'user_programs/zinit/zinit.bin'),'::/BIN/ZINIT.SVC'],check=True)
@@ -126,6 +147,41 @@ def main():
                 assert 'Kernel panic' not in raw and '[initator-fatal]' not in raw,raw[-6000:]
                 if args.case in ('notify','notify-timeout','watchdog','heartbeat','wrong-ready','log-ready','foreign-ready','log-flood','log-exit'):
                     assert 'panicked' not in raw,raw[-6000:]
+                if args.case == 'control-pressure':
+                    assert 'panicked' not in raw and '[spark] unknown command' not in output,raw[-6000:]
+                    if '[spark] reply pressure PASS messages=16 closed=true' in output and '[glow] beat=3' in output:
+                        assert output.count('reason=Some(Watchdog)')==3
+                        assert output.count('cause=Killed status=9')==3
+                        assert output.count('[initator] started name=wick ')==3
+                        assert '[initator] stopping name=beacon ' not in output
+                        assert output.index('cause=Killed status=9')<output.index('[spark] reply pressure PASS')
+                        print(f'PASS: full control replies do not block watchdogs; malformed client is disconnected: {log}');return
+                if args.case == 'control-restart':
+                    assert 'panicked' not in raw and '[spark] unknown command' not in output,raw[-6000:]
+                    if '[spark] referenced restart PASS' in output and '[glow] beat=3' in output:
+                        starts=re.findall(r'\[initator\] started name=beacon unit=0 run=(\d+) pid=(\d+)',output)
+                        assert len(starts)==2 and len({pid for _,pid in starts})==2
+                        assert output.count('[initator] stopping name=beacon ')==1
+                        assert output.count('cause=Killed status=9')==1
+                        assert output.index('cause=Killed status=9')<output.index('[spark] referenced restart PASS')
+                        assert output.count('[initator] started name=spark ')==1
+                        print(f'PASS: one restart job replaces a referenced service after completion: {log}');return
+                if args.case == 'control-manage':
+                    assert 'panicked' not in raw and '[spark] unknown command' not in output,raw[-6000:]
+                    if '[spark] management lifecycle PASS cycles=16' in output and '[glow] beat=3' in output:
+                        starts=re.findall(r'\[initator\] started name=fern unit=2 run=(\d+) pid=(\d+)',output)
+                        assert len(starts)==17 and len({pid for _,pid in starts})==17
+                        assert output.count('[initator] stopping name=fern ')==17
+                        assert output.count('cause=Killed status=9')==17
+                        assert '[initator] stopping name=beacon ' not in output
+                        print(f'PASS: Spark start/stop jobs, identities and repeated resource recovery: {log}');return
+                if args.case == 'control-status':
+                    assert 'panicked' not in raw,raw[-6000:]
+                    if '[spark] status authorization PASS' in output and '[glow] beat=3' in output:
+                        assert '[initator] started name=beacon ' in output
+                        assert '[initator] stopping name=beacon ' not in output
+                        assert 'cause=Exited status=0' in output
+                        print(f'PASS: explicit readonly control pages and denied lifecycle effects: {log}');return
                 if args.case in ('log-flood', 'log-exit'):
                     cause = 'cause=Exited status=23' if args.case == 'log-exit' else 'cause=Killed status=9'
                     if (output.count(cause) == 3 and '[glow] beat=3' in output
@@ -192,17 +248,7 @@ def main():
                         print(f'PASS: After waits for settlement without requiring success: {log}');return
                 elif args.case == 'early-exit':
                     if 'cause=Fault status=6' in output and '[initator] activation outcome=Failed' in output:
-                        # Spawned readiness cannot make a userspace event check
-                        # atomic with the next syscall. If the exit races that
-                        # launch, exclusive cleanup must finish before failure.
-                        started=output.find('[initator] started name=ember ')
-                        completion=output.index('cause=Fault status=6')
-                        if started>=0:
-                            assert started<completion,'dependent started after observed exit'
-                            assert output.count('[initator] started name=ember ')==1
-                            assert '[initator] stopping name=ember ' in output
-                            assert 'cause=Killed status=9' in output
-                            assert output.index('cause=Killed status=9')<output.index('activation outcome=Failed')
+                        verify_early_exit(output)
                         print(f'PASS: prerequisite exit blocks activation or completes raced-child rollback: {log}');return
                 elif args.case == 'vectors':
                     if '[unit-probe] vectors PASS' in output and '[initator] activation outcome=Succeeded' in output:

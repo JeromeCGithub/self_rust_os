@@ -11,11 +11,14 @@ are proposed unless explicitly identified as existing.
 Delivery update: M1 is implemented as an opt-in profile; see
 [its validation and limits](initator-progress.md). Baseline findings below retain
 the original inspection context. Implementation names are `Initator`
-(`user_programs/initator`), future `Nest` (user manager) and future `Spark`
+(`user_programs/initator`), future `Nest` (user manager) and `Spark`
 (control tool); illustrative `init`/`usermgr`/`initctl` paths below are design names.
 M2 is implemented; see [the native unit interface](initator-units.md) and
-[its validation and limits](initator-m2-progress.md). M3 is partially implemented;
-see [current work and outstanding gates](initator-m3-progress.md). M4–M7 remain
+[its validation and limits](initator-m2-progress.md). M3 is implemented and locally validated;
+see [its evidence and limits](initator-m3-progress.md) and
+[the real host backend](initator-host.md). M3 now includes native control and a
+chunked launch worker with image syscall 127, added after measured single-CPU
+synchronous loading exceeded the declared watchdog tolerance. M4–M7 remain
 future milestones.
 
 The requested outcome is a native Ring 3 PID 1 that orchestrates boot and supervises

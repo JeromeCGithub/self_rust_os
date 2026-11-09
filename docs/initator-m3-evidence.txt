@@ -1,0 +1,784 @@
+Initator M3 evidence captured 2026-11-09
+
+Commands and scope: docs/initator-m3-progress.md.
+Local raw serial logs remain under target/init/ and target/init-units/.
+This extract retains complete red assertions and final command summaries.
+No hardware/manual host GUI validation is claimed.
+
+=== Core cancellation regression, red (cancel-token-red.log) ===
+   Compiling rustos-service-core v0.1.0 (/home/jay/personal/self_rust_os-initator/crates/service-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/readiness.rs (/home/jay/personal/self_rust_os-initator/crates/service-core/target/x86_64-unknown-linux-gnu/debug/deps/readiness-40f20e532fff3e45)
+
+running 1 test
+test asynchronous_backend_can_cancel_the_exact_unpublished_start_after_stop_or_timeout ... FAILED
+
+failures:
+
+---- asynchronous_backend_can_cancel_the_exact_unpublished_start_after_stop_or_timeout stdout ----
+
+thread 'asynchronous_backend_can_cancel_the_exact_unpublished_start_after_stop_or_timeout' panicked at tests/readiness.rs:452:5:
+assertion failed: m.launch_cancelled(start)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    asynchronous_backend_can_cancel_the_exact_unpublished_start_after_stop_or_timeout
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test readiness`
+
+=== Required-dependent cancellation regression, red (cancel-dependency-red.log) ===
+   Compiling rustos-service-core v0.1.0 (/home/jay/personal/self_rust_os-initator/crates/service-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/readiness.rs (/home/jay/personal/self_rust_os-initator/crates/service-core/target/x86_64-unknown-linux-gnu/debug/deps/readiness-40f20e532fff3e45)
+
+running 1 test
+test prerequisite_failure_cancels_an_unpublished_dependent_before_its_loader_finishes ... FAILED
+
+failures:
+
+---- prerequisite_failure_cancels_an_unpublished_dependent_before_its_loader_finishes stdout ----
+
+thread 'prerequisite_failure_cancels_an_unpublished_dependent_before_its_loader_finishes' panicked at tests/readiness.rs:486:5:
+failed prerequisite must interrupt pending loading
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    prerequisite_failure_cancels_an_unpublished_dependent_before_its_loader_finishes
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test readiness`
+
+=== Core suite, green (core-cancel-full.log) ===
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 16 tests
+test control_grants_are_explicit_service_only_and_fail_closed ... ok
+test crlf_comments_and_outer_ascii_whitespace_are_supported ... ok
+test duplicate_singletons_environment_names_and_edges_are_rejected ... ok
+test encoding_and_line_errors_are_precise ... ok
+test rejects_service_fields_in_targets_even_when_kind_is_last ... ok
+test rejects_control_characters_in_values_before_allocation ... ok
+test notify_configuration_has_explicit_start_deadline_and_optional_watchdog ... ok
+test bounds_file_vectors_launch_bytes_and_dependency_names ... ok
+test service_preserves_explicit_vectors_without_shell_semantics ... ok
+test target_rejects_readiness_timing_keys_even_when_kind_is_last ... ok
+test target_retains_activation_and_ordering_as_distinct_edges ... ok
+test unsupported_future_mechanisms_are_not_silently_accepted ... ok
+test validates_numeric_boundaries_and_cross_field_restart_limits ... ok
+test validates_required_fields_names_paths_and_environment ... ok
+test watchdog_requires_notify_and_new_timing_fields_reject_duplicates_and_invalid_numbers ... ok
+test exact_file_launch_environment_and_edge_limits_are_observable ... ok
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 4 tests
+test malformed_in_memory_requests_cannot_bypass_decoder_or_exhaust_sequence ... ok
+test management_authority_is_bound_to_exact_peer_generation_and_run_before_effects ... ok
+test readonly_grant_can_observe_but_cannot_start_stop_restart_or_shutdown ... ok
+test replacing_connection_never_inherits_replay_state_or_old_authority ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 4 tests
+test logs_fragment_without_splitting_unicode_and_detect_evicted_continuations ... ok
+test lifecycle_job_reply_never_acknowledges_stop_before_child_completion ... ok
+test restart_reply_tracks_the_complete_stop_and_replacement_job ... ok
+test denied_control_has_no_lookup_job_or_process_effect_and_readonly_can_query ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 9 tests
+test activation_closure_distinguishes_ordering_and_optional_membership ... ok
+test catalog_order_is_independent_of_filesystem_enumeration ... ok
+test cycles_report_the_actual_closed_path_including_mixed_edges ... ok
+test membership_is_not_an_ordering_barrier ... ok
+test unknown_units_and_duplicate_sources_fail_before_activation ... ok
+test validates_unselected_cycles_and_preserves_source_parse_location ... ok
+test aggregate_byte_and_edge_budgets_are_enforced ... ok
+test supports_all_64_catalog_bits_and_rejects_the_65th_unit ... ok
+test aggregate_edges_fail_before_resolving_or_activating_any_node ... ok
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 5 tests
+test bad_records_do_not_advance_sequences_or_replace_valid_data ... ok
+test rate_budget_does_not_reset_forever_when_the_clock_cannot_form_a_new_deadline ... ok
+test bounded_overwrite_reports_cursor_gaps_and_reuses_storage ... ok
+test records_preserve_typed_attribution_unicode_and_chronological_cursor ... ok
+test source_budget_pauses_until_a_deadline_and_refills_at_the_exact_boundary ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 7 tests
+test explicit_activation_at_exhausted_rate_limit_fails_instead_of_stalling ... ok
+test dependency_activation_and_event_driven_restart_share_one_host_tested_adapter ... ok
+test a_previously_settled_required_target_waits_for_startup_replacement ... ok
+test observed_loss_before_dependent_start_prevents_activation_and_restart ... ok
+test explicit_stop_cancels_backoff_and_late_results_cannot_change_a_new_run ... ok
+test spawn_failure_rolls_back_and_suppresses_retries_for_unowned_branches ... ok
+test retryable_startup_loss_holds_dependents_until_replacement_or_terminal_limit ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 3 tests
+test full_buffer_retains_all_status_and_requires_child_intake_backpressure ... ok
+test duplicate_status_never_changes_failure_cause_or_restart_time ... ok
+test early_completion_survives_publication_and_cannot_match_a_reused_identity ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 16 tests
+test asynchronous_backend_can_cancel_the_exact_unpublished_start_after_stop_or_timeout ... ok
+test dependency_waits_for_authenticated_ready_and_rejects_early_duplicate_or_stale_notifications ... ok
+test explicit_restart_keeps_one_job_until_new_ready_and_ignores_old_completion ... ok
+test exact_start_deadline_rejects_late_ready_and_waits_for_real_exit_before_failing_job ... ok
+test failed_inflight_launch_acknowledges_stop_and_rejects_a_duplicate_late_result ... ok
+test explicit_restart_does_not_bypass_rolling_start_limit ... ok
+test prerequisite_failure_cancels_an_unpublished_dependent_before_its_loader_finishes ... ok
+test explicit_stop_disarms_watchdog_and_suppresses_automatic_restart ... ok
+test start_deadline_overflow_fails_admission_without_a_process_effect_or_wrapped_timer ... ok
+test restart_during_automatic_launch_waits_for_late_publication_and_termination ... ok
+test stop_after_watchdog_kill_still_waits_for_the_outstanding_child ... ok
+test stopping_an_unready_replacement_waits_for_its_real_process_completion ... ok
+test stop_waits_for_an_inflight_replacement_and_terminates_its_late_publication ... ok
+test timed_out_pending_launch_cleans_up_late_success_without_publishing_readiness ... ok
+test zero_exit_before_ready_keeps_activation_pending_through_restart_and_rejects_old_generation ... ok
+test watchdog_stops_and_restarts_only_its_run_and_late_heartbeat_cannot_rescue_it ... ok
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 16 tests
+test explicit_readiness_is_a_distinct_state_and_stale_or_duplicate_ready_is_rejected ... ok
+test inactive_catalog_only_starts_explicitly_admitted_services ... ok
+test reactivation_waits_for_cleanup_and_preserves_rate_limit_history ... ok
+test healthy_reset_clock_starts_at_readiness_and_internal_failure_preserves_restart_desire ... ok
+test an_exit_before_ready_is_a_failed_start_and_never_resets_healthy_history ... ok
+test restart_history_bound_is_validated_before_start ... ok
+test restart_limit_uses_a_rolling_window_across_old_window_boundary ... ok
+test restart_storm_has_exponential_delay_and_a_terminal_limit ... ok
+test reused_pid_does_not_match_old_generation ... ok
+test rolling_history_reuses_storage_when_old_attempts_expire ... ok
+test stop_during_spawn_requires_cleanup_of_late_success ... ok
+test stop_suppresses_always_restart_and_cancels_backoff ... ok
+test success_failure_and_spawn_failure_follow_policy ... ok
+test two_children_are_independent_and_second_failure_does_not_wait_for_first ... ok
+test unhealthy_short_runs_do_not_reset_budget_but_healthy_run_does ... ok
+test validates_limits_and_never_wraps_deadlines ... ok
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 15 tests
+test cleanup_uses_reverse_actual_activation_order ... ok
+test admitted_stop_withdraws_desire_before_cleanup_while_preserving_other_root_references ... ok
+test duplicate_requests_coalesce_conflicts_and_stale_results_are_rejected ... ok
+test loss_during_cleanup_acknowledges_stop_without_requiring_a_second_event ... ok
+test failed_optional_group_does_not_keep_its_exclusive_prerequisites_running ... ok
+test observed_prerequisite_loss_blocks_dependents_and_waits_for_late_siblings ... ok
+test optional_failure_degrades_target_but_after_is_only_a_settled_barrier ... ok
+test post_activation_loss_keeps_desire_without_binding_dependents_to_liveness ... ok
+test prerequisites_wait_for_activation_and_independent_starts_can_overlap ... ok
+test restart_has_one_job_and_stops_only_its_service_even_when_another_root_retains_it ... ok
+test required_failure_never_starts_dependent_and_rolls_back_exclusive_services ... ok
+test rollback_and_explicit_stop_preserve_services_owned_by_another_root ... ok
+test stale_transaction_results_cannot_complete_a_new_run_of_the_same_unit ... ok
+test control_endpoints_count_against_the_shared_native_handle_headroom ... ok
+test service_headroom_counts_all_retained_roots_and_is_released_on_stop ... ok
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+=== Host runtime and CLI, green (host-final.log) ===
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 2 tests
+test executable_rejects_an_invalid_catalog_before_launching_anything ... ok
+test executable_loads_a_real_catalog_and_reports_actual_host_readiness ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+running 7 tests
+test invalid_stream_length_terminates_and_collects_the_owned_child ... ok
+test real_child_ready_and_exit_are_delivered_without_polling_process_status ... ok
+test launch_worker_backpressure_queues_admitted_units_instead_of_failing_the_boot_job ... ok
+test idle_service_blocks_in_readiness_wait_and_stale_identity_cannot_kill_replacement ... ok
+test real_failures_restart_with_distinct_identities_and_stop_at_configured_budget ... ok
+test blocked_launch_worker_does_not_hold_watchdog_or_late_child_cleanup ... ok
+test real_log_flood_is_bounded_while_another_child_watchdog_completes ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+=== IPC wire ABI, green (ipc-abi-final.log) ===
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 7 tests
+test binding_frames_reject_unknown_rights_reserved_fields_and_zero_tags ... ok
+test bound_spawn_v2_has_a_distinct_frame_and_keeps_v1_layout_unchanged ... ok
+test image_spawn_extends_bound_launch_without_reinterpreting_path_frames ... ok
+test malformed_wire_never_looks_like_an_authenticated_event ... ok
+test message_roundtrip_authenticates_kernel_supplied_identity_and_zeroes_tail ... ok
+test unsupported_spawn_flags_counts_and_frame_lengths_fail_before_binding_work ... ok
+test peer_close_and_writable_signals_never_fabricate_a_sender_or_payload ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+=== Channel objects, green (ipc-core-final.log) ===
+running 3 tests
+test tests::opaque_handle_ids_never_reach_syscall_control_sentinels ... ok
+test tests::fairness_exhaustion_is_reported_before_delivery_and_does_not_wrap ... ok
+test tests::sequence_exhaustion_never_publishes_partial_objects_or_prevents_cleanup ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 12 tests
+test endpoint_scan_is_fair_across_a_flooding_channel_and_a_quiet_peer ... ok
+test fifo_is_bounded_and_sender_identity_is_not_supplied_in_payload ... ok
+test backpressure_has_explicit_one_shot_writable_interest ... ok
+test foreign_stale_closed_and_wrong_generation_handles_are_denied ... ok
+test paused_receive_interest_keeps_data_queued_without_starving_control_or_losing_eof ... ok
+test peek_copy_failure_does_not_consume_and_stale_ack_cannot_remove_new_message ... ok
+test queued_data_survives_an_explicit_receive_grant_but_old_owner_cannot_ack_it ... ok
+test spawn_bindings_are_atomic_explicit_moves_with_rights_attenuation ... ok
+test peer_death_drains_messages_then_reports_close_once_and_frees_last_owner ... ok
+test stale_writable_ack_cannot_clear_a_rearmed_interest ... ok
+test global_channel_limit_recovers_without_stealing_another_owners_objects ... ok
+test per_owner_limits_leave_other_owners_capacity_and_repeated_cleanup_reuses_storage ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+=== Service wire protocol, green (service-abi-final.log) ===
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 3 tests
+test job_queries_use_nonzero_exact_tokens_instead_of_ambiguous_latest_status ... ok
+test control_frames_reject_bad_ids_names_offsets_reserved_bytes_and_notification_kinds ... ok
+test management_requests_roundtrip_without_allocation_or_shell_expansion ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 6 tests
+test client_never_sends_before_init_and_does_not_commit_ready_until_transport_succeeds ... ok
+test init_ready_and_heartbeat_roundtrip_have_exact_versioned_shapes ... ok
+test spawned_readiness_needs_no_ready_packet_and_watchdog_is_explicitly_absent ... ok
+test structured_log_is_bounded_unicode_and_cannot_inject_control_records ... ok
+test duplicate_or_malformed_init_cannot_replace_the_authenticated_run_context ... ok
+test forged_runs_unknown_kinds_bad_lengths_and_reserved_flags_are_rejected ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 2 tests
+test invalid_metadata_never_encodes_as_a_trusted_snapshot ... ok
+test reply_pages_roundtrip_and_reject_all_truncation_and_trailing_data ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+=== Tooling suite, green (python-final.log) ===
+
+
+=== Native configured services, final green (units-cancel-final-matrix.log) ===
+RUN 1 CPUs configured
+qemu-system-x86_64: terminating on signal 15 from pid 47049 (python3)
+PASS: configured ordering and two live services: /home/jay/personal/self_rust_os-initator/target/init-units/configured-1.log
+RUN 1 CPUs packaged
+qemu-system-x86_64: terminating on signal 15 from pid 47105 (python3)
+PASS: configured ordering and two live services: /home/jay/personal/self_rust_os-initator/target/init-units/packaged-1.log
+RUN 1 CPUs cycle
+qemu-system-x86_64: terminating on signal 15 from pid 48048 (python3)
+PASS: cycle rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/cycle-1.log
+RUN 1 CPUs unknown
+qemu-system-x86_64: terminating on signal 15 from pid 48058 (python3)
+PASS: unknown rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/unknown-1.log
+RUN 1 CPUs malformed
+qemu-system-x86_64: terminating on signal 15 from pid 48068 (python3)
+PASS: malformed rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/malformed-1.log
+RUN 1 CPUs required-failure
+qemu-system-x86_64: terminating on signal 15 from pid 48078 (python3)
+PASS: required-failure exclusive dependency cleanup acknowledged: /home/jay/personal/self_rust_os-initator/target/init-units/required-failure-1.log
+RUN 1 CPUs optional-failure
+qemu-system-x86_64: terminating on signal 15 from pid 48837 (python3)
+PASS: optional-failure exclusive dependency cleanup acknowledged: /home/jay/personal/self_rust_os-initator/target/init-units/optional-failure-1.log
+RUN 1 CPUs vectors
+qemu-system-x86_64: terminating on signal 15 from pid 48847 (python3)
+PASS: literal args, Unicode, empty values and explicit environment: /home/jay/personal/self_rust_os-initator/target/init-units/vectors-1.log
+RUN 1 CPUs too-many
+qemu-system-x86_64: terminating on signal 15 from pid 48857 (python3)
+PASS: too-many rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/too-many-1.log
+RUN 1 CPUs total-budget
+qemu-system-x86_64: terminating on signal 15 from pid 48929 (python3)
+PASS: total-budget rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/total-budget-1.log
+RUN 1 CPUs oversize
+qemu-system-x86_64: terminating on signal 15 from pid 48953 (python3)
+PASS: oversize rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/oversize-1.log
+RUN 1 CPUs encoding
+qemu-system-x86_64: terminating on signal 15 from pid 49106 (python3)
+PASS: encoding rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/encoding-1.log
+RUN 1 CPUs early-exit
+qemu-system-x86_64: terminating on signal 15 from pid 49119 (python3)
+PASS: prerequisite exit blocks activation or completes raced-child rollback: /home/jay/personal/self_rust_os-initator/target/init-units/early-exit-1.log
+RUN 1 CPUs service-budget
+qemu-system-x86_64: terminating on signal 15 from pid 49129 (python3)
+PASS: service-budget rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/service-budget-1.log
+RUN 1 CPUs order-only
+qemu-system-x86_64: terminating on signal 15 from pid 49340 (python3)
+PASS: After waits for settlement without requiring success: /home/jay/personal/self_rust_os-initator/target/init-units/order-only-1.log
+RUN 1 CPUs notify
+qemu-system-x86_64: terminating on signal 15 from pid 49374 (python3)
+PASS: dependent waits for authenticated Ready after setup: /home/jay/personal/self_rust_os-initator/target/init-units/notify-1.log
+RUN 1 CPUs notify-timeout
+qemu-system-x86_64: terminating on signal 15 from pid 49531 (python3)
+PASS: missing Ready times out, terminates and acknowledges failure: /home/jay/personal/self_rust_os-initator/target/init-units/notify-timeout-1.log
+RUN 1 CPUs watchdog
+qemu-system-x86_64: terminating on signal 15 from pid 49617 (python3)
+PASS: work-path watchdog expiry, three capped runs and surviving dependent: /home/jay/personal/self_rust_os-initator/target/init-units/watchdog-1.log
+RUN 1 CPUs heartbeat
+qemu-system-x86_64: terminating on signal 15 from pid 49885 (python3)
+PASS: heartbeats from completed work keep the run healthy: /home/jay/personal/self_rust_os-initator/target/init-units/heartbeat-1.log
+RUN 1 CPUs wrong-ready
+qemu-system-x86_64: terminating on signal 15 from pid 49897 (python3)
+PASS: wrong-ready cannot authorize readiness or activate dependent: /home/jay/personal/self_rust_os-initator/target/init-units/wrong-ready-1.log
+RUN 1 CPUs log-ready
+qemu-system-x86_64: terminating on signal 15 from pid 50054 (python3)
+PASS: log-ready cannot authorize readiness or activate dependent: /home/jay/personal/self_rust_os-initator/target/init-units/log-ready-1.log
+RUN 1 CPUs foreign-ready
+qemu-system-x86_64: terminating on signal 15 from pid 50089 (python3)
+PASS: foreign-ready cannot authorize readiness or activate dependent: /home/jay/personal/self_rust_os-initator/target/init-units/foreign-ready-1.log
+RUN 1 CPUs log-flood
+qemu-system-x86_64: terminating on signal 15 from pid 50100 (python3)
+PASS: bounded log flood preserves healthy work, child collection and watchdog deadlines: /home/jay/personal/self_rust_os-initator/target/init-units/log-flood-1.log
+RUN 1 CPUs log-exit
+qemu-system-x86_64: terminating on signal 15 from pid 50112 (python3)
+PASS: bounded log flood preserves healthy work, child collection and watchdog deadlines: /home/jay/personal/self_rust_os-initator/target/init-units/log-exit-1.log
+RUN 1 CPUs control-status
+qemu-system-x86_64: terminating on signal 15 from pid 50224 (python3)
+PASS: explicit readonly control pages and denied lifecycle effects: /home/jay/personal/self_rust_os-initator/target/init-units/control-status-1.log
+RUN 1 CPUs control-manage
+qemu-system-x86_64: terminating on signal 15 from pid 51858 (python3)
+PASS: Spark start/stop jobs, identities and repeated resource recovery: /home/jay/personal/self_rust_os-initator/target/init-units/control-manage-1.log
+RUN 1 CPUs control-pressure
+qemu-system-x86_64: terminating on signal 15 from pid 51877 (python3)
+PASS: full control replies do not block watchdogs; malformed client is disconnected: /home/jay/personal/self_rust_os-initator/target/init-units/control-pressure-1.log
+RUN 1 CPUs control-restart
+qemu-system-x86_64: terminating on signal 15 from pid 51891 (python3)
+PASS: one restart job replaces a referenced service after completion: /home/jay/personal/self_rust_os-initator/target/init-units/control-restart-1.log
+RUN 8 CPUs configured
+qemu-system-x86_64: terminating on signal 15 from pid 51905 (python3)
+PASS: configured ordering and two live services: /home/jay/personal/self_rust_os-initator/target/init-units/configured-8.log
+RUN 8 CPUs packaged
+qemu-system-x86_64: terminating on signal 15 from pid 51922 (python3)
+PASS: configured ordering and two live services: /home/jay/personal/self_rust_os-initator/target/init-units/packaged-8.log
+RUN 8 CPUs cycle
+qemu-system-x86_64: terminating on signal 15 from pid 51934 (python3)
+PASS: cycle rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/cycle-8.log
+RUN 8 CPUs unknown
+qemu-system-x86_64: terminating on signal 15 from pid 51951 (python3)
+PASS: unknown rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/unknown-8.log
+RUN 8 CPUs malformed
+qemu-system-x86_64: terminating on signal 15 from pid 51968 (python3)
+PASS: malformed rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/malformed-8.log
+RUN 8 CPUs required-failure
+qemu-system-x86_64: terminating on signal 15 from pid 51985 (python3)
+PASS: required-failure exclusive dependency cleanup acknowledged: /home/jay/personal/self_rust_os-initator/target/init-units/required-failure-8.log
+RUN 8 CPUs optional-failure
+qemu-system-x86_64: terminating on signal 15 from pid 52002 (python3)
+PASS: optional-failure exclusive dependency cleanup acknowledged: /home/jay/personal/self_rust_os-initator/target/init-units/optional-failure-8.log
+RUN 8 CPUs vectors
+qemu-system-x86_64: terminating on signal 15 from pid 52019 (python3)
+PASS: literal args, Unicode, empty values and explicit environment: /home/jay/personal/self_rust_os-initator/target/init-units/vectors-8.log
+RUN 8 CPUs too-many
+qemu-system-x86_64: terminating on signal 15 from pid 52036 (python3)
+PASS: too-many rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/too-many-8.log
+RUN 8 CPUs total-budget
+qemu-system-x86_64: terminating on signal 15 from pid 52116 (python3)
+PASS: total-budget rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/total-budget-8.log
+RUN 8 CPUs oversize
+qemu-system-x86_64: terminating on signal 15 from pid 52148 (python3)
+PASS: oversize rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/oversize-8.log
+RUN 8 CPUs encoding
+qemu-system-x86_64: terminating on signal 15 from pid 52165 (python3)
+PASS: encoding rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/encoding-8.log
+RUN 8 CPUs early-exit
+qemu-system-x86_64: terminating on signal 15 from pid 52182 (python3)
+PASS: prerequisite exit blocks activation or completes raced-child rollback: /home/jay/personal/self_rust_os-initator/target/init-units/early-exit-8.log
+RUN 8 CPUs service-budget
+qemu-system-x86_64: terminating on signal 15 from pid 52226 (python3)
+PASS: service-budget rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/service-budget-8.log
+RUN 8 CPUs order-only
+qemu-system-x86_64: terminating on signal 15 from pid 52335 (python3)
+PASS: After waits for settlement without requiring success: /home/jay/personal/self_rust_os-initator/target/init-units/order-only-8.log
+RUN 8 CPUs notify
+qemu-system-x86_64: terminating on signal 15 from pid 52375 (python3)
+PASS: dependent waits for authenticated Ready after setup: /home/jay/personal/self_rust_os-initator/target/init-units/notify-8.log
+RUN 8 CPUs notify-timeout
+qemu-system-x86_64: terminating on signal 15 from pid 52412 (python3)
+PASS: missing Ready times out, terminates and acknowledges failure: /home/jay/personal/self_rust_os-initator/target/init-units/notify-timeout-8.log
+RUN 8 CPUs watchdog
+qemu-system-x86_64: terminating on signal 15 from pid 52431 (python3)
+PASS: work-path watchdog expiry, three capped runs and surviving dependent: /home/jay/personal/self_rust_os-initator/target/init-units/watchdog-8.log
+RUN 8 CPUs heartbeat
+qemu-system-x86_64: terminating on signal 15 from pid 52516 (python3)
+PASS: heartbeats from completed work keep the run healthy: /home/jay/personal/self_rust_os-initator/target/init-units/heartbeat-8.log
+RUN 8 CPUs wrong-ready
+qemu-system-x86_64: terminating on signal 15 from pid 53415 (python3)
+PASS: wrong-ready cannot authorize readiness or activate dependent: /home/jay/personal/self_rust_os-initator/target/init-units/wrong-ready-8.log
+RUN 8 CPUs log-ready
+qemu-system-x86_64: terminating on signal 15 from pid 54275 (python3)
+PASS: log-ready cannot authorize readiness or activate dependent: /home/jay/personal/self_rust_os-initator/target/init-units/log-ready-8.log
+RUN 8 CPUs foreign-ready
+qemu-system-x86_64: terminating on signal 15 from pid 54687 (python3)
+PASS: foreign-ready cannot authorize readiness or activate dependent: /home/jay/personal/self_rust_os-initator/target/init-units/foreign-ready-8.log
+RUN 8 CPUs log-flood
+qemu-system-x86_64: terminating on signal 15 from pid 54850 (python3)
+PASS: bounded log flood preserves healthy work, child collection and watchdog deadlines: /home/jay/personal/self_rust_os-initator/target/init-units/log-flood-8.log
+RUN 8 CPUs log-exit
+qemu-system-x86_64: terminating on signal 15 from pid 54896 (python3)
+PASS: bounded log flood preserves healthy work, child collection and watchdog deadlines: /home/jay/personal/self_rust_os-initator/target/init-units/log-exit-8.log
+RUN 8 CPUs control-status
+qemu-system-x86_64: terminating on signal 15 from pid 54915 (python3)
+PASS: explicit readonly control pages and denied lifecycle effects: /home/jay/personal/self_rust_os-initator/target/init-units/control-status-8.log
+RUN 8 CPUs control-manage
+qemu-system-x86_64: terminating on signal 15 from pid 54953 (python3)
+PASS: Spark start/stop jobs, identities and repeated resource recovery: /home/jay/personal/self_rust_os-initator/target/init-units/control-manage-8.log
+RUN 8 CPUs control-pressure
+qemu-system-x86_64: terminating on signal 15 from pid 55000 (python3)
+PASS: full control replies do not block watchdogs; malformed client is disconnected: /home/jay/personal/self_rust_os-initator/target/init-units/control-pressure-8.log
+RUN 8 CPUs control-restart
+qemu-system-x86_64: terminating on signal 15 from pid 55023 (python3)
+PASS: one restart job replaces a referenced service after completion: /home/jay/personal/self_rust_os-initator/target/init-units/control-restart-8.log
+RUN 32 CPUs configured
+qemu-system-x86_64: terminating on signal 15 from pid 55043 (python3)
+PASS: configured ordering and two live services: /home/jay/personal/self_rust_os-initator/target/init-units/configured-32.log
+RUN 32 CPUs packaged
+qemu-system-x86_64: terminating on signal 15 from pid 55084 (python3)
+PASS: configured ordering and two live services: /home/jay/personal/self_rust_os-initator/target/init-units/packaged-32.log
+RUN 32 CPUs cycle
+qemu-system-x86_64: terminating on signal 15 from pid 55120 (python3)
+PASS: cycle rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/cycle-32.log
+RUN 32 CPUs unknown
+qemu-system-x86_64: terminating on signal 15 from pid 55161 (python3)
+PASS: unknown rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/unknown-32.log
+RUN 32 CPUs malformed
+qemu-system-x86_64: terminating on signal 15 from pid 55202 (python3)
+PASS: malformed rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/malformed-32.log
+RUN 32 CPUs required-failure
+qemu-system-x86_64: terminating on signal 15 from pid 55243 (python3)
+PASS: required-failure exclusive dependency cleanup acknowledged: /home/jay/personal/self_rust_os-initator/target/init-units/required-failure-32.log
+RUN 32 CPUs optional-failure
+qemu-system-x86_64: terminating on signal 15 from pid 55285 (python3)
+PASS: optional-failure exclusive dependency cleanup acknowledged: /home/jay/personal/self_rust_os-initator/target/init-units/optional-failure-32.log
+RUN 32 CPUs vectors
+qemu-system-x86_64: terminating on signal 15 from pid 55356 (python3)
+PASS: literal args, Unicode, empty values and explicit environment: /home/jay/personal/self_rust_os-initator/target/init-units/vectors-32.log
+RUN 32 CPUs too-many
+qemu-system-x86_64: terminating on signal 15 from pid 55397 (python3)
+PASS: too-many rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/too-many-32.log
+RUN 32 CPUs total-budget
+qemu-system-x86_64: terminating on signal 15 from pid 55501 (python3)
+PASS: total-budget rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/total-budget-32.log
+RUN 32 CPUs oversize
+qemu-system-x86_64: terminating on signal 15 from pid 55556 (python3)
+PASS: oversize rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/oversize-32.log
+RUN 32 CPUs encoding
+qemu-system-x86_64: terminating on signal 15 from pid 55619 (python3)
+PASS: encoding rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/encoding-32.log
+RUN 32 CPUs early-exit
+qemu-system-x86_64: terminating on signal 15 from pid 55660 (python3)
+PASS: prerequisite exit blocks activation or completes raced-child rollback: /home/jay/personal/self_rust_os-initator/target/init-units/early-exit-32.log
+RUN 32 CPUs service-budget
+qemu-system-x86_64: terminating on signal 15 from pid 55701 (python3)
+PASS: service-budget rejected before any service spawn: /home/jay/personal/self_rust_os-initator/target/init-units/service-budget-32.log
+RUN 32 CPUs order-only
+qemu-system-x86_64: terminating on signal 15 from pid 55797 (python3)
+PASS: After waits for settlement without requiring success: /home/jay/personal/self_rust_os-initator/target/init-units/order-only-32.log
+RUN 32 CPUs notify
+qemu-system-x86_64: terminating on signal 15 from pid 55871 (python3)
+PASS: dependent waits for authenticated Ready after setup: /home/jay/personal/self_rust_os-initator/target/init-units/notify-32.log
+RUN 32 CPUs notify-timeout
+qemu-system-x86_64: terminating on signal 15 from pid 55913 (python3)
+PASS: missing Ready times out, terminates and acknowledges failure: /home/jay/personal/self_rust_os-initator/target/init-units/notify-timeout-32.log
+RUN 32 CPUs watchdog
+qemu-system-x86_64: terminating on signal 15 from pid 55989 (python3)
+PASS: work-path watchdog expiry, three capped runs and surviving dependent: /home/jay/personal/self_rust_os-initator/target/init-units/watchdog-32.log
+RUN 32 CPUs heartbeat
+qemu-system-x86_64: terminating on signal 15 from pid 56031 (python3)
+PASS: heartbeats from completed work keep the run healthy: /home/jay/personal/self_rust_os-initator/target/init-units/heartbeat-32.log
+RUN 32 CPUs wrong-ready
+qemu-system-x86_64: terminating on signal 15 from pid 56093 (python3)
+PASS: wrong-ready cannot authorize readiness or activate dependent: /home/jay/personal/self_rust_os-initator/target/init-units/wrong-ready-32.log
+RUN 32 CPUs log-ready
+qemu-system-x86_64: terminating on signal 15 from pid 56135 (python3)
+PASS: log-ready cannot authorize readiness or activate dependent: /home/jay/personal/self_rust_os-initator/target/init-units/log-ready-32.log
+RUN 32 CPUs foreign-ready
+qemu-system-x86_64: terminating on signal 15 from pid 56199 (python3)
+PASS: foreign-ready cannot authorize readiness or activate dependent: /home/jay/personal/self_rust_os-initator/target/init-units/foreign-ready-32.log
+RUN 32 CPUs log-flood
+qemu-system-x86_64: terminating on signal 15 from pid 56241 (python3)
+PASS: bounded log flood preserves healthy work, child collection and watchdog deadlines: /home/jay/personal/self_rust_os-initator/target/init-units/log-flood-32.log
+RUN 32 CPUs log-exit
+qemu-system-x86_64: terminating on signal 15 from pid 56304 (python3)
+PASS: bounded log flood preserves healthy work, child collection and watchdog deadlines: /home/jay/personal/self_rust_os-initator/target/init-units/log-exit-32.log
+RUN 32 CPUs control-status
+qemu-system-x86_64: terminating on signal 15 from pid 56347 (python3)
+PASS: explicit readonly control pages and denied lifecycle effects: /home/jay/personal/self_rust_os-initator/target/init-units/control-status-32.log
+RUN 32 CPUs control-manage
+qemu-system-x86_64: terminating on signal 15 from pid 56391 (python3)
+PASS: Spark start/stop jobs, identities and repeated resource recovery: /home/jay/personal/self_rust_os-initator/target/init-units/control-manage-32.log
+RUN 32 CPUs control-pressure
+qemu-system-x86_64: terminating on signal 15 from pid 56436 (python3)
+PASS: full control replies do not block watchdogs; malformed client is disconnected: /home/jay/personal/self_rust_os-initator/target/init-units/control-pressure-32.log
+RUN 32 CPUs control-restart
+qemu-system-x86_64: terminating on signal 15 from pid 56625 (python3)
+PASS: one restart job replaces a referenced service after completion: /home/jay/personal/self_rust_os-initator/target/init-units/control-restart-32.log
+PASS 84 configured scenarios
+
+=== Native base supervision, final green (m1-final-matrix-confirmed.log) ===
+RUN 1 CPUs two-services
+qemu-system-x86_64: terminating on signal 15 from pid 56713 (python3)
+PASS: native PID 1, two services, three failed runs, restart cap, surviving sibling: /home/jay/personal/self_rust_os-initator/target/init/two-services-1.log
+RUN 1 CPUs fatal-exit
+qemu-system-x86_64: terminating on signal 15 from pid 56722 (python3)
+PASS: fatal init cause and all CPUs halted: /home/jay/personal/self_rust_os-initator/target/init/fatal-exit-1.log
+RUN 1 CPUs fatal-fault
+qemu-system-x86_64: terminating on signal 15 from pid 56732 (python3)
+PASS: fatal init cause and all CPUs halted: /home/jay/personal/self_rust_os-initator/target/init/fatal-fault-1.log
+RUN 1 CPUs fatal-thread
+qemu-system-x86_64: terminating on signal 15 from pid 56742 (python3)
+PASS: fatal init cause and all CPUs halted: /home/jay/personal/self_rust_os-initator/target/init/fatal-thread-1.log
+RUN 1 CPUs abi
+qemu-system-x86_64: terminating on signal 15 from pid 56752 (python3)
+PASS: Ring 3 identity, child events, authorization and usercopy boundaries: /home/jay/personal/self_rust_os-initator/target/init/abi-1.log
+RUN 1 CPUs lifecycle
+qemu-system-x86_64: terminating on signal 15 from pid 56762 (python3)
+PASS: repeated Ring 3 spawn/kill/reap and frame recovery: /home/jay/personal/self_rust_os-initator/target/init/lifecycle-1.log
+RUN 1 CPUs orphans
+qemu-system-x86_64: terminating on signal 15 from pid 56772 (python3)
+PASS: native PID 1, two services, three failed runs, restart cap, surviving sibling: /home/jay/personal/self_rust_os-initator/target/init/orphans-1.log
+RUN 1 CPUs exhaustion
+qemu-system-x86_64: terminating on signal 15 from pid 56806 (python3)
+PASS: spawn allocation failure rollback and complete recovery: /home/jay/personal/self_rust_os-initator/target/init/exhaustion-1.log
+RUN 1 CPUs missing-init
+qemu-system-x86_64: terminating on signal 15 from pid 56816 (python3)
+PASS: bad initial image fails before Ring 3 publication: /home/jay/personal/self_rust_os-initator/target/init/missing-init-1.log
+RUN 1 CPUs bad-init
+qemu-system-x86_64: terminating on signal 15 from pid 56824 (python3)
+PASS: bad initial image fails before Ring 3 publication: /home/jay/personal/self_rust_os-initator/target/init/bad-init-1.log
+RUN 1 CPUs fault-service
+qemu-system-x86_64: terminating on signal 15 from pid 56832 (python3)
+PASS: native PID 1, two services, three failed runs, restart cap, surviving sibling: /home/jay/personal/self_rust_os-initator/target/init/fault-service-1.log
+RUN 1 CPUs steady
+qemu-system-x86_64: terminating on signal 15 from pid 56840 (python3)
+PASS: ordinary native boot keeps both foreground services live: /home/jay/personal/self_rust_os-initator/target/init/steady-1.log
+RUN 8 CPUs two-services
+qemu-system-x86_64: terminating on signal 15 from pid 56847 (python3)
+PASS: native PID 1, two services, three failed runs, restart cap, surviving sibling: /home/jay/personal/self_rust_os-initator/target/init/two-services-8.log
+RUN 8 CPUs fatal-exit
+qemu-system-x86_64: terminating on signal 15 from pid 56863 (python3)
+PASS: fatal init cause and all CPUs halted: /home/jay/personal/self_rust_os-initator/target/init/fatal-exit-8.log
+RUN 8 CPUs fatal-fault
+qemu-system-x86_64: terminating on signal 15 from pid 56880 (python3)
+PASS: fatal init cause and all CPUs halted: /home/jay/personal/self_rust_os-initator/target/init/fatal-fault-8.log
+RUN 8 CPUs fatal-thread
+qemu-system-x86_64: terminating on signal 15 from pid 56897 (python3)
+PASS: fatal init cause and all CPUs halted: /home/jay/personal/self_rust_os-initator/target/init/fatal-thread-8.log
+RUN 8 CPUs abi
+qemu-system-x86_64: terminating on signal 15 from pid 56914 (python3)
+PASS: Ring 3 identity, child events, authorization and usercopy boundaries: /home/jay/personal/self_rust_os-initator/target/init/abi-8.log
+RUN 8 CPUs lifecycle
+qemu-system-x86_64: terminating on signal 15 from pid 56931 (python3)
+PASS: repeated Ring 3 spawn/kill/reap and frame recovery: /home/jay/personal/self_rust_os-initator/target/init/lifecycle-8.log
+RUN 8 CPUs orphans
+qemu-system-x86_64: terminating on signal 15 from pid 56948 (python3)
+PASS: native PID 1, two services, three failed runs, restart cap, surviving sibling: /home/jay/personal/self_rust_os-initator/target/init/orphans-8.log
+RUN 8 CPUs exhaustion
+qemu-system-x86_64: terminating on signal 15 from pid 56987 (python3)
+PASS: spawn allocation failure rollback and complete recovery: /home/jay/personal/self_rust_os-initator/target/init/exhaustion-8.log
+RUN 8 CPUs missing-init
+qemu-system-x86_64: terminating on signal 15 from pid 57006 (python3)
+PASS: bad initial image fails before Ring 3 publication: /home/jay/personal/self_rust_os-initator/target/init/missing-init-8.log
+RUN 8 CPUs bad-init
+qemu-system-x86_64: terminating on signal 15 from pid 57021 (python3)
+PASS: bad initial image fails before Ring 3 publication: /home/jay/personal/self_rust_os-initator/target/init/bad-init-8.log
+RUN 8 CPUs fault-service
+qemu-system-x86_64: terminating on signal 15 from pid 57036 (python3)
+PASS: native PID 1, two services, three failed runs, restart cap, surviving sibling: /home/jay/personal/self_rust_os-initator/target/init/fault-service-8.log
+RUN 8 CPUs steady
+qemu-system-x86_64: terminating on signal 15 from pid 57052 (python3)
+PASS: ordinary native boot keeps both foreground services live: /home/jay/personal/self_rust_os-initator/target/init/steady-8.log
+RUN 32 CPUs two-services
+qemu-system-x86_64: terminating on signal 15 from pid 57067 (python3)
+PASS: native PID 1, two services, three failed runs, restart cap, surviving sibling: /home/jay/personal/self_rust_os-initator/target/init/two-services-32.log
+RUN 32 CPUs fatal-exit
+qemu-system-x86_64: terminating on signal 15 from pid 57106 (python3)
+PASS: fatal init cause and all CPUs halted: /home/jay/personal/self_rust_os-initator/target/init/fatal-exit-32.log
+RUN 32 CPUs fatal-fault
+qemu-system-x86_64: terminating on signal 15 from pid 57147 (python3)
+PASS: fatal init cause and all CPUs halted: /home/jay/personal/self_rust_os-initator/target/init/fatal-fault-32.log
+RUN 32 CPUs fatal-thread
+qemu-system-x86_64: terminating on signal 15 from pid 57189 (python3)
+PASS: fatal init cause and all CPUs halted: /home/jay/personal/self_rust_os-initator/target/init/fatal-thread-32.log
+RUN 32 CPUs abi
+qemu-system-x86_64: terminating on signal 15 from pid 57230 (python3)
+PASS: Ring 3 identity, child events, authorization and usercopy boundaries: /home/jay/personal/self_rust_os-initator/target/init/abi-32.log
+RUN 32 CPUs lifecycle
+qemu-system-x86_64: terminating on signal 15 from pid 57271 (python3)
+PASS: repeated Ring 3 spawn/kill/reap and frame recovery: /home/jay/personal/self_rust_os-initator/target/init/lifecycle-32.log
+RUN 32 CPUs orphans
+qemu-system-x86_64: terminating on signal 15 from pid 57394 (python3)
+PASS: native PID 1, two services, three failed runs, restart cap, surviving sibling: /home/jay/personal/self_rust_os-initator/target/init/orphans-32.log
+RUN 32 CPUs exhaustion
+qemu-system-x86_64: terminating on signal 15 from pid 57433 (python3)
+PASS: spawn allocation failure rollback and complete recovery: /home/jay/personal/self_rust_os-initator/target/init/exhaustion-32.log
+RUN 32 CPUs missing-init
+qemu-system-x86_64: terminating on signal 15 from pid 57474 (python3)
+PASS: bad initial image fails before Ring 3 publication: /home/jay/personal/self_rust_os-initator/target/init/missing-init-32.log
+RUN 32 CPUs bad-init
+qemu-system-x86_64: terminating on signal 15 from pid 57513 (python3)
+PASS: bad initial image fails before Ring 3 publication: /home/jay/personal/self_rust_os-initator/target/init/bad-init-32.log
+RUN 32 CPUs fault-service
+qemu-system-x86_64: terminating on signal 15 from pid 57552 (python3)
+PASS: native PID 1, two services, three failed runs, restart cap, surviving sibling: /home/jay/personal/self_rust_os-initator/target/init/fault-service-32.log
+RUN 32 CPUs steady
+qemu-system-x86_64: terminating on signal 15 from pid 57592 (python3)
+PASS: ordinary native boot keeps both foreground services live: /home/jay/personal/self_rust_os-initator/target/init/steady-32.log
+PASS 36 base supervision scenarios
+
+=== Native IPC and slow storage, final green (cancel-native-matrix-final.log) ===
+1 e2e/init.py ipc
+qemu-system-x86_64: terminating on signal 15 from pid 43750 (python3)
+PASS: Ring 3 channels, binding move, FIFO/backpressure, peer/child lifecycle: /home/jay/personal/self_rust_os-initator/target/init/ipc-1.log
+1 e2e/init.py ipc-lifecycle
+qemu-system-x86_64: terminating on signal 15 from pid 43760 (python3)
+PASS: Ring 3 bound-channel spawn/exit/reap cycles and exact frame recovery: /home/jay/personal/self_rust_os-initator/target/init/ipc-lifecycle-1.log
+1 slow loader cancel=0
+qemu-system-x86_64: terminating on signal 15 from pid 43770 (python3)
+PASS: 1 CPUs, large-loader watchdog: {'delay_ticks': 0, 'load_ticks': 47, 'elapsed_wall': 0.3356441240002823}, serial=/home/jay/personal/self_rust_os-initator/target/init-latency/pressure-1-bps8388608.log
+1 slow loader cancel=1
+qemu-system-x86_64: terminating on signal 15 from pid 43790 (python3)
+PASS: 1 CPUs, large-loader watchdog: {'delay_ticks': 0, 'load_ticks': 6, 'elapsed_wall': 0.3244280330000038}, serial=/home/jay/personal/self_rust_os-initator/target/init-latency/pressure-1-bps8388608-cancel.log
+8 e2e/init.py ipc
+qemu-system-x86_64: terminating on signal 15 from pid 43808 (python3)
+PASS: Ring 3 channels, binding move, FIFO/backpressure, peer/child lifecycle: /home/jay/personal/self_rust_os-initator/target/init/ipc-8.log
+8 e2e/init.py ipc-lifecycle
+qemu-system-x86_64: terminating on signal 15 from pid 43825 (python3)
+PASS: Ring 3 bound-channel spawn/exit/reap cycles and exact frame recovery: /home/jay/personal/self_rust_os-initator/target/init/ipc-lifecycle-8.log
+8 slow loader cancel=0
+qemu-system-x86_64: terminating on signal 15 from pid 43842 (python3)
+PASS: 8 CPUs, large-loader watchdog: {'delay_ticks': 0, 'load_ticks': 49, 'elapsed_wall': 0.33483245999923383}, serial=/home/jay/personal/self_rust_os-initator/target/init-latency/pressure-8-bps8388608.log
+8 slow loader cancel=1
+qemu-system-x86_64: terminating on signal 15 from pid 43870 (python3)
+PASS: 8 CPUs, large-loader watchdog: {'delay_ticks': 0, 'load_ticks': 6, 'elapsed_wall': 0.3253394520006623}, serial=/home/jay/personal/self_rust_os-initator/target/init-latency/pressure-8-bps8388608-cancel.log
+32 e2e/init.py ipc
+qemu-system-x86_64: terminating on signal 15 from pid 43920 (python3)
+PASS: Ring 3 channels, binding move, FIFO/backpressure, peer/child lifecycle: /home/jay/personal/self_rust_os-initator/target/init/ipc-32.log
+32 e2e/init.py ipc-lifecycle
+qemu-system-x86_64: terminating on signal 15 from pid 43961 (python3)
+PASS: Ring 3 bound-channel spawn/exit/reap cycles and exact frame recovery: /home/jay/personal/self_rust_os-initator/target/init/ipc-lifecycle-32.log
+32 slow loader cancel=0
+qemu-system-x86_64: terminating on signal 15 from pid 44029 (python3)
+PASS: 32 CPUs, large-loader watchdog: {'delay_ticks': 0, 'load_ticks': 49, 'elapsed_wall': 0.33477516199945967}, serial=/home/jay/personal/self_rust_os-initator/target/init-latency/pressure-32-bps8388608.log
+32 slow loader cancel=1
+qemu-system-x86_64: terminating on signal 15 from pid 44116 (python3)
+PASS: 32 CPUs, large-loader watchdog: {'delay_ticks': 0, 'load_ticks': 6, 'elapsed_wall': 0.32487877200037474}, serial=/home/jay/personal/self_rust_os-initator/target/init-latency/pressure-32-bps8388608-cancel.log
+
+=== Legacy desktop, final green (desktop-final.log) ===
+qemu-system-x86_64: terminating on signal 15 from pid 54796 (python3)
+PASS: separate compositor/DE, space wallpaper, 1920x1080 edges/pointer, launchers, commands, concurrency, focus/drag/close, and compositor survival after DE exit
+
+Kernel runtime results: cargo test --lib exited 0 with 91 [ok] cases;
+cargo test --test ipc --test display_mapping --test keyboard_timer --test native_supervision --test process_supervision --test stdio --test threads exited 0.
+
+=== kernel-final-unit.log selected runtime assertions ===
+self_rust_os::arch::x86_64::acpi::tests::accepts_one_through_thirty_two_and_sparse_ids...	[ok]
+self_rust_os::arch::x86_64::acpi::tests::rejects_corruption_duplicates_overflow_and_truncation...	[ok]
+self_rust_os::arch::x86_64::context::tests::canonical_frame_matches_interrupt_assembly_offsets...	[ok]
+self_rust_os::arch::x86_64::interrupts::tests::test_breakpoint_exception...	[ok]
+self_rust_os::arch::x86_64::interrupts::tests::test_ticks_is_monotonic...	[ok]
+self_rust_os::boot::multiboot2::tests::test_parse_rejects_bad_magic...	[ok]
+self_rust_os::boot::multiboot2::tests::test_parse_rejects_null_pointer...	[ok]
+self_rust_os::boot::multiboot2::tests::test_parse_valid_info...	[ok]
+self_rust_os::console::tests::test_console_advances_cursor...	[ok]
+self_rust_os::console::tests::test_console_non_ascii_becomes_question_mark...	[ok]
+self_rust_os::console::tests::test_console_scroll_keeps_cursor_on_last_row...	[ok]
+self_rust_os::console::tests::test_console_wraps_at_end_of_row...	[ok]
+self_rust_os::drivers::audio::caps::tests::invalid_or_wrapping_io_apertures_fail_without_panicking...	[ok]
+self_rust_os::drivers::block::ata::tests::test_disk_info_model_str_trims_spaces...	[ok]
+self_rust_os::drivers::block::ata::tests::test_drive_select_byte_carries_lba_top_nibble...	[ok]
+self_rust_os::drivers::block::ata::tests::test_drive_select_byte_master_lba_mode...	[ok]
+self_rust_os::drivers::block::ata::tests::test_drive_select_byte_slave_sets_bit4...	[ok]
+self_rust_os::drivers::block::ata::tests::test_parse_ata_string_unswaps_bytes...	[ok]
+self_rust_os::drivers::block::ata::tests::test_split_lba_byte_order...	[ok]
+self_rust_os::drivers::block::ata::tests::test_status_bit_helpers...	[ok]
+self_rust_os::drivers::char::random::tests::bounded_retry_and_empty_request...	[ok]
+self_rust_os::drivers::char::random::tests::fills_complete_words_and_a_short_tail...	[ok]
+self_rust_os::drivers::char::random::tests::recovers_after_transient_hardware_failure...	[ok]
+self_rust_os::drivers::input::keyboard::tests::keyboard_irq_work_is_bounded_for_a_stuck_controller...	[ok]
+self_rust_os::drivers::input::keyboard::tests::overflow_is_counted_and_queue_recovers_after_draining...	[ok]
+self_rust_os::drivers::input::keyboard::tests::pending_keyboard_burst_is_drained_without_consuming_mouse_bytes...	[ok]
+self_rust_os::drivers::input::keyboard::tests::test_scancode_queue_push_pop...	[ok]
+self_rust_os::drivers::input::mouse::tests::complete_packet_publishes_pointer_readiness_without_partial_samples...	[ok]
+self_rust_os::drivers::input::mouse::tests::test_handle_byte_moves_cursor...	[ok]
+self_rust_os::drivers::input::mouse::tests::test_handle_byte_partial_packet_keeps_state...	[ok]
+self_rust_os::drivers::input::mouse::tests::test_handle_byte_resyncs_on_garbage...	[ok]
+self_rust_os::drivers::input::mouse::tests::test_parse_packet_basic_movement...	[ok]
+self_rust_os::drivers::input::mouse::tests::test_parse_packet_buttons...	[ok]
+self_rust_os::drivers::input::mouse::tests::test_parse_packet_negative_movement...	[ok]
+self_rust_os::drivers::input::mouse::tests::test_parse_packet_overflow_zeroes_movement...	[ok]
+self_rust_os::drivers::input::mouse::tests::test_parse_packet_rejects_bad_sync_bit...	[ok]
+self_rust_os::drivers::rtc::cmos::tests::binary_bcd_and_twelve_hour_dates...	[ok]
+self_rust_os::drivers::rtc::cmos::tests::stable_snapshot_preserves_format...	[ok]
+self_rust_os::drivers::rtc::cmos::tests::unstable_clock_is_bounded...	[ok]
+self_rust_os::drivers::rtc::cmos::tests::validates_calendar_leap_year_and_malformed_bcd...	[ok]
+self_rust_os::fat32::tests::cluster_bulk_read_checks_geometry_short_io_and_partial_sector_bounds...	[ok]
+self_rust_os::fat32::tests::default_bulk_reads_stop_on_overflow_and_preserve_unread_buffers...	[ok]
+self_rust_os::fat32::tests::failed_replacement_preserves_original_and_reclaims_clusters...	[ok]
+self_rust_os::fat32::tests::fat_cache_invalidates_on_success_and_failed_metadata_writes...	[ok]
+self_rust_os::fat32::tests::file_size_handles_nested_empty_and_error_cases...	[ok]
+self_rust_os::fat32::tests::long_names_aliases_cluster_boundaries_and_deletion...	[ok]
+self_rust_os::fat32::tests::offset_reads_cross_clusters_and_stop_at_eof...	[ok]
+self_rust_os::fat32::tests::offset_writes_preserve_unaffected_data_and_zero_gaps...	[ok]
+self_rust_os::fat32::tests::range_write_does_not_rewrite_unaffected_file_clusters...	[ok]
+self_rust_os::fat32::tests::sequential_file_read_reuses_fat_metadata_sectors...	[ok]
+self_rust_os::fat32::tests::test_create_write_read_small_file...	[ok]
+self_rust_os::fat32::tests::test_duplicate_create_and_missing_file_errors...	[ok]
+self_rust_os::fat32::tests::test_file_ops_in_subdirectory...	[ok]
+self_rust_os::fat32::tests::test_format_then_open_round_trips_bpb...	[ok]
+self_rust_os::fat32::tests::test_list_dir_and_delete...	[ok]
+self_rust_os::fat32::tests::test_list_dir_root_forms...	[ok]
+self_rust_os::fat32::tests::test_mkdir_creates_nested_dirs...	[ok]
+self_rust_os::fat32::tests::test_mkdir_is_idempotent_and_validates...	[ok]
+self_rust_os::fat32::tests::test_open_falls_back_to_totsec16...	[ok]
+self_rust_os::fat32::tests::test_open_rejects_non_fat32...	[ok]
+self_rust_os::fat32::tests::test_overwrite_replaces_contents...	[ok]
+self_rust_os::fat32::tests::test_path_resolution_errors...	[ok]
+self_rust_os::fat32::tests::test_read_with_small_buffer_fails...	[ok]
+self_rust_os::fat32::tests::test_to_83_rejects_bad_names...	[ok]
+self_rust_os::fat32::tests::test_to_83_uppercases_and_pads...	[ok]
+self_rust_os::fat32::tests::test_write_read_multi_cluster_file...	[ok]
+self_rust_os::mbr::tests::test_offset_disk_shifts_sectors...	[ok]
+self_rust_os::mbr::tests::test_parse_mbr_empty_table...	[ok]
+self_rust_os::mbr::tests::test_parse_mbr_finds_fat32...	[ok]
+self_rust_os::mbr::tests::test_parse_mbr_rejects_bad_signature...	[ok]
+self_rust_os::memory::batch_tests::batch_failure_restores_allocator_cursor...	[ok]
+self_rust_os::memory::boot_frame_tests::empty_memory_map_returns_no_frames...	[ok]
+self_rust_os::memory::boot_frame_tests::usable_frames_skip_reserved_regions_and_never_repeat_after_exhaustion...	[ok]
+self_rust_os::scheduler::placement::tests::one_ready_thread_wakes_only_one_idle_cpu...	[ok]
+self_rust_os::scheduler::placement::tests::wake_selection_respects_affinity_and_never_assigns_a_cpu_twice...	[ok]
+self_rust_os::system::tests::rejects_requests_without_a_user_process...	[ok]
+self_rust_os::userspace::syscall::tests::stdio_rejects_reserved_and_truncated_arguments...	[ok]
+self_rust_os::userspace::syscall::tests::test_sys_exit_returns_sentinel...	[ok]
+self_rust_os::userspace::syscall::tests::test_sys_ls_rejects_invalid_buffer...	[ok]
+self_rust_os::userspace::syscall::tests::test_sys_mkdir_rejects_invalid_path...	[ok]
+self_rust_os::userspace::syscall::tests::test_sys_read_file_rejects_invalid_buffer...	[ok]
+self_rust_os::userspace::syscall::tests::test_sys_read_rejects_invalid_buffer...	[ok]
+self_rust_os::userspace::syscall::tests::test_sys_read_rejects_invalid_fd...	[ok]
+self_rust_os::userspace::syscall::tests::test_sys_read_zero_len_returns_zero...	[ok]
+self_rust_os::userspace::syscall::tests::test_sys_ticks_returns_value...	[ok]
+self_rust_os::userspace::syscall::tests::test_sys_write_file_rejects_invalid_buffer...	[ok]
+self_rust_os::userspace::syscall::tests::test_sys_write_rejects_null_pointer...	[ok]
+self_rust_os::userspace::syscall::tests::test_sys_write_rejects_out_of_bounds_buffer...	[ok]
+self_rust_os::userspace::syscall::tests::test_sys_write_rejects_overflow...	[ok]
+self_rust_os::userspace::syscall::tests::test_timed_wait_and_surface_metadata_reject_invalid_calls...	[ok]
+[ok]
+
+=== kernel-final-integration.log selected runtime assertions ===
+     Running tests/display_mapping.rs (target/x86_64-self-rust-os/debug/deps/display_mapping-ca15376a1fc3943c)
+display_mapping::drawing_at_display_edges_preserves_padding_and_guards...	[ok]
+[ok]
+     Running tests/ipc.rs (target/x86_64-self-rust-os/debug/deps/ipc-1f6ca69fd9aa6eca)
+[ok]
+     Running tests/keyboard_timer.rs (target/x86_64-self-rust-os/debug/deps/keyboard_timer-973ee0391ef9a172)
+[ok]
+[ok]
+     Running tests/native_supervision.rs (target/x86_64-self-rust-os/debug/deps/native_supervision-10b1fa3041aa5be3)
+[ok]
+     Running tests/process_supervision.rs (target/x86_64-self-rust-os/debug/deps/process_supervision-cd13bcbbf1e7b836)
+[ok]
+     Running tests/stdio.rs (target/x86_64-self-rust-os/debug/deps/stdio-6919d75548cf4c62)
+[ok]
+     Running tests/threads.rs (target/x86_64-self-rust-os/debug/deps/threads-876283b88cb93705)
+[ok]

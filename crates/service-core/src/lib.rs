@@ -5,10 +5,10 @@ extern crate alloc;
 pub mod config;
 /// Immutable unit catalogs and dependency graph validation.
 pub mod graph;
-/// Shared native/host adapter for process actions and dependency jobs.
-pub mod manager;
 /// Bounded structured memory journal; it performs no output I/O.
 pub mod journal;
+/// Shared native/host adapter for process actions and dependency jobs.
+pub mod manager;
 /// Target activation jobs and ownership-aware failure cleanup.
 pub mod transaction;
 
@@ -141,6 +141,12 @@ impl<const N: usize> Supervisor<N> {
             instance.state = State::Ready;
         }
         Ok(())
+    }
+    /// Whether an exact unpublished reservation has lost its activation owner.
+    pub(crate) fn launch_unwanted(&self, start: Start) -> bool {
+        self.instances.get(start.unit).is_some_and(|instance| {
+            instance.state == State::Spawning(start.run) && !instance.wanted
+        })
     }
     /// Reserve one eligible launch; each successful reservation counts as an attempt.
     /// Call only after events or the earliest deadline, not on periodic ticks.
@@ -296,6 +302,21 @@ impl<const N: usize> Supervisor<N> {
             .map(State::Backoff)
             .unwrap_or(State::Failed);
     }
+    /// A failed activation has no live resource to stop. Cancel retry desire
+    /// while preserving the observable failure until an explicit start/stop.
+    pub(crate) fn settle_failed(&mut self, unit: usize) -> Result<(), Invalid> {
+        let instance = self.instances.get_mut(unit).ok_or(Invalid)?;
+        if instance.state != State::Failed {
+            return Err(Invalid);
+        }
+        instance.wanted = false;
+        Ok(())
+    }
+    pub(crate) fn is_settled_failure(&self, unit: usize) -> bool {
+        self.instances
+            .get(unit)
+            .is_some_and(|i| i.state == State::Failed && !i.wanted)
+    }
     /// Suppress automatic restart before requesting native termination. An in-flight
     /// spawn retains its token so a late successful result can still be cleaned up.
     pub fn stop(&mut self, unit: usize) -> Result<Option<ProcessKey>, Invalid> {
@@ -330,3 +351,4 @@ impl<const N: usize> Supervisor<N> {
 }
 
 pub mod control;
+pub mod publication;

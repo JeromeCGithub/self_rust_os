@@ -75,14 +75,37 @@ impl Manager {
     pub fn catalog(&self) -> &Catalog {
         self.engine.catalog()
     }
+    /// Cooperative cancellation for an exact, still-unpublished launch token.
+    /// A runtime must still publish and reap a child whose creation raced this check.
+    pub fn launch_cancelled(&self, start: Start) -> bool {
+        self.supervisor.launch_unwanted(start)
+            || self.supervisor.state(start.unit) == Some(State::Spawning(start.run))
+                && (self.engine.launch_blocked(start.unit)
+                    || self
+                        .run_status(start.unit)
+                        .is_some_and(|run| run.run == start.run && run.failure.is_some()))
+    }
     pub fn run_status(&self, unit: usize) -> Option<RunStatus> {
         self.runs.get(unit).copied().flatten()
     }
     pub fn start(&mut self, name: &str) -> Result<u64, Error> {
         self.engine.begin_start(name)
     }
+    /// Preserve owners/dependents while one job covers stop, reap and readiness.
+    pub fn restart(&mut self, name: &str) -> Result<u64, Error> {
+        let job = self.engine.begin_restart(name)?;
+        let unit = self.catalog().lookup(name).ok_or(Error::Unknown)?;
+        self.disarm(unit);
+        Ok(job)
+    }
     pub fn stop(&mut self, name: &str) -> Result<u64, Error> {
         let job = self.engine.begin_stop(name)?;
+        let root = self.catalog().lookup(name).ok_or(Error::Unknown)?;
+        if !self.engine.wanted(root) && self.supervisor.state(root) == Some(State::Failed) {
+            self.supervisor
+                .stop(root)
+                .map_err(|_| Error::InvalidResult)?;
+        }
         for unit in 0..self.catalog().len() {
             if !self.engine.wanted(unit) && self.jobs[unit].is_none() {
                 self.disarm(unit);
@@ -229,7 +252,9 @@ impl Manager {
                     && (self.outcome() != Outcome::Running || !self.engine.active(unit));
                 if orphaned {
                     self.disarm(unit);
-                    self.supervisor.stop(unit)?;
+                    if !self.supervisor.is_settled_failure(unit) {
+                        self.supervisor.stop(unit)?;
+                    }
                 }
                 if let Some(State::Stopping(process)) = self.supervisor.state(unit) {
                     if self.termination_sent & (1u64 << unit) == 0 {
@@ -273,7 +298,7 @@ impl Manager {
                         self.engine
                             .started(job, unit, Err(()))
                             .map_err(|_| Invalid)?;
-                        self.supervisor.stop(unit)?;
+                        self.supervisor.settle_failed(unit)?;
                         failed = true;
                     }
                 }
@@ -390,6 +415,12 @@ impl Manager {
             .flatten()
             .chain(self.supervisor.next_deadline())
             .min()
+    }
+    pub fn job_id(&self) -> Option<u64> {
+        self.engine.job_id()
+    }
+    pub fn active(&self, unit: usize) -> bool {
+        self.engine.active(unit)
     }
     pub fn outcome(&self) -> Outcome {
         self.engine.outcome()

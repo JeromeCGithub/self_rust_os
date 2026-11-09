@@ -339,3 +339,164 @@ fn failed_inflight_launch_acknowledges_stop_and_rejects_a_duplicate_late_result(
     assert!(m.spawned(again, key(11), 6).is_err());
     assert_eq!(m.next_deadline(), None);
 }
+
+#[test]
+fn explicit_restart_keeps_one_job_until_new_ready_and_ignores_old_completion() {
+    let mut m = manager("never", true);
+    m.start("b").unwrap();
+    let a = launch(&mut m, 0, 10);
+    m.notify(a.unit, a.run, key(10), Notification::Ready, 1)
+        .unwrap();
+    let b = launch(&mut m, 1, 11);
+    next(&mut m, 1);
+    let job = m.restart("a").unwrap();
+    assert_eq!(
+        next(&mut m, 2),
+        Some(Action::Terminate {
+            unit: a.unit,
+            process: key(10)
+        })
+    );
+    assert_eq!(next(&mut m, 2), None);
+    assert_eq!(m.outcome(), Outcome::Running);
+    m.completed(key(10), Completion::Killed, 3);
+    let replacement = launch(&mut m, 3, 12);
+    assert_eq!(replacement.unit, a.unit);
+    assert_ne!(replacement.run, a.run);
+    assert_eq!(m.job_id(), Some(job));
+    assert_eq!(m.outcome(), Outcome::Running);
+    assert_eq!(m.state(b.unit), Some(State::Running(key(11))));
+    assert_eq!(m.completed(key(10), Completion::Killed, 4), None);
+    m.notify(a.unit, replacement.run, key(12), Notification::Ready, 4)
+        .unwrap();
+    next(&mut m, 4);
+    assert_eq!(m.outcome(), Outcome::Succeeded);
+}
+#[test]
+fn explicit_restart_does_not_bypass_rolling_start_limit() {
+    let mut m = manager("never", false);
+    m.start("a").unwrap();
+    let a = launch(&mut m, 0, 10);
+    m.notify(a.unit, a.run, key(10), Notification::Ready, 0)
+        .unwrap();
+    next(&mut m, 0);
+    for (now, pid) in [(1, 11), (2, 12)] {
+        let old = key(pid - 1);
+        m.restart("a").unwrap();
+        assert_eq!(
+            next(&mut m, now),
+            Some(Action::Terminate {
+                unit: a.unit,
+                process: old
+            })
+        );
+        m.completed(old, Completion::Killed, now);
+        let new = launch(&mut m, now, pid);
+        m.notify(a.unit, new.run, key(pid), Notification::Ready, now)
+            .unwrap();
+        next(&mut m, now);
+    }
+    m.restart("a").unwrap();
+    assert!(matches!(next(&mut m, 3), Some(Action::Terminate { .. })));
+    m.completed(key(12), Completion::Killed, 3);
+    assert_eq!(next(&mut m, 3), None);
+    assert_eq!(m.outcome(), Outcome::Failed);
+    assert_eq!(m.state(a.unit), Some(State::Failed));
+    m.stop("a").unwrap();
+    next(&mut m, 4);
+    assert_eq!(m.state(a.unit), Some(State::Inactive));
+}
+
+#[test]
+fn restart_during_automatic_launch_waits_for_late_publication_and_termination() {
+    let mut m = manager("on-failure", false);
+    m.start("a").unwrap();
+    let first = launch(&mut m, 0, 10);
+    m.notify(first.unit, first.run, key(10), Notification::Ready, 0)
+        .unwrap();
+    next(&mut m, 0);
+    m.completed(key(10), Completion::Fault(6), 1);
+    let Some(Action::Start(late)) = next(&mut m, 3) else {
+        panic!("automatic retry")
+    };
+    let job = m.restart("a").unwrap();
+    assert_eq!(next(&mut m, 3), None);
+    assert_eq!(m.job_id(), Some(job));
+    assert_eq!(m.outcome(), Outcome::Running);
+    m.spawned(late, key(12), 3).unwrap();
+    assert_eq!(
+        next(&mut m, 3),
+        Some(Action::Terminate {
+            unit: first.unit,
+            process: key(12)
+        })
+    );
+    assert_eq!(next(&mut m, 3), None);
+    m.completed(key(12), Completion::Killed, 4);
+    let new = launch(&mut m, 4, 13);
+    assert_ne!(new.run, late.run);
+    m.notify(new.unit, new.run, key(13), Notification::Ready, 5)
+        .unwrap();
+    next(&mut m, 5);
+    assert_eq!(m.job_id(), Some(job));
+    assert_eq!(m.outcome(), Outcome::Succeeded);
+}
+
+#[test]
+fn asynchronous_backend_can_cancel_the_exact_unpublished_start_after_stop_or_timeout() {
+    let mut m = manager("on-failure", false);
+    m.start("a").unwrap();
+    let first = launch(&mut m, 0, 10);
+    m.notify(first.unit, first.run, key(10), Notification::Ready, 0)
+        .unwrap();
+    next(&mut m, 0);
+    m.completed(key(10), Completion::Fault(6), 1);
+    let Some(Action::Start(start)) = next(&mut m, 3) else {
+        panic!("automatic launch")
+    };
+    assert!(!m.launch_cancelled(start));
+    m.stop("a").unwrap();
+    next(&mut m, 3);
+    assert!(m.launch_cancelled(start));
+    assert!(!m.launch_cancelled(Start {
+        run: start.run + 1,
+        ..start
+    }));
+    m.spawn_failed(start, 3).unwrap();
+    next(&mut m, 3);
+    assert!(!m.launch_cancelled(start));
+    m.start("a").unwrap();
+    let Some(Action::Start(start)) = next(&mut m, 4) else {
+        panic!("next launch")
+    };
+    next(&mut m, 14);
+    assert!(m.launch_cancelled(start));
+}
+
+#[test]
+fn prerequisite_failure_cancels_an_unpublished_dependent_before_its_loader_finishes() {
+    let mut m = manager("never", false);
+    m.start("b").unwrap();
+    let a = launch(&mut m, 0, 10);
+    m.notify(a.unit, a.run, key(10), Notification::Ready, 1)
+        .unwrap();
+    let Some(Action::Start(b)) = next(&mut m, 1) else {
+        panic!("dependent reservation")
+    };
+    assert!(!m.launch_cancelled(b));
+    m.completed(key(10), Completion::Fault(6), 2);
+    next(&mut m, 2);
+    assert!(
+        m.launch_cancelled(b),
+        "failed prerequisite must interrupt pending loading"
+    );
+    assert_eq!(
+        m.outcome(),
+        Outcome::Running,
+        "cancellation still needs acknowledgement"
+    );
+    m.spawn_failed(b, 2).unwrap();
+    next(&mut m, 2);
+    assert_eq!(m.outcome(), Outcome::Failed);
+    assert!(!m.launch_cancelled(b));
+}

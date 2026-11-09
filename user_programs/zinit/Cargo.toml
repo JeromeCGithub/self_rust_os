@@ -14,6 +14,9 @@ opt-level = "z"
 lto = true
 
 [dependencies]
+rustos-thread-abi = { path = "../../crates/thread-abi" }
+initator = { path = "../initator" }
+rustos-service-core = { path = "../../crates/service-core" }
 userlib = { path = "../userlib" }
 
 [[bin]]

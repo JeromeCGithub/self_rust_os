@@ -267,3 +267,40 @@ impl Spawn {
         Ok(request)
     }
 }
+
+/// Anonymous image startup; argv[0] is supplied literally by userspace policy.
+pub const SYS_SPAWN_IMAGE: u64 = 127;
+pub const IMAGE_SPAWN_SIZE: usize = 72;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImageSpawn {
+    pub launch: Spawn,
+    pub image_length: u64,
+}
+impl ImageSpawn {
+    pub fn encode(self) -> Result<[u8; IMAGE_SPAWN_SIZE], Invalid> {
+        if self.image_length == 0 || self.image_length > i64::MAX as u64 {
+            return Err(Invalid);
+        }
+        let mut bytes = [0; IMAGE_SPAWN_SIZE];
+        bytes[..SPAWN_SIZE].copy_from_slice(&self.launch.encode()?);
+        bytes[..8].copy_from_slice(&3u64.to_le_bytes());
+        bytes[SPAWN_SIZE..].copy_from_slice(&self.image_length.to_le_bytes());
+        Ok(bytes)
+    }
+    pub fn decode(bytes: &[u8]) -> Result<Self, Invalid> {
+        if bytes.len() != IMAGE_SPAWN_SIZE
+            || u64::from_le_bytes(bytes[..8].try_into().map_err(|_| Invalid)?) != 3
+        {
+            return Err(Invalid);
+        }
+        let mut launch = [0; SPAWN_SIZE];
+        launch.copy_from_slice(&bytes[..SPAWN_SIZE]);
+        launch[..8].copy_from_slice(&2u64.to_le_bytes());
+        let request = Self {
+            launch: Spawn::decode(&launch)?,
+            image_length: u64::from_le_bytes(bytes[SPAWN_SIZE..].try_into().map_err(|_| Invalid)?),
+        };
+        request.encode()?;
+        Ok(request)
+    }
+}

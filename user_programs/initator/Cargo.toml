@@ -15,7 +15,7 @@ lto = true
 
 [dependencies]
 rustos-service-core = { path = "../../crates/service-core" }
-userlib = { path = "../userlib" }
+userlib = { path = "../userlib", features = ["threads"] }
 
 [[bin]]
 name = "initator"

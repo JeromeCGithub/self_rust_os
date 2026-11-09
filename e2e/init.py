@@ -107,6 +107,8 @@ def main():
                 if case == 'ipc' and '[init-probe] IPC PASS fifo=8 moved=true closed=true' in output:
                     assert '[init-probe] IPC PASS fifo=8 moved=true closed=true writable=true' in output
                     assert '[init-probe] IPC validation PASS pointers=true rollback=true quota=true' in output
+                    assert '[init-probe] image startup PASS' in output
+                    assert '[init-probe] early publication PASS cycles=4' in output
                     print('PASS: Ring 3 channels, binding move, FIFO/backpressure, peer/child lifecycle:', log)
                     return
                 if case == 'exhaustion' and '[init-probe] exhaustion PASS children=' in output:

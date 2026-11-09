@@ -506,6 +506,7 @@ The [M3 record](initator-m3-progress.md) lists executed tests and remaining gate
 | 124 | interest | owned handle, full interest mask, zero | 0 or general error |
 | 125 | take bootstrap | nonzero u32 tag, zero, zero | owned handle or general error; tag consumed once |
 | 126 | spawn bound | executable path pointer, request pointer, exact size 64 | new PID or general error; atomic explicit endpoint moves |
+| 127 | spawn image | complete executable byte-buffer pointer, request pointer, exact size 72 | new PID or general error; snapshot image and atomic explicit endpoint moves |
 
 A handle is positive and at most `i64::MAX`; it grants no access outside its owner.
 Kernel-supplied identities have generation one and monotonically allocated,
@@ -547,6 +548,23 @@ All failures preserve parent handles and roll back frames; successful moves occu
 before child PCB/thread publication. Receive-less grants discard queued incoming
 data. Transferred endpoints reset read interest and cancel pending writable interest.
 
+Syscall 127 uses the same first eight words with version=3, flags=0, plus image
+byte length u64 at offset 64 (72 bytes total). Length must be nonzero and fit the
+native image address window (`thread_abi::IMAGE_END - USER_CODE_START`); full user
+mapping/permission/canonical/overflow validation precedes a fallible private copy.
+The kernel snapshots the complete image, strings and binding descriptors before
+constructing a process. Existing ELF/flat validation, address-space rollback and
+atomic grant moves are reused. There is no file lookup in this operation. The SDK
+`ipc::spawn_image(name, image, args, env, bindings)` supplies `name` as literal
+argv[0], not an executable search path. Restricted workers cannot call 127.
+
+This permits a userspace loader worker to read files in bounded chunks and yield
+between them: synchronous kernel PIO under syscall 126 can otherwise delay the
+single-CPU manager even from a separate thread. Image mapping remains a bounded
+kernel operation, not hard real-time preemption. The actor must account for a child
+whose creation raced userspace cancellation; syscall success is never silently
+forgotten. See [M3 latency evidence](initator-m3-progress.md).
+
 Syscall 30's 48-byte v1 frame is unchanged, including connected stdio. Bound spawn
 currently requires flags zero: combining moved grants with the old fallible
 post-publication connected-stdio attachment would violate rollback guarantees.
@@ -561,6 +579,20 @@ u64, payload length u32 and detail u32. Init=1 carries eight watchdog ticks byte
 Log=4 carries up to 232 UTF-8 bytes, detail severity 1–4, and rejects controls.
 Init/watchdog constraints and exact frame lengths are validated. The manager checks
 receiving endpoint, authenticated sender, run and lifecycle before policy effects.
-The separate control request codec reserves kinds 16–21 and tag 3; its native
-transport/response/dispatch and Spark are not implemented yet. No public control
-endpoint or shutdown syscall is provided by this work.
+The separate [control codec](../crates/service-abi/src/control.rs) uses kinds
+16–22 and bootstrap tag 3; [replies](../crates/service-abi/src/replies.rs) use
+32–37. Requests encode a nonzero increasing request ID in the header's u64 field.
+Kinds are Status(index), Start(name), Stop(name), Restart(name), Logs(cursor,
+UTF-8 fragment offset), Shutdown and Job(exact job ID). Canonical sizes/reserved
+bytes are mandatory. Typed Hello fixes read-only/manage access and run; subsequent
+replies correlate IDs. Status pages, exact job states, log fragments, End and
+explicit errors fit one 256-byte message each. Fragmented log records preserve
+sequence/run/process attribution and return Gap if history was overwritten.
+
+An explicit nondelegable per-run control grant, authenticated kernel sender,
+matching connection identity/run and authorization precede all policy effects.
+There is no public discovery endpoint. A slow client retains at most one reply;
+read interest pauses while writable interest awaits capacity. Spark exercises this
+interface; [unit control documentation](initator-units.md#spark-control-and-asynchronous-launch)
+describes commands and budgets. Shutdown remains Unsupported for management and
+Denied for read-only peers; no shutdown/halt syscall is added in M3.

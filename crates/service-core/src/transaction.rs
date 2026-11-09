@@ -34,6 +34,7 @@ struct Transaction {
     id: u64,
     root: usize,
     stopping: bool,
+    restarting: bool,
     selected: u64,
     order: alloc::vec::Vec<usize>,
     phases: [Phase; 64],
@@ -92,7 +93,7 @@ impl Engine {
             .owners
             .iter()
             .fold(plan.selected, |all, mask| all | mask);
-        let services = (0..self.catalog.len())
+        let endpoints: usize = (0..self.catalog.len())
             .filter(|&id| {
                 reserved & (1u64 << id) != 0
                     && self
@@ -100,8 +101,9 @@ impl Engine {
                         .unit(id)
                         .is_some_and(|u| u.kind == crate::config::Kind::Service)
             })
-            .count();
-        if services > MAX_SERVICES {
+            .map(|id| 2 + usize::from(self.catalog.unit(id).is_some_and(|u| u.control.is_some())))
+            .sum();
+        if endpoints > MAX_SERVICES * 2 {
             return Err(Error::Limit);
         }
         let next = self.sequence.checked_add(1).ok_or(Error::Sequence)?;
@@ -114,6 +116,7 @@ impl Engine {
             id: next,
             root,
             stopping: false,
+            restarting: false,
             selected: plan.selected,
             order: plan.order,
             phases,
@@ -122,6 +125,28 @@ impl Engine {
             pending_stop: None,
         });
         Ok(next)
+    }
+    /// Restart one service while preserving all activation owners/dependents.
+    /// The same job covers stop acknowledgement and the new readiness barrier.
+    pub fn begin_restart(&mut self, name: &str) -> Result<u64, Error> {
+        let root = self.catalog.lookup(name).ok_or(Error::Unknown)?;
+        if self.busy() {
+            return Err(Error::Busy);
+        }
+        if !self
+            .catalog
+            .unit(root)
+            .is_some_and(|u| u.kind == crate::config::Kind::Service)
+        {
+            return Err(Error::InvalidResult);
+        }
+        let job = self.begin_start(name)?;
+        let tx = self.transaction.as_mut().ok_or(Error::InvalidResult)?;
+        tx.restarting = true;
+        // Keep every other current/future resource, including automatic retries
+        // published while this service is being stopped.
+        tx.cleanup = Some((0, !(1u64 << root), Outcome::Succeeded));
+        Ok(job)
     }
     pub fn begin_stop(&mut self, name: &str) -> Result<u64, Error> {
         let root = self.catalog.lookup(name).ok_or(Error::Unknown)?;
@@ -135,6 +160,7 @@ impl Engine {
             id: next,
             root,
             stopping: true,
+            restarting: false,
             selected: self.owners[root],
             order: alloc::vec::Vec::new(),
             phases: [Phase::Idle; 64],
@@ -178,6 +204,11 @@ impl Engine {
                     return Some(Command::Stop(id));
                 }
                 self.active &= desired | retain;
+                if tx.restarting {
+                    tx.restarting = false;
+                    tx.cleanup = None;
+                    continue;
+                }
                 if tx.stopping {
                     self.owners[tx.root] = 0;
                 } else if result != Outcome::Failed {
@@ -446,6 +477,20 @@ impl Engine {
             self.order_len += 1;
         }
         Ok(())
+    }
+    /// An admitted, unpublished dependent cannot finish activation once a
+    /// required prerequisite has terminally failed. Keep its Starting phase
+    /// until the runtime acknowledges cancellation or publishes a raced child.
+    pub(crate) fn launch_blocked(&self, unit: usize) -> bool {
+        self.transaction.as_ref().is_some_and(|tx| {
+            tx.outcome == Outcome::Running
+                && tx.cleanup.is_none()
+                && tx.phases.get(unit) == Some(&Phase::Starting)
+                && self.catalog.edges(unit).is_some_and(|edges| {
+                    (0..self.catalog.len())
+                        .any(|n| edges.requires & (1u64 << n) != 0 && tx.phases[n] == Phase::Failed)
+                })
+        })
     }
     /// Desired activation ownership, including an admitted stop's withdrawal.
     /// Active resources remain until their ordered native completion is acknowledged.

@@ -92,3 +92,12 @@ fn control_frames_reject_bad_ids_names_offsets_reserved_bytes_and_notification_k
         .unwrap();
     assert!(Request::decode(&bytes[..n]).is_err());
 }
+
+#[test]
+fn job_queries_use_nonzero_exact_tokens_instead_of_ambiguous_latest_status() {
+    let mut bytes=[0;MAX_FRAME];
+    let request=Request{id:1,operation:Operation::Job{job:7}};
+    let n=request.encode(&mut bytes).unwrap();
+    assert_eq!(Request::decode(&bytes[..n]),Ok(request));
+    assert!(Request{id:2,operation:Operation::Job{job:0}}.encode(&mut bytes).is_err());
+}

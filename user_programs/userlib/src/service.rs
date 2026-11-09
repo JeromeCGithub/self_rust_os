@@ -56,6 +56,10 @@ impl Client {
             ipc::Kind::Writable => Ok(true),
         }
     }
+    /// Authenticated Init sender, for binding other grants to the same manager.
+    pub fn manager(&self) -> Option<ipc::ProcessKey> {
+        self.state.manager()
+    }
     pub fn run(&self) -> Option<u64> {
         self.state.run()
     }

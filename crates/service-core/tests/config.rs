@@ -266,3 +266,22 @@ fn target_rejects_readiness_timing_keys_even_when_kind_is_last() {
         );
     }
 }
+
+#[test]
+fn control_grants_are_explicit_service_only_and_fail_closed() {
+    use rustos_service_abi::control::Access;
+    assert_eq!(parse(SERVICE.as_bytes()).unwrap().control, None);
+    for (value, access) in [("status", Access::ReadOnly), ("manage", Access::Manage)] {
+        assert_eq!(
+            parse(format!("{SERVICE}ControlAccess={value}\n").as_bytes())
+                .unwrap()
+                .control,
+            Some(access)
+        );
+    }
+    assert!(parse(format!("{SERVICE}ControlAccess=admin\n").as_bytes()).is_err());
+    assert!(
+        parse(format!("{SERVICE}ControlAccess=status\nControlAccess=manage\n").as_bytes()).is_err()
+    );
+    assert!(parse(b"Version=1\nName=boot\nControlAccess=manage\nKind=target\n").is_err());
+}

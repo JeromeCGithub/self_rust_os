@@ -1,0 +1,21 @@
+[package]
+name = "spark"
+version = "0.1.0"
+edition = "2021"
+description = "Explicit-grant native service controller"
+license = "MIT OR Apache-2.0"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+
+[dependencies]
+userlib = { path = "../userlib", features = ["threads"] }
+
+[[bin]]
+name = "spark"
+path = "../userlib/src/application.rs"

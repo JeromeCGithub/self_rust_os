@@ -176,6 +176,8 @@ fn raw(number: u64, a: u64, b: u64, c: u64) -> u64 {
     unsafe { sys::syscall(number, a, b, c) }
 }
 fn validation() {
+    image_validation();
+    early_publication();
     use ipc::abi;
     let error = sys::SYSCALL_ERROR;
     for (pointer, size, reserved) in [
@@ -379,4 +381,287 @@ pub fn lifecycle() {
     loop {
         sys::wait_events(sys::Events::CHILD, 0).unwrap();
     }
+}
+
+fn image_validation() {
+    use ipc::abi;
+    static IMAGE: [u8; 2] = [0xeb, 0xfe];
+    let image = &IMAGE; // Legacy flat compatibility: an isolated user-mode loop.
+    let request = abi::ImageSpawn {
+        launch: abi::Spawn {
+            argv: 0,
+            argc: 0,
+            envp: 0,
+            envc: 0,
+            bindings: 0,
+            binding_count: 0,
+        },
+        image_length: image.len() as u64,
+    }
+    .encode()
+    .unwrap();
+    let before = raw(107, 0, 0, 0);
+    let result = raw(
+        abi::SYS_SPAWN_IMAGE,
+        image.as_ptr() as u64,
+        request.as_ptr() as u64,
+        request.len() as u64,
+    );
+    assert_ne!(
+        result,
+        sys::SYSCALL_ERROR,
+        "valid owned image startup must be implemented"
+    );
+    let pid = u32::try_from(result).unwrap();
+    assert!(pid > 1);
+    supervision::terminate(ipc::ProcessKey { pid, generation: 1 }).unwrap();
+    loop {
+        if let Some(supervision::ChildEvent::Completed {
+            process,
+            cause,
+            status,
+        }) = supervision::next_child().unwrap()
+        {
+            assert_eq!(process.pid, pid);
+            assert_eq!(cause, supervision::Cause::Killed);
+            assert_eq!(status, 9);
+            break;
+        }
+        sys::wait_events(sys::Events::CHILD, 100).unwrap();
+    }
+    for _ in 0..100 {
+        if raw(107, 0, 0, 0) == before {
+            break;
+        }
+        sys::sleep_ticks(1).unwrap();
+    }
+    assert_eq!(raw(107, 0, 0, 0), before, "image child frames must recover");
+    for (pointer, packet, size) in [
+        (0, request.as_ptr() as u64, 72),
+        (u64::MAX - 1, request.as_ptr() as u64, 72),
+        (image.as_ptr() as u64, 0, 72),
+        (image.as_ptr() as u64, request.as_ptr() as u64, 71),
+    ] {
+        assert_eq!(
+            raw(abi::SYS_SPAWN_IMAGE, pointer, packet, size),
+            sys::SYSCALL_ERROR
+        );
+    }
+    for pointer in [0xffff800000000000, 0x3ffc00000 - 1, 0x400000000 - 1] {
+        assert_eq!(
+            raw(abi::SYS_SPAWN_IMAGE, pointer, request.as_ptr() as u64, 72),
+            sys::SYSCALL_ERROR
+        );
+    }
+    let [server, source] = ipc::Endpoint::pair().unwrap();
+    let grant = abi::Binding {
+        source: source.raw().unwrap(),
+        tag: 42,
+        rights: ipc::Rights::SEND,
+    }
+    .encode()
+    .unwrap();
+    let malformed = [0x7f, b'E', b'L', b'F', 0, 0, 0, 0];
+    let bad = abi::ImageSpawn {
+        launch: abi::Spawn {
+            argv: 0,
+            argc: 0,
+            envp: 0,
+            envc: 0,
+            bindings: grant.as_ptr() as u64,
+            binding_count: 1,
+        },
+        image_length: malformed.len() as u64,
+    }
+    .encode()
+    .unwrap();
+    assert_eq!(
+        raw(
+            abi::SYS_SPAWN_IMAGE,
+            malformed.as_ptr() as u64,
+            bad.as_ptr() as u64,
+            72
+        ),
+        sys::SYSCALL_ERROR
+    );
+    source
+        .send(b"kept")
+        .expect("failed image preserves move source");
+    let event = ipc::next().unwrap().unwrap();
+    assert_eq!(Some(event.endpoint), server.raw());
+    assert_eq!(&event.payload[..event.length], b"kept");
+    assert!(supervision::next_child().unwrap().is_none());
+    drop(source);
+    drop(server);
+    recordln!("[init-probe] image startup PASS");
+}
+
+fn early_publication() {
+    use initator::{
+        launcher::{Launcher, Spec},
+        ports::Ports,
+    };
+    use rustos_service_core::{
+        graph::Catalog,
+        manager::{Action, Manager},
+        publication::{EarlyExit, EarlyExits},
+        transaction::Outcome,
+        Completion, ProcessKey,
+    };
+    let definition = b"Version=1\nKind=service\nName=fault\nExec=/BIN/FLICKER.SVC\nArg=--fault\n";
+    let mut launcher = Launcher::new().unwrap();
+    for _ in 0..4 {
+        let mut manager =
+            Manager::new(Catalog::load(&[("FAULT.UNIT", definition)]).unwrap()).unwrap();
+        manager.start("fault").unwrap();
+        let Some(Action::Start(start)) = manager.next_action(sys::ticks()).unwrap() else {
+            panic!("reserved early launch")
+        };
+        launcher
+            .submit(
+                start,
+                Spec::new(manager.catalog().unit(0).unwrap()).unwrap(),
+            )
+            .unwrap();
+        let mut early = EarlyExits::<2>::new();
+        let mut woke = false;
+        let record = loop {
+            // Deliberately consume the durable exit BEFORE taking the launch
+            // result, even if the worker has already posted it. This fixes the
+            // race ordering rather than depending on scheduler luck.
+            if let Some(supervision::ChildEvent::Completed {
+                process,
+                cause,
+                status,
+            }) = supervision::next_child().unwrap()
+            {
+                assert_eq!(cause, supervision::Cause::Fault);
+                assert_eq!(status, 6);
+                let record = EarlyExit {
+                    process: ProcessKey {
+                        pid: process.pid,
+                        generation: process.generation,
+                    },
+                    cause: Completion::Fault(6),
+                    tick: sys::ticks(),
+                };
+                early.insert(record).unwrap();
+                break record;
+            }
+            while let Some(event) = ipc::next().unwrap() {
+                if event.endpoint == launcher.wake_handle() {
+                    woke = true;
+                }
+            }
+            sys::wait_events(sys::Events::CHILD | sys::Events::PORT, 100).unwrap();
+        };
+        // Consume the wake without consuming the result. The actor's final
+        // pre-wait predicate must still notice this durable publication.
+        while !woke {
+            while let Some(event) = ipc::next().unwrap() {
+                if event.endpoint == launcher.wake_handle() {
+                    woke = true;
+                }
+            }
+            if !woke {
+                sys::wait_events(sys::Events::PORT, 100).unwrap();
+            }
+        }
+        assert!(
+            launcher.has_result(),
+            "a consumed wake cannot hide a durable launch result"
+        );
+        let (token, result) = loop {
+            if let Some(result) = launcher.take() {
+                break result;
+            }
+            while ipc::next().unwrap().is_some() {}
+            sys::wait_events(sys::Events::PORT, 100).unwrap();
+        };
+        assert_eq!(token, start);
+        let run = result.unwrap();
+        assert_eq!(run.key(), record.process);
+        manager.spawned(start, run.key(), sys::ticks()).unwrap();
+        let mut ports = Ports::new();
+        ports.install(start.unit, run).unwrap();
+        let cached = early.take(record.process).unwrap();
+        assert_eq!(
+            manager.completed(cached.process, cached.cause, cached.tick),
+            Some(start.unit)
+        );
+        ports.mark_exit(ipc::ProcessKey {
+            pid: record.process.pid,
+            generation: record.process.generation,
+        });
+        ports.finish_exits();
+        manager.next_action(sys::ticks()).unwrap();
+        assert_eq!(manager.outcome(), Outcome::Failed);
+    }
+    // Cancellation is scoped to the outstanding reservation, including a
+    // result already posted by the worker. A stale token cannot cancel its successor.
+    for run_id in 10..14 {
+        let token = rustos_service_core::Start {
+            unit: 0,
+            run: run_id,
+        };
+        let unit = rustos_service_core::config::parse(definition).unwrap();
+        assert_eq!(launcher.current(), None);
+        launcher.submit(token, Spec::new(&unit).unwrap()).unwrap();
+        assert_eq!(
+            launcher.current(),
+            Some(token),
+            "outstanding launch identity"
+        );
+        assert!(!launcher.cancel(rustos_service_core::Start {
+            run: run_id - 1,
+            ..token
+        }));
+        assert!(launcher.cancel(token));
+        let (returned, result) = loop {
+            if let Some(result) = launcher.take() {
+                break result;
+            }
+            while ipc::next().unwrap().is_some() {}
+            if !launcher.has_result() {
+                sys::wait_events(sys::Events::PORT, 100).unwrap();
+            }
+        };
+        assert_eq!(returned, token);
+        assert_eq!(launcher.current(), None);
+        assert!(!launcher.cancel(token));
+        // Creation may have committed before cancellation; reap that exact child.
+        if let Ok(run) = result {
+            let key = run.key();
+            let _ = supervision::terminate(ipc::ProcessKey {
+                pid: key.pid,
+                generation: key.generation,
+            });
+            let _ = sys::waitpid(key.pid);
+            drop(run);
+        }
+        while ipc::next().unwrap().is_some() {}
+        assert!(supervision::next_child().unwrap().is_none());
+    }
+    drop(launcher);
+    assert!(
+        ipc::next().unwrap().is_none(),
+        "dropping launch worker must close both private endpoints"
+    );
+    assert!(supervision::next_child().unwrap().is_none());
+    // Discard a queued/in-progress launch without taking its result. Cleanup
+    // must cancel/join the worker, reap any unpublished child and close wakes.
+    for _ in 0..4 {
+        let mut discarded = Launcher::new().unwrap();
+        let unit = rustos_service_core::config::parse(definition).unwrap();
+        discarded
+            .submit(
+                rustos_service_core::Start { unit: 0, run: 1 },
+                Spec::new(&unit).unwrap(),
+            )
+            .unwrap();
+        drop(discarded);
+        assert!(supervision::next_child().unwrap().is_none());
+        assert!(ipc::next().unwrap().is_none());
+    }
+    recordln!("[init-probe] early publication PASS cycles=4");
 }

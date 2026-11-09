@@ -1,4 +1,4 @@
-# Initator M3 work in progress
+# Initator M3 implementation and validation
 
 M1 [PR #54](https://github.com/JeromeCGithub/self_rust_os/pull/54) and M2
 [PR #55](https://github.com/JeromeCGithub/self_rust_os/pull/55) are open and unmerged.
@@ -6,10 +6,11 @@ M2 documentation CI passed. Its validation is in
 [the M2 record](initator-m2-progress.md). Branch `feat/initator-m3` starts from M2
 commit `e56297c`; M3 has no PR yet. The original worktree is unchanged.
 
-**M3 is incomplete.** Native channels, explicit readiness, watchdogs and bounded
-volatile logging work in the tested cases below. Spark native control, log queries,
-the real host process backend, pressure/launch-latency measurements and the final
-regression matrix remain. Later milestones are not implemented.
+**M3 is implemented and its required local checks pass; PR delivery is next.** Channels, readiness,
+watchdogs, volatile logging, Spark control, the Linux host backend and the native
+launch worker are implemented. The original checkpoint evidence below is retained
+as historical evidence; the [latest additions](#post-checkpoint-implementation)
+record subsequent changes and final verification. M4–M7 remain future work.
 
 ## Implemented boundaries
 
@@ -73,8 +74,8 @@ regression matrix remain. Later milestones are not implemented.
   status/log requests. Strictly increasing nonzero IDs reject replay without
   wraparound. Malformed or foreign requests cannot consume a legitimate ID;
   well-formed permission-denied requests do consume theirs. Authorization must
-  precede lookup or effects. **No native control grant, response codec, dispatcher
-  or Spark executable is wired yet.** Shutdown encoding grants no halt facility.
+  precede lookup or effects. At this checkpoint these were not yet wired; see the subsequent implementation
+  below. Shutdown remains unsupported until M4.
 
 The full register/wire contracts are in [syscalls](syscalls.md#native-owned-channels-and-bound-spawn-m3-work-in-progress).
 Configuration/readiness semantics are in [native units](initator-units.md).
@@ -180,33 +181,137 @@ artifact. The confirmed 27-scenario transcript is
 Headless serial/process assertions demonstrate these features more directly than
 a screenshot; no new graphical behavior or manual host GUI validation is claimed.
 
-## Remaining work before the single M3 PR
+## Post-checkpoint implementation
 
-1. Add bounded typed control responses and pagination, trusted/read-only native
-   bootstrap grants, nonblocking reply backpressure and Spark status/start/stop/
-   restart/log commands. Dispatch through tested authorization before lookup or
-   mutation. Keep shutdown unsupported until M4's complete bounded stop/halt
-   contract. Budget manager handles when adding control channels; current 56-service
-   admission assumes two per-service parent endpoints.
-2. Exercise real native unauthorized Stop/Shutdown, read-only status, request/reply
-   replay, control-client death, log query gaps/fragments and restart cleanup.
-   Ordinary applications must not discover global control or become services.
-3. Add the event-driven Linux host process/IPC adapter using the same core/protocol
-   and generation-safe kill identity, with real service failure/restart tests.
-   No Tokio or custom async executor is justified yet.
-4. Measure deadline servicing under slow launch/storage/memory pressure. Add a
-   bounded launch worker only if the declared tolerance requires it. The core
-   already accounts for late publication; worker cancellation must preserve that
-   ownership. Log-flood tests do not establish slow-storage latency or hard real
-   time guarantees under coarse timer/kernel-entry serialization.
-5. Rerun checks affected by subsequent control/host/launch-worker changes, and
-   finish the remaining M1/M2/native 1/8/32 regression matrix. Current build/kernel/
-   desktop results are recorded above. Curate logs, review all changes, then open the
-   milestone PR based on `feat/initator-m2`. No merge is authorized or performed.
+The following code is present on the same M3 branch; no second M3 PR is planned.
 
-The global quota does not reserve capacity against hostile channel allocators.
+- [Control replies](../crates/service-abi/src/replies.rs), the shared
+  [dispatcher](../crates/service-core/src/control.rs), native
+  [control connection](../user_programs/initator/src/control_port.rs), and
+  [Spark](../user_programs/spark/src/main.rs) implement status, start, stop,
+  restart, exact job queries and fragmented log queries. Control is an explicit,
+  nondelegable per-run bootstrap grant (`ControlAccess=status` or `manage`).
+  No public discovery endpoint exists. Read-only authorization precedes lookup.
+  Increasing request IDs reject replay; malformed clients lose their control
+  connection. One retained reply and bounded request intake prevent a slow client
+  from blocking watchdogs. Shutdown is typed but returns Unsupported for management
+  peers and Denied for read-only peers.
+- Restart is one job covering old-child completion and replacement readiness.
+  Existing root owners/dependents survive it. Restart budgets remain enforced,
+  including visible terminal Failed state; explicit stop clears that state.
+- [Linux development backend](initator-host.md) runs real foreground children,
+  bounded streams and the same core. A pidfd identifies each Linux child for poll
+  and termination. A single bounded spawn worker leaves the actor free to service
+  deadlines. Queue saturation applies backpressure rather than misclassifying an
+  admitted service as failed. The seven runtime tests and two CLI tests passed
+  again after the cancellation changes.
+- [Native worker](../user_programs/initator/src/launcher.rs) performs filesystem
+  loading in 16 KiB reads with userspace yields between them. Syscall 127 snapshots
+  a complete immutable executable buffer and uses the existing process constructor
+  with atomic explicit grants. This kernel addition was necessary: kernel-mode PIO
+  does not preempt on one CPU, so merely moving synchronous path spawn to another
+  userspace thread still delayed a six-tick watchdog by eleven ticks under an
+  explicit 8 MiB/s disk throttle. With chunked loading, the prior 1/8/32 CPU
+  experiment met the unchanged two-tick/500 ms tolerance. This is a measured bound
+  for the fixture, not a hard real-time guarantee or arbitrary-size mapping bound.
+- Only the actor owns manager state and process-wide event consumption. A fixed
+  early-completion buffer handles exits consumed before worker publication.
+  Results are durable before private wake delivery; the actor rechecks the result
+  predicate immediately before parking. Worker Drop cancels, joins, reaps any
+  unpublished child and closes both private endpoints.
+- Cooperative cancellation uses an exact unpublished launch token. It stops pending
+  chunked I/O when ownership is withdrawn or startup expires. Cancellation cannot
+  undo a process already committed by the kernel: such results remain supervised
+  and are killed/reaped before job completion. Stale tokens cannot cancel a later
+  launch. The core regression first failed against a false query, then passed.
+  A real Ring 3 probe first failed against missing outstanding identity, then
+  passed on one CPU after worker support was added.
+- Async publication required an explicit migration of the early-exit evidence:
+  admission must precede the observed prerequisite exit; publication can follow it
+  only with exact stop/reap before rollback failure and no intervening Running
+  state. Five new verifier tests cover valid synchronous/async/cancelled traces
+  and reject late admission, stale tokens, wrong child, missing stop, premature
+  failure and duplicate publication. They first failed against an inert verifier.
+
+Current rerun transcripts are retained in `target/initator-m3-evidence/`, including
+`core-cancel-full.log` (95 core tests), `host-cancel-full.log` (nine host tests),
+`cancel-token-red.log`, `cancel-token-green.log`, `cancel-worker-red.log`,
+`cancel-worker-green.log`, and the rollback/latency verifier red/green logs.
+Earlier `/tmp` transcripts mentioned above belonged to the checkpoint session and
+are no longer retained. Do not treat their paths as newly captured evidence.
+
+The complete pre-cancellation unit rerun passed all 28 cases at 1 and 8 CPUs,
+then failed the 32-CPU early-exit assertion because it compared publication rather
+than admission. That failed run is retained as `units-final-matrix.log`; it is not
+an overall pass. The later M1 ABI run exposed another obsolete invalid-mask fixture:
+bit 64 is now PORT, so an intended rejection call blocked. Like the earlier stdio
+fixture migration, the probe now derives `EVENT_ALL + 1` and checks a mixed supported/
+unsupported mask without changing the expected error. Its timeout remains visible
+in `m1-final-matrix.log`; the corrected real Ring 3 probe passed before the full
+base-supervision rerun.
+
+## Final verification on 2026-11-09
+
+[Retained test output](initator-m3-evidence.txt) contains the red assertions and
+final command summaries. These are fresh reruns, distinct from the checkpoint
+results above:
+
+- 95 pure core tests; seven IPC ABI, fifteen channel-object and eleven service ABI
+  tests; nine real Linux runtime/CLI tests. Total: 137 host Rust tests.
+- 75 Python tooling tests and documentation entry-point/local-link checks.
+- All applications rebuilt with `tools/build-user.sh`; default and GRUB debug,
+  GRUB/native-init release, and `cargo test --no-run` builds succeeded. Compilation
+  is separate from the following execution results.
+- `cargo test --lib`: 91 kernel runtime cases. The seven affected integration
+  executables (`ipc`, `display_mapping`, `keyboard_timer`, `native_supervision`,
+  `process_supervision`, `stdio`, `threads`) all passed.
+- All 28 configured-unit scenarios at 1/8/32 CPUs: **84 passes**, including complete
+  startup validation, Ready failures, watchdog/log pressure, readonly/management
+  control, reply backpressure and referenced-service restart.
+- All twelve original supervision scenarios at 1/8/32 CPUs: **36 passes**, including
+  fatal PID 1/all-CPU halt, ABI denial, lifecycle/frame recovery, adoption,
+  allocation exhaustion, missing/bad init and two live services with bounded restarts.
+- Native IPC and 64-cycle IPC lifecycle at 1/8/32 CPUs: **six passes**, including
+  image startup, pre-publication child exit, consumed wake, exact cancellation
+  tokens, joined/discarded workers and frame recovery.
+- Independent and required-dependent loader experiments at 1/8/32 CPUs with an
+  explicit 8 MiB/s private-disk read throttle: **six passes**. All had zero extra
+  watchdog ticks and 324–336 ms observed Ready-to-stop time against the unchanged
+  two-tick/500 ms tolerance. Independent large loads completed in 47/49/49 ticks;
+  cancelled dependent loads acknowledged after six ticks without publication.
+  Required-dependent rollback collected all four existing children before Failed.
+  QEMU throttling uses its documented
+  [drive option](https://www.qemu.org/docs/master/system/invocation.html).
+- A freshly rebuilt default profile passed the complete eight-CPU desktop suite.
+  [Screenshot](screenshots/initator-m3-desktop.png) shows its actual wallpaper,
+  compositor and Portal terminal during intentional shell-error fixtures. This is
+  legacy desktop compatibility evidence, not native graphical-session supervision.
+  Manual host GUI pointer integration remains untested.
+
+Commands for native reproduction (builds write only development images; runners
+copy them to private writable fixtures):
+
+```bash
+RUSTOS_BOOT_PROFILE=native-init ./tools/build-grub-disk.sh target/init-m3-final.img
+RUSTOS_TEST_DISK=target/init-m3-final.img RUSTOS_CPUS=32 python3 e2e/init_units.py --case control-manage
+RUSTOS_TEST_DISK=target/init-m3-final.img RUSTOS_CPUS=32 python3 e2e/init.py --case ipc
+RUSTOS_TEST_DISK=target/init-m3-final.img RUSTOS_CPUS=1 RUSTOS_INIT_READ_BPS=8388608 python3 e2e/init_latency.py
+RUSTOS_TEST_DISK=target/init-m3-final.img RUSTOS_CPUS=1 RUSTOS_INIT_READ_BPS=8388608 RUSTOS_INIT_CANCEL_DEPENDENT=1 python3 e2e/init_latency.py
+./tools/build-grub-disk.sh target/init-m3-desktop-final.img
+RUSTOS_TEST_DISK=target/init-m3-desktop-final.img RUSTOS_CPUS=8 python3 -B e2e/desktop.py
+```
+
+The latency fixture requires builder-generated `zload` (`./tools/build-user.sh zload`),
+which is test-only and not installed in ordinary profiles. Full scenario lists are
+in the runner's `--help`. Headless supervision assertions and exact serial event
+traces demonstrate these changes more directly than a screenshot of the console.
+No current required check remains failing. The documented existing target warning
+and manual host GUI gap remain. Final review and the single M3 PR based on
+`feat/initator-m2` are the remaining delivery actions; no merge is performed.
+
+The global channel quota does not reserve capacity against hostile allocators.
 Processes remain trusted until M5 resource/authority enforcement; endpoint ownership
-and attenuation are enforced already. Native PID identities still use generation
-one; no PID recycling, multiuser/session/display isolation or persistent journal is
-claimed. Shutdown/scopes, credentials/resources, Nest sessions/compositor lifecycle
+and attenuation are enforced already. Native identities still use generation one
+and monotonic unreused PIDs. No multiuser/session/display isolation or persistent
+journal is claimed. Shutdown/scopes, credentials/resources, Nest/compositor lifecycle
 and final hardening remain M4–M7.

@@ -138,3 +138,40 @@ fn unsupported_spawn_flags_counts_and_frame_lengths_fail_before_binding_work() {
     };
     assert!(huge.encode().is_err());
 }
+
+#[test]
+fn image_spawn_extends_bound_launch_without_reinterpreting_path_frames() {
+    let launch = Spawn {
+        argv: 0x1000,
+        argc: 2,
+        envp: 0x2000,
+        envc: 1,
+        bindings: 0x3000,
+        binding_count: 1,
+    };
+    let request = ImageSpawn {
+        launch,
+        image_length: 8192,
+    };
+    let wire = request.encode().unwrap();
+    assert_eq!(ImageSpawn::decode(&wire), Ok(request));
+    assert_eq!(u64::from_le_bytes(wire[..8].try_into().unwrap()), 3);
+    assert!(Spawn::decode(&wire[..SPAWN_SIZE]).is_err());
+    for n in 0..IMAGE_SPAWN_SIZE {
+        assert!(ImageSpawn::decode(&wire[..n]).is_err());
+    }
+    for length in [0, i64::MAX as u64 + 1, u64::MAX] {
+        assert!(ImageSpawn {
+            launch,
+            image_length: length
+        }
+        .encode()
+        .is_err());
+    }
+    let mut wrong = wire;
+    wrong[..8].copy_from_slice(&2u64.to_le_bytes());
+    assert!(ImageSpawn::decode(&wrong).is_err());
+    let mut wrong = wire;
+    wrong[8..16].copy_from_slice(&1u64.to_le_bytes());
+    assert!(ImageSpawn::decode(&wrong).is_err());
+}
