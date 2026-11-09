@@ -193,7 +193,16 @@ fn readiness_checks(host: u32, child: u32, context: &mut u64) {
         error,
         "pointer readiness belongs to the display owner"
     );
-    for (mask, timeout) in [(0, 0), (64, 0), (READ, u64::MAX)] {
+    // EVENT_PORT now owns bit 64. Keep validating genuinely unsupported bits
+    // rather than treating the new native IPC readiness bit as an ABI error.
+    // tests/ipc.rs separately proves PORT check/park and message/exit wakeups.
+    let unsupported = rustos_thread_abi::EVENT_ALL + 1;
+    for (mask, timeout) in [
+        (0, 0),
+        (unsupported, 0),
+        (unsupported | READ, 0),
+        (READ, u64::MAX),
+    ] {
         assert_eq!(scheduler::wait_events(mask, timeout), error);
     }
     assert_eq!(scheduler::wait_events(WRITE, 0), WRITE);

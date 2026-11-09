@@ -5,6 +5,8 @@ extern crate alloc;
 pub mod config;
 /// Immutable unit catalogs and dependency graph validation.
 pub mod graph;
+/// Bounded structured memory journal; it performs no output I/O.
+pub mod journal;
 /// Shared native/host adapter for process actions and dependency jobs.
 pub mod manager;
 /// Target activation jobs and ownership-aware failure cleanup.
@@ -45,6 +47,8 @@ pub struct Policy {
 pub enum State {
     Ready,
     Spawning(u64),
+    /// Published process still awaiting an explicit readiness message.
+    Starting(ProcessKey),
     Running(ProcessKey),
     Stopping(ProcessKey),
     Backoff(u64),
@@ -68,6 +72,7 @@ struct Instance {
     state: State,
     wanted: bool,
     started: u64,
+    healthy_ready: bool,
     attempts: [u64; MAX_BURST],
     head: usize,
     count: usize,
@@ -78,6 +83,7 @@ impl Instance {
         state: State::Ready,
         wanted: true,
         started: 0,
+        healthy_ready: false,
         attempts: [0; MAX_BURST],
         head: 0,
         count: 0,
@@ -136,6 +142,12 @@ impl<const N: usize> Supervisor<N> {
         }
         Ok(())
     }
+    /// Whether an exact unpublished reservation has lost its activation owner.
+    pub(crate) fn launch_unwanted(&self, start: Start) -> bool {
+        self.instances.get(start.unit).is_some_and(|instance| {
+            instance.state == State::Spawning(start.run) && !instance.wanted
+        })
+    }
     /// Reserve one eligible launch; each successful reservation counts as an attempt.
     /// Call only after events or the earliest deadline, not on periodic ticks.
     pub fn next_start(&mut self, now: u64) -> Option<Start> {
@@ -171,10 +183,19 @@ impl<const N: usize> Supervisor<N> {
     /// Associate a reserved launch with its process. True means a concurrent stop
     /// cancelled it: the runtime must terminate this process and drain completion.
     pub fn spawned(&mut self, start: Start, key: ProcessKey, now: u64) -> Result<bool, Invalid> {
+        self.publish(start, key, now, true)
+    }
+    fn publish(
+        &mut self,
+        start: Start,
+        key: ProcessKey,
+        now: u64,
+        ready: bool,
+    ) -> Result<bool, Invalid> {
         // Never let two records acquire the same process, even for a faulty adapter.
         if self.instances.iter().any(|i| {
             matches!(i.state,
-            State::Running(k) | State::Stopping(k) if k == key)
+            State::Starting(k) | State::Running(k) | State::Stopping(k) if k == key)
         }) {
             return Err(Invalid);
         }
@@ -183,12 +204,49 @@ impl<const N: usize> Supervisor<N> {
             return Err(Invalid);
         }
         i.started = now;
+        i.healthy_ready = ready;
         i.state = if i.wanted {
-            State::Running(key)
+            if ready {
+                State::Running(key)
+            } else {
+                State::Starting(key)
+            }
         } else {
             State::Stopping(key)
         };
         Ok(!i.wanted)
+    }
+    /// Publish a process that must explicitly announce readiness.
+    pub fn spawned_waiting(
+        &mut self,
+        start: Start,
+        key: ProcessKey,
+        now: u64,
+    ) -> Result<bool, Invalid> {
+        self.publish(start, key, now, false)
+    }
+    /// Accept readiness only for the exact current waiting process.
+    pub fn mark_ready(&mut self, key: ProcessKey, now: u64) -> Result<(), Invalid> {
+        let instance = self
+            .instances
+            .iter_mut()
+            .find(|i| i.state == State::Starting(key))
+            .ok_or(Invalid)?;
+        instance.started = now;
+        instance.healthy_ready = true;
+        instance.state = State::Running(key);
+        Ok(())
+    }
+    /// Stop a failed run without cancelling its configured restart policy.
+    pub fn fail_run(&mut self, unit: usize) -> Result<Option<ProcessKey>, Invalid> {
+        let instance = self.instances.get_mut(unit).ok_or(Invalid)?;
+        match instance.state {
+            State::Starting(key) | State::Running(key) | State::Stopping(key) => {
+                instance.state = State::Stopping(key);
+                Ok(Some(key))
+            }
+            _ => Ok(None),
+        }
     }
     /// Handle a failed launch without inventing a process to reap.
     pub fn spawn_failed(&mut self, start: Start, now: u64) -> Result<(), Invalid> {
@@ -204,21 +262,22 @@ impl<const N: usize> Supervisor<N> {
     pub fn completed(&mut self, key: ProcessKey, cause: Completion, now: u64) -> bool {
         let Some(unit) = self.instances.iter().position(|i| {
             matches!(i.state,
-            State::Running(k) | State::Stopping(k) if k == key)
+            State::Starting(k) | State::Running(k) | State::Stopping(k) if k == key)
         }) else {
             return false;
         };
         let p = self.policies[unit];
         let i = &mut self.instances[unit];
-        if now
-            .checked_sub(i.started)
-            .is_some_and(|d| d >= p.healthy_reset)
+        if i.healthy_ready
+            && now
+                .checked_sub(i.started)
+                .is_some_and(|d| d >= p.healthy_reset)
         {
             i.count = 0;
             i.head = 0;
             i.failures = 0;
         }
-        Self::finish(i, p, cause == Completion::Exit(0), now);
+        Self::finish(i, p, cause == Completion::Exit(0) && i.healthy_ready, now);
         true
     }
     fn finish(i: &mut Instance, p: Policy, success: bool, now: u64) {
@@ -243,13 +302,28 @@ impl<const N: usize> Supervisor<N> {
             .map(State::Backoff)
             .unwrap_or(State::Failed);
     }
+    /// A failed activation has no live resource to stop. Cancel retry desire
+    /// while preserving the observable failure until an explicit start/stop.
+    pub(crate) fn settle_failed(&mut self, unit: usize) -> Result<(), Invalid> {
+        let instance = self.instances.get_mut(unit).ok_or(Invalid)?;
+        if instance.state != State::Failed {
+            return Err(Invalid);
+        }
+        instance.wanted = false;
+        Ok(())
+    }
+    pub(crate) fn is_settled_failure(&self, unit: usize) -> bool {
+        self.instances
+            .get(unit)
+            .is_some_and(|i| i.state == State::Failed && !i.wanted)
+    }
     /// Suppress automatic restart before requesting native termination. An in-flight
     /// spawn retains its token so a late successful result can still be cleaned up.
     pub fn stop(&mut self, unit: usize) -> Result<Option<ProcessKey>, Invalid> {
         let i = self.instances.get_mut(unit).ok_or(Invalid)?;
         i.wanted = false;
         match i.state {
-            State::Running(k) | State::Stopping(k) => {
+            State::Starting(k) | State::Running(k) | State::Stopping(k) => {
                 i.state = State::Stopping(k);
                 Ok(Some(k))
             }
@@ -275,3 +349,6 @@ impl<const N: usize> Supervisor<N> {
             .min()
     }
 }
+
+pub mod control;
+pub mod publication;

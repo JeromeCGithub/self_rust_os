@@ -9,6 +9,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "875488b8711a968268c7cf5d139578713097ca4635a76044e8fe8eedf831d07e"
 
 [[package]]
+name = "initator"
+version = "0.1.0"
+dependencies = [
+ "rustos-service-core",
+ "userlib",
+]
+
+[[package]]
 name = "linked_list_allocator"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -26,6 +34,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustos-ipc-abi"
+version = "0.1.0"
+dependencies = [
+ "rustos-process-abi",
+]
+
+[[package]]
 name = "rustos-net-abi"
 version = "0.1.0"
 
@@ -36,6 +51,20 @@ version = "0.1.0"
 [[package]]
 name = "rustos-process-abi"
 version = "0.1.0"
+
+[[package]]
+name = "rustos-service-abi"
+version = "0.1.0"
+dependencies = [
+ "rustos-ipc-abi",
+]
+
+[[package]]
+name = "rustos-service-core"
+version = "0.1.0"
+dependencies = [
+ "rustos-service-abi",
+]
 
 [[package]]
 name = "rustos-thread-abi"
@@ -55,9 +84,11 @@ dependencies = [
  "linked_list_allocator",
  "rustos-audio-abi",
  "rustos-http",
+ "rustos-ipc-abi",
  "rustos-net-abi",
  "rustos-platform-abi",
  "rustos-process-abi",
+ "rustos-service-abi",
  "rustos-thread-abi",
  "spin",
 ]
@@ -66,5 +97,8 @@ dependencies = [
 name = "zinit"
 version = "0.1.0"
 dependencies = [
+ "initator",
+ "rustos-service-core",
+ "rustos-thread-abi",
  "userlib",
 ]

@@ -35,6 +35,7 @@ pub use crate::arch::x86_64::context::SavedContext;
 
 struct Scheduler {
     processes: ProcessTable,
+    ipc: rustos_ipc_core::Registry,
     threads: Vec<Option<Thread>>,
     retired: Vec<Process>,
     ready_queue: VecDeque<Tid>,
@@ -49,6 +50,7 @@ impl Scheduler {
     const fn new() -> Self {
         Self {
             processes: ProcessTable::new(),
+            ipc: rustos_ipc_core::Registry::new(),
             threads: Vec::new(),
             retired: Vec::new(),
             ready_queue: VecDeque::new(),
@@ -105,6 +107,8 @@ static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 mod supervision;
 pub use supervision::{child_next_user, terminate_child, configure_native_init, fault_current};
 mod events;
+mod ipc;
+pub use ipc::ipc_syscall;
 mod placement;
 pub use events::wait_events;
 
@@ -207,7 +211,7 @@ pub fn spawn_process_with_environment(
 ) -> Result<Pid, &'static str> {
     rustos_process_abi::startup_size(argv, envp).map_err(|_| "invalid startup vectors")?;
     x86_64::instructions::interrupts::without_interrupts(|| {
-        spawn_process_inner(binary, readonly_size, argv, envp)
+        spawn_process_inner(binary, readonly_size, argv, envp, &[])
     })
 }
 /// Deep-copies the page-table subtree under `new_p3[0]` (the first GB).
@@ -297,6 +301,7 @@ fn spawn_process_inner(
     readonly_size: usize,
     argv: &[&str],
     envp: &[&str],
+    bindings: &[rustos_ipc_abi::Binding],
 ) -> Result<Pid, &'static str> {
     if binary.len() as u64 > rustos_thread_abi::IMAGE_END - userspace::USER_CODE_START {
         return Err("user binary overlaps stack");
@@ -321,12 +326,36 @@ fn spawn_process_inner(
     } else {
         None
     };
-    let mut sched = SCHEDULER.lock();
+    let mut guard = SCHEDULER.lock();
+    let sched: &mut Scheduler = &mut guard;
     if sched.processes.iter().flatten().count() + sched.retired.len() >= 128
         || sched.next_pid == u32::MAX
     {
         return Err("process quota exhausted");
     }
+    let pid = sched.next_pid;
+    let parent = sched.current_pid();
+    let binding_owner = if bindings.is_empty() {
+        None
+    } else {
+        let owner = parent.ok_or("endpoint bindings require a live parent")?;
+        if !sched.processes.get(owner as usize).and_then(Option::as_ref)
+            .is_some_and(|p| p.state == ProcessState::Live)
+        {
+            return Err("endpoint owner exited");
+        }
+        let key = rustos_ipc_abi::ProcessKey { pid: owner, generation: 1 };
+        sched.ipc.validate_bindings(key, rustos_ipc_abi::ProcessKey { pid, generation: 1 }, bindings)
+            .map_err(|_| "invalid endpoint bindings")?;
+        Some(key)
+    };
+    // Complete the last fallible process-metadata allocation before moving
+    // grants or committing frames. The scheduler lock stabilizes the parent cwd.
+    let source_cwd = parent.and_then(|owner| sched.processes.get(owner as usize))
+        .and_then(Option::as_ref).map(|p| p.files.cwd.as_str()).unwrap_or("/");
+    let mut cwd = alloc::string::String::new();
+    cwd.try_reserve_exact(source_cwd.len()).map_err(|_| "cwd allocation failed")?;
+    cwd.push_str(source_cwd);
     let kernel_stack = allocate_kernel_stack()?;
     let tid = sched.reserve_tid()?;
     let phys_offset = VirtAddr::new(sched.phys_offset);
@@ -474,17 +503,17 @@ fn spawn_process_inner(
     })();
     let (surface, startup, fs_base) = map_result?;
 
+    // Frame construction and grant publication share this scheduler lock. On a
+    // failed revalidation, the frame transaction rolls back and no PCB is visible.
+    // After a successful move, all remaining insertions use pre-reserved storage.
+    if let Some(owner) = binding_owner {
+        sched.ipc.bindings(owner, rustos_ipc_abi::ProcessKey { pid, generation: 1 }, bindings)
+            .map_err(|_| "endpoint binding commit failed")?;
+    }
     let owned_frames = transaction.commit();
-    let pid = sched.next_pid;
-    let cwd = sched
-        .current_pid()
-        .and_then(|parent| sched.processes.get(parent as usize))
-        .and_then(Option::as_ref)
-        .map(|p| p.files.cwd.clone())
-        .unwrap_or_else(|| alloc::string::String::from("/"));
     let process = Process {
         pid,
-        parent: sched.current_pid(),
+        parent,
         adoption_pending: false,
         state: ProcessState::Live,
         p4_frame,
@@ -670,6 +699,9 @@ fn set_return(t: &mut Thread, value: u64) {
     }
 }
 fn stop_threads_locked(s: &mut Scheduler, pid: Pid) {
+    // Every whole-process stop, including connected descendants, revokes IPC
+    // before waking waiters. This requires no allocation or additional lock.
+    s.ipc.close_owner(rustos_ipc_abi::ProcessKey { pid, generation: 1 });
     for t in s.threads.iter_mut().flatten().filter(|t| t.pid == pid) {
         t.state = ThreadState::Zombie;
         t.detached = true;
@@ -1326,4 +1358,19 @@ pub(crate) fn syscall_permitted(number: u64, first: u64) -> bool {
         .and_then(Option::as_ref)
         .is_some_and(|p| p.worker_heap_limit.is_some());
     !restricted || rustos_process_abi::isolation::permits(number, first)
+}
+
+/// Create a private process with explicit, attenuated bootstrap endpoint moves.
+/// No endpoint is inherited implicitly, and failed construction preserves grants.
+pub fn spawn_process_with_bindings(
+    binary: &[u8],
+    readonly_size: usize,
+    argv: &[&str],
+    envp: &[&str],
+    bindings: &[rustos_ipc_abi::Binding],
+) -> Result<Pid, &'static str> {
+    rustos_process_abi::startup_size(argv, envp).map_err(|_| "invalid startup vectors")?;
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        spawn_process_inner(binary, readonly_size, argv, envp, bindings)
+    })
 }

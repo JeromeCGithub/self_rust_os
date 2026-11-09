@@ -1,12 +1,14 @@
 // Initator: native PID 1. Policy lives in the host-tested service core.
 extern crate alloc;
 use alloc::{string::String, vec::Vec};
+use initator::{launcher, ports};
 use rustos_service_core::{
     config::{MAX_CATALOG_BYTES, MAX_FILE_BYTES, MAX_UNITS},
     graph::{Catalog, ErrorKind},
     manager::{Action, Manager},
+    publication::{EarlyExit, EarlyExits},
     transaction::Outcome,
-    Completion, ProcessKey,
+    Completion, ProcessKey, Start,
 };
 use userlib::{fs, recordln as println, supervision, sys};
 const DIRECTORY: &str = "/ETC/INIT/SYSTEM";
@@ -165,14 +167,43 @@ fn load_catalog() -> Result<Catalog, ()> {
 }
 /// Configuration failure is recoverable: keep PID 1 alive without activating a
 /// partial catalog. A control channel/reload is a later milestone.
-fn recovery() -> ! {
-    println!("[initator] configuration rejected; recovery mode; no services launched");
+fn recovery(reason: &str) -> ! {
+    println!("[initator] {}; recovery mode; no services launched", reason);
     loop {
         // No children are spawned on this path. Still drain durable notifications
         // rather than spinning if an unexpected event ever becomes pending.
         while matches!(supervision::next_child(), Ok(Some(_))) {}
         let _ = sys::wait_events(sys::Events::CHILD, 0);
     }
+}
+fn complete(manager: &mut Manager, ports: &mut ports::Ports, record: EarlyExit) -> bool {
+    if manager
+        .completed(record.process, record.cause, record.tick)
+        .is_none()
+    {
+        return false;
+    }
+    ports.mark_exit(supervision::ProcessKey {
+        pid: record.process.pid,
+        generation: record.process.generation,
+    });
+    true
+}
+fn spawn_failed(manager: &mut Manager, start: Start) {
+    println!(
+        "[initator] spawn failed name={} unit={} run={} tick={}",
+        manager
+            .catalog()
+            .unit(start.unit)
+            .expect("failed launch unit")
+            .name,
+        start.unit,
+        start.run,
+        sys::ticks()
+    );
+    manager
+        .spawn_failed(start, sys::ticks())
+        .expect("reserved failed launch");
 }
 fn main() {
     let identity = supervision::current().expect("native process identity");
@@ -183,7 +214,7 @@ fn main() {
     println!("[initator] PID 1 entered Ring 3");
     let catalog = match load_catalog() {
         Ok(catalog) => catalog,
-        Err(()) => recovery(),
+        Err(()) => recovery("configuration rejected"),
     };
     println!("[initator] catalog validated units={}", catalog.len());
     let mut manager = Manager::new(catalog).expect("validated service policies");
@@ -192,12 +223,59 @@ fn main() {
             "[initator] configuration rejected boot target reason={:?}",
             error
         );
-        recovery();
+        recovery("configuration rejected");
     }
+    let mut ports = ports::Ports::new();
+    let mut launcher = match launcher::Launcher::new() {
+        Ok(worker) => worker,
+        Err(()) => recovery("launch worker unavailable"),
+    };
+    let mut early = EarlyExits::<128>::new();
+    let mut pending: [Option<Start>; MAX_UNITS] = [None; MAX_UNITS];
+    let mut cursor = 0;
     let mut last_outcome = Outcome::Running;
     let mut states = [None; MAX_UNITS];
     loop {
+        if let Some((start, result)) = launcher.take() {
+            match result {
+                Ok(run) => {
+                    let key = run.key();
+                    println!(
+                        "[initator] started name={} unit={} run={} pid={} tick={}",
+                        manager
+                            .catalog()
+                            .unit(start.unit)
+                            .expect("launch unit")
+                            .name,
+                        start.unit,
+                        start.run,
+                        key.pid,
+                        sys::ticks()
+                    );
+                    manager
+                        .spawned(start, key, sys::ticks())
+                        .expect("reserved launch ownership");
+                    ports
+                        .install(start.unit, run)
+                        .expect("owned per-run service grants");
+                    if let Some(record) = early.take(key) {
+                        assert!(
+                            complete(&mut manager, &mut ports, record),
+                            "cached launch completion"
+                        );
+                    }
+                }
+                Err(()) => spawn_failed(&mut manager, start),
+            }
+            // Remaining consumed statuses belong to unmanaged adopted children;
+            // this single worker can publish no second unaccounted child here.
+            early.clear();
+        }
         for _ in 0..128 {
+            if launcher.busy() && early.full() {
+                break;
+            }
+
             match supervision::next_child().expect("owned child event") {
                 None => break,
                 Some(supervision::ChildEvent::Adopted(key)) => {
@@ -220,17 +298,29 @@ fn main() {
                         supervision::Cause::Killed => Completion::Killed,
                         supervision::Cause::Fault => Completion::Fault(status as u16),
                     };
-                    manager.completed(
-                        ProcessKey {
+                    let record = EarlyExit {
+                        process: ProcessKey {
                             pid: process.pid,
                             generation: process.generation,
                         },
-                        completion,
-                        sys::ticks(),
-                    );
+                        cause: completion,
+                        tick: sys::ticks(),
+                    };
+                    if !complete(&mut manager, &mut ports, record) && launcher.busy() {
+                        early
+                            .insert(record)
+                            .expect("bounded early completion intake");
+                    }
                 }
             }
         }
+        ports
+            .resume(sys::ticks())
+            .expect("resume bounded port intake");
+        ports
+            .drain(&mut manager, launcher.wake_handle())
+            .expect("owned native port events");
+        ports.finish_exits();
         let mut issued_action = false;
         if let Some(action) = manager
             .next_action(sys::ticks())
@@ -243,46 +333,17 @@ fn main() {
                         .catalog()
                         .unit(start.unit)
                         .expect("admitted catalog index");
-                    let path = unit.executable.as_deref().expect("service executable");
-                    let mut args = [""; 32];
-                    let mut env = [""; 32];
-                    for (slot, value) in args.iter_mut().zip(&unit.arguments) {
-                        *slot = value;
-                    }
-                    for (slot, value) in env.iter_mut().zip(&unit.environment) {
-                        *slot = value;
-                    }
-                    let result = sys::spawn_with_env(
-                        path,
-                        &args[..unit.arguments.len()],
-                        &env[..unit.environment.len()],
+                    println!(
+                        "[initator] launching name={} unit={} run={} tick={}",
+                        unit.name,
+                        start.unit,
+                        start.run,
+                        sys::ticks()
                     );
-                    match result {
-                        Ok(pid) => {
-                            // M1's ABI allocates monotonic PIDs with generation 1;
-                            // callers never infer identity from a recycled PID.
-                            println!(
-                                "[initator] started name={} unit={} run={} pid={} tick={}",
-                                unit.name,
-                                start.unit,
-                                start.run,
-                                pid,
-                                sys::ticks()
-                            );
-                            manager
-                                .spawned(start, ProcessKey { pid, generation: 1 }, sys::ticks())
-                                .expect("reserved launch ownership");
-                        }
-                        Err(()) => {
-                            println!(
-                                "[initator] spawn failed name={} unit={}",
-                                unit.name, start.unit
-                            );
-                            manager
-                                .spawn_failed(start, sys::ticks())
-                                .expect("reserved failed launch");
-                        }
-                    }
+                    assert!(
+                        pending[start.unit].replace(start).is_none(),
+                        "one pending start per unit"
+                    );
                 }
                 Action::Terminate { unit, process } => {
                     let name = &manager
@@ -291,8 +352,12 @@ fn main() {
                         .expect("stop catalog index")
                         .name;
                     println!(
-                        "[initator] stopping name={} unit={} pid={}",
-                        name, unit, process.pid
+                        "[initator] stopping name={} unit={} pid={} tick={} reason={:?}",
+                        name,
+                        unit,
+                        process.pid,
+                        sys::ticks(),
+                        manager.run_status(unit).and_then(|r| r.failure)
                     );
                     // A process may already have exited; its durable completion
                     // remains the acknowledgement. Never acknowledge merely kill().
@@ -303,6 +368,33 @@ fn main() {
                 }
             }
         }
+        if let Some(start) = launcher.current() {
+            if manager.launch_cancelled(start) {
+                launcher.cancel(start);
+            }
+        }
+        let mut submitted = false;
+        if !launcher.busy() {
+            if let Some(unit) = (0..MAX_UNITS)
+                .map(|n| (cursor + n) % MAX_UNITS)
+                .find(|&unit| pending[unit].is_some())
+            {
+                let start = pending[unit].take().expect("pending launch");
+                cursor = (unit + 1) % MAX_UNITS;
+                if manager.launch_cancelled(start) {
+                    spawn_failed(&mut manager, start);
+                } else {
+                    match launcher::Spec::new(
+                        manager.catalog().unit(unit).expect("launch definition"),
+                    ) {
+                        Ok(spec) => launcher.submit(start, spec).expect("idle launch worker"),
+                        Err(()) => spawn_failed(&mut manager, start),
+                    }
+                }
+                submitted = true;
+            }
+        }
+        ports.refresh_control(&manager);
         for (unit, previous) in states.iter_mut().enumerate().take(manager.catalog().len()) {
             let current = manager.state(unit);
             if current != *previous {
@@ -325,16 +417,34 @@ fn main() {
             println!("[initator] activation outcome={:?}", outcome);
             last_outcome = outcome;
         }
-        if issued_action {
+        if issued_action || submitted {
             continue;
         }
-        let timeout = match manager.next_deadline() {
+        let deadline = manager
+            .next_deadline()
+            .into_iter()
+            .chain(ports.next_deadline())
+            .min();
+        let timeout = match deadline {
             None => 0,
             Some(deadline) => match deadline.checked_sub(sys::ticks()) {
                 Some(remaining) if remaining > 0 => remaining,
                 _ => continue,
             },
         };
-        sys::wait_events(sys::Events::CHILD, timeout).expect("child/deadline wait");
+        // A full early-status buffer applies backpressure without consuming
+        // another durable kernel completion or spinning on CHILD readiness.
+        let events = if launcher.busy() && early.full() {
+            sys::Events::PORT
+        } else {
+            sys::Events::CHILD | sys::Events::PORT
+        };
+        // The wake may have been consumed after the loop's first take(). A
+        // durable result must be rechecked immediately before the atomic kernel
+        // readiness/park operation. A later publication still queues a wake.
+        if launcher.has_result() {
+            continue;
+        }
+        sys::wait_events(events, timeout).expect("child/deadline wait");
     }
 }

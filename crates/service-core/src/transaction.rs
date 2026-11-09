@@ -34,6 +34,7 @@ struct Transaction {
     id: u64,
     root: usize,
     stopping: bool,
+    restarting: bool,
     selected: u64,
     order: alloc::vec::Vec<usize>,
     phases: [Phase; 64],
@@ -46,6 +47,7 @@ pub struct Engine {
     catalog: Catalog,
     owners: [u64; 64],
     active: u64,
+    resources: u64,
     sequence: u64,
     order: [usize; 64],
     order_len: usize,
@@ -57,6 +59,7 @@ impl Engine {
             catalog,
             owners: [0; 64],
             active: 0,
+            resources: 0,
             sequence: 0,
             order: [0; 64],
             order_len: 0,
@@ -90,7 +93,7 @@ impl Engine {
             .owners
             .iter()
             .fold(plan.selected, |all, mask| all | mask);
-        let services = (0..self.catalog.len())
+        let endpoints: usize = (0..self.catalog.len())
             .filter(|&id| {
                 reserved & (1u64 << id) != 0
                     && self
@@ -98,8 +101,9 @@ impl Engine {
                         .unit(id)
                         .is_some_and(|u| u.kind == crate::config::Kind::Service)
             })
-            .count();
-        if services > MAX_SERVICES {
+            .map(|id| 2 + usize::from(self.catalog.unit(id).is_some_and(|u| u.control.is_some())))
+            .sum();
+        if endpoints > MAX_SERVICES * 2 {
             return Err(Error::Limit);
         }
         let next = self.sequence.checked_add(1).ok_or(Error::Sequence)?;
@@ -112,6 +116,7 @@ impl Engine {
             id: next,
             root,
             stopping: false,
+            restarting: false,
             selected: plan.selected,
             order: plan.order,
             phases,
@@ -120,6 +125,28 @@ impl Engine {
             pending_stop: None,
         });
         Ok(next)
+    }
+    /// Restart one service while preserving all activation owners/dependents.
+    /// The same job covers stop acknowledgement and the new readiness barrier.
+    pub fn begin_restart(&mut self, name: &str) -> Result<u64, Error> {
+        let root = self.catalog.lookup(name).ok_or(Error::Unknown)?;
+        if self.busy() {
+            return Err(Error::Busy);
+        }
+        if !self
+            .catalog
+            .unit(root)
+            .is_some_and(|u| u.kind == crate::config::Kind::Service)
+        {
+            return Err(Error::InvalidResult);
+        }
+        let job = self.begin_start(name)?;
+        let tx = self.transaction.as_mut().ok_or(Error::InvalidResult)?;
+        tx.restarting = true;
+        // Keep every other current/future resource, including automatic retries
+        // published while this service is being stopped.
+        tx.cleanup = Some((0, !(1u64 << root), Outcome::Succeeded));
+        Ok(job)
     }
     pub fn begin_stop(&mut self, name: &str) -> Result<u64, Error> {
         let root = self.catalog.lookup(name).ok_or(Error::Unknown)?;
@@ -133,6 +160,7 @@ impl Engine {
             id: next,
             root,
             stopping: true,
+            restarting: false,
             selected: self.owners[root],
             order: alloc::vec::Vec::new(),
             phases: [Phase::Idle; 64],
@@ -168,7 +196,7 @@ impl Engine {
                     .rev()
                     .copied()
                     .find(|&id| {
-                        self.active & (1u64 << id) != 0 && (desired | retain) & (1u64 << id) == 0
+                        self.resources & (1u64 << id) != 0 && (desired | retain) & (1u64 << id) == 0
                     })
                 {
                     tx.pending_stop = Some(id);
@@ -176,6 +204,11 @@ impl Engine {
                     return Some(Command::Stop(id));
                 }
                 self.active &= desired | retain;
+                if tx.restarting {
+                    tx.restarting = false;
+                    tx.cleanup = None;
+                    continue;
+                }
                 if tx.stopping {
                     self.owners[tx.root] = 0;
                 } else if result != Outcome::Failed {
@@ -292,12 +325,15 @@ impl Engine {
             return Err(Error::InvalidResult);
         }
         if result.is_ok() {
-            if self.order_len >= self.order.len() {
-                return Err(Error::Limit);
+            if self.resources & (1u64 << unit) == 0 {
+                if self.order_len >= self.order.len() {
+                    return Err(Error::Limit);
+                }
+                self.resources |= 1u64 << unit;
+                self.order[self.order_len] = unit;
+                self.order_len += 1;
             }
             self.active |= 1u64 << unit;
-            self.order[self.order_len] = unit;
-            self.order_len += 1;
             tx.phases[unit] = Phase::Done;
         } else {
             tx.phases[unit] = Phase::Failed;
@@ -311,6 +347,7 @@ impl Engine {
         }
         tx.pending_stop = None;
         self.active &= !(1u64 << unit);
+        self.resources &= !(1u64 << unit);
         self.remove_order(unit);
         Ok(())
     }
@@ -333,6 +370,7 @@ impl Engine {
             return Err(Error::InvalidResult);
         }
         self.active &= !(1u64 << unit);
+        self.resources &= !(1u64 << unit);
         self.remove_order(unit);
         if let Some(tx) = self.transaction.as_mut() {
             if tx.outcome == Outcome::Running {
@@ -346,23 +384,75 @@ impl Engine {
         }
         Ok(())
     }
-    /// A retryable exit during activation keeps that job pending. A replacement
-    /// must publish readiness before its dependents may proceed. Outside an
-    /// activation, persistent ownership drives normal automatic restarts.
-    pub fn retrying(&mut self, unit: usize) -> Result<Option<u64>, Error> {
+    /// Reserve ownership before a runtime launch can publish a process. A stop
+    /// must account for this reservation until spawn failure or actual completion.
+    pub fn reserve_run(&mut self, unit: usize) -> Result<(), Error> {
+        let selected = self.transaction.as_ref().is_some_and(|tx| {
+            tx.outcome == Outcome::Running
+                && tx.cleanup.is_none()
+                && tx.phases.get(unit) == Some(&Phase::Starting)
+        });
+        if !self
+            .catalog
+            .unit(unit)
+            .is_some_and(|u| u.kind == crate::config::Kind::Service)
+            || (!self.wanted(unit) && !selected)
+            || self.resources & (1u64 << unit) != 0
+        {
+            return Err(Error::InvalidResult);
+        }
+        if self.order_len >= self.order.len() {
+            return Err(Error::Limit);
+        }
+        self.resources |= 1u64 << unit;
+        self.order[self.order_len] = unit;
+        self.order_len += 1;
+        Ok(())
+    }
+    /// Publication establishes actual process-start order without making it ready.
+    pub fn process_spawned(&mut self, unit: usize) -> Result<(), Error> {
+        if unit >= self.catalog.len() || self.resources & (1u64 << unit) == 0 {
+            return Err(Error::InvalidResult);
+        }
+        self.remove_order(unit);
+        self.order[self.order_len] = unit;
+        self.order_len += 1;
+        Ok(())
+    }
+    /// Withdraw readiness while retaining ownership of a process being terminated.
+    pub fn hold_for_restart(&mut self, unit: usize) -> Result<Option<u64>, Error> {
+        if !self
+            .catalog
+            .unit(unit)
+            .is_some_and(|u| u.kind == crate::config::Kind::Service)
+        {
+            return Err(Error::InvalidResult);
+        }
         let pending = self
             .transaction
             .as_ref()
             .filter(|tx| {
                 tx.outcome == Outcome::Running
                     && tx.cleanup.is_none()
-                    && tx.phases.get(unit) == Some(&Phase::Done)
+                    && tx.phases[unit] == Phase::Done
             })
             .map(|tx| tx.id);
-        self.unavailable(unit)?;
+        self.active &= !(1u64 << unit);
         if pending.is_some() {
             if let Some(tx) = self.transaction.as_mut() {
                 tx.phases[unit] = Phase::Starting;
+            }
+        }
+        Ok(pending)
+    }
+    /// Actual retryable completion releases resources but keeps activation pending.
+    pub fn retrying(&mut self, unit: usize) -> Result<Option<u64>, Error> {
+        let pending = self.hold_for_restart(unit)?;
+        self.resources &= !(1u64 << unit);
+        self.remove_order(unit);
+        if let Some(tx) = self.transaction.as_mut() {
+            if tx.pending_stop == Some(unit) {
+                tx.pending_stop = None;
             }
         }
         Ok(pending)
@@ -376,18 +466,46 @@ impl Engine {
                 .catalog
                 .unit(unit)
                 .is_some_and(|u| u.kind == crate::config::Kind::Service)
-            || self.order_len >= self.order.len()
+            || self.resources & (1u64 << unit) == 0 && self.order_len >= self.order.len()
         {
             return Err(Error::InvalidResult);
         }
         self.active |= 1u64 << unit;
-        self.order[self.order_len] = unit;
-        self.order_len += 1;
+        if self.resources & (1u64 << unit) == 0 {
+            self.resources |= 1u64 << unit;
+            self.order[self.order_len] = unit;
+            self.order_len += 1;
+        }
         Ok(())
     }
-    /// Persistent activation ownership, independent of process liveness.
+    /// An admitted, unpublished dependent cannot finish activation once a
+    /// required prerequisite has terminally failed. Keep its Starting phase
+    /// until the runtime acknowledges cancellation or publishes a raced child.
+    pub(crate) fn launch_blocked(&self, unit: usize) -> bool {
+        self.transaction.as_ref().is_some_and(|tx| {
+            tx.outcome == Outcome::Running
+                && tx.cleanup.is_none()
+                && tx.phases.get(unit) == Some(&Phase::Starting)
+                && self.catalog.edges(unit).is_some_and(|edges| {
+                    (0..self.catalog.len())
+                        .any(|n| edges.requires & (1u64 << n) != 0 && tx.phases[n] == Phase::Failed)
+                })
+        })
+    }
+    /// Desired activation ownership, including an admitted stop's withdrawal.
+    /// Active resources remain until their ordered native completion is acknowledged.
     pub fn wanted(&self, unit: usize) -> bool {
-        unit < self.catalog.len() && self.retained_except(None) & (1u64 << unit) != 0
+        if unit >= self.catalog.len() {
+            return false;
+        }
+        let mask = match self.transaction.as_ref() {
+            Some(tx) if tx.stopping && tx.outcome == Outcome::Running => tx
+                .cleanup
+                .map(|(desired, retain, _)| desired | retain)
+                .unwrap_or(0),
+            _ => self.retained_except(None),
+        };
+        mask & (1u64 << unit) != 0
     }
     pub fn outcome(&self) -> Outcome {
         self.transaction

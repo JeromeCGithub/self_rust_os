@@ -1,11 +1,30 @@
 // Trusted M1 daemon with explicit fault-injection arguments, never implicit failure.
+mod service_probe;
 use userlib::{recordln as println, sys};
 fn main(argc: usize, argv: &[&str]) {
     println!("[flicker] started");
+    if argc > 1
+        && matches!(
+            argv[1],
+            "--notify"
+                | "--never-ready"
+                | "--watchdog"
+                | "--wrong-ready"
+                | "--log-ready"
+                | "--foreign-ready"
+                | "--log-flood"
+                | "--log-exit"
+        )
+    {
+        service_probe::run(argv[1]);
+        return;
+    }
     if argc > 1 && argv[1] == "--fault" {
         // SAFETY: This trusted fixture deliberately raises #UD without touching
         // memory. Kernel process-fault isolation is the behavior under test.
-        unsafe { core::arch::asm!("ud2", options(noreturn, nostack)); }
+        unsafe {
+            core::arch::asm!("ud2", options(noreturn, nostack));
+        }
     }
     if argc > 1 && argv[1] == "--orphans" {
         sys::spawn("/BIN/FLICKER.SVC").expect("live orphan");

@@ -1,0 +1,14 @@
+[package]
+name = "initator-host"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Event-driven Linux development backend for the native Initator core"
+
+[dependencies]
+rustos-service-core = { path = "../../crates/service-core" }
+rustos-service-abi = { path = "../../crates/service-abi" }
+
+[[bin]]
+name = "service-fixture"
+path = "src/fixture.rs"

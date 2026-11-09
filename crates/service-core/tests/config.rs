@@ -73,7 +73,7 @@ fn duplicate_singletons_environment_names_and_edges_are_rejected() {
 #[test]
 fn unsupported_future_mechanisms_are_not_silently_accepted() {
     failure(
-        &format!("{SERVICE}Ready=notify\n"),
+        &format!("{SERVICE}Ready=bus-name\n"),
         ErrorKind::Unsupported,
         5,
     );
@@ -216,4 +216,72 @@ fn exact_file_launch_environment_and_edge_limits_are_observable() {
     assert_eq!(parse(text.as_bytes()).unwrap().requires.len(), MAX_EDGES);
     text.push_str("After=overflow\n");
     assert_eq!(parse(text.as_bytes()).unwrap_err().kind, ErrorKind::Limit);
+}
+
+#[test]
+fn notify_configuration_has_explicit_start_deadline_and_optional_watchdog() {
+    let unit = parse(
+        format!("{SERVICE}Ready=notify\nStartTimeoutTicks=45\nWatchdogTicks=18\n").as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(unit.readiness, Readiness::Notify);
+    assert_eq!(unit.start_timeout, 45);
+    assert_eq!(unit.watchdog, Some(18));
+    let default = parse(SERVICE.as_bytes()).unwrap();
+    assert_eq!(default.readiness, Readiness::Spawned);
+    assert_eq!(default.start_timeout, 90);
+    assert_eq!(default.watchdog, None);
+}
+#[test]
+fn watchdog_requires_notify_and_new_timing_fields_reject_duplicates_and_invalid_numbers() {
+    for key in ["StartTimeoutTicks", "WatchdogTicks"] {
+        for value in ["0", "-1", "9223372036854775808", "18446744073709551616"] {
+            let text = format!("{SERVICE}Ready=notify\n{key}={value}\n");
+            failure(&text, ErrorKind::InvalidValue, 6);
+        }
+        failure(
+            &format!("{SERVICE}Ready=notify\n{key}=1\n{key}=2\n"),
+            ErrorKind::Duplicate,
+            7,
+        );
+    }
+    failure(
+        &format!("{SERVICE}WatchdogTicks=2\n"),
+        ErrorKind::InvalidValue,
+        5,
+    );
+    failure(
+        &format!("{SERVICE}WatchdogTicks=2\nReady=spawned\n"),
+        ErrorKind::InvalidValue,
+        5,
+    );
+}
+#[test]
+fn target_rejects_readiness_timing_keys_even_when_kind_is_last() {
+    for key in ["StartTimeoutTicks", "WatchdogTicks"] {
+        failure(
+            &format!("Version=1\nName=boot\n{key}=2\nKind=target\n"),
+            ErrorKind::InvalidValue,
+            1,
+        );
+    }
+}
+
+#[test]
+fn control_grants_are_explicit_service_only_and_fail_closed() {
+    use rustos_service_abi::control::Access;
+    assert_eq!(parse(SERVICE.as_bytes()).unwrap().control, None);
+    for (value, access) in [("status", Access::ReadOnly), ("manage", Access::Manage)] {
+        assert_eq!(
+            parse(format!("{SERVICE}ControlAccess={value}\n").as_bytes())
+                .unwrap()
+                .control,
+            Some(access)
+        );
+    }
+    assert!(parse(format!("{SERVICE}ControlAccess=admin\n").as_bytes()).is_err());
+    assert!(
+        parse(format!("{SERVICE}ControlAccess=status\nControlAccess=manage\n").as_bytes()).is_err()
+    );
+    assert!(parse(b"Version=1\nName=boot\nControlAccess=manage\nKind=target\n").is_err());
 }

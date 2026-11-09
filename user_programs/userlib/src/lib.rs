@@ -42,6 +42,12 @@ pub mod net;
 pub mod process;
 /// Owned native child-event and identity operations.
 pub mod supervision;
+/// Owned native channel endpoints and explicit spawn-time grants.
+#[cfg(feature = "alloc")]
+pub mod ipc;
+/// Run-scoped readiness, watchdog and logging client.
+#[cfg(feature = "alloc")]
+pub mod service;
 pub mod sys;
 pub mod system;
 pub mod ui;

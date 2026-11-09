@@ -5,9 +5,11 @@ one immutable catalog, then activates the unit named `boot`. Configuration and
 job policy execute in Ring 3. The kernel sees explicit executable paths, literal
 launch vectors, exact process identities, child events and deadline waits.
 
-The [roadmap](init-system-plan.md) separates this M2 interface from future IPC,
-login, user sessions and graphical supervision. [M2 evidence](initator-m2-progress.md)
-records actual validation. [M1 evidence](initator-progress.md) describes the earlier
+The [roadmap](init-system-plan.md) separates the implemented M2 catalog from
+M3 readiness/IPC work and future login, user sessions and graphical supervision.
+[M2 evidence](initator-m2-progress.md) records its validation; the
+[M3 progress record](initator-m3-progress.md) distinguishes tested additions from
+remaining work. [M1 evidence](initator-progress.md) describes the earlier
 compiled catalog and the unchanged native child ABI.
 
 ## Files and fields
@@ -58,7 +60,10 @@ Wants=chime
 | `Requires` | Pulls in another unit and requires its successful activation before this job |
 | `Wants` | Pulls in another unit; failure can degrade the target without failing it |
 | `After` | Orders selected jobs only; never pulls a unit in or implies its success |
-| `Ready` | Only `spawned`, the default, is supported |
+| `Ready` | `spawned` (default) or `notify`; notify waits for the exact run's authenticated Ready message |
+| `StartTimeoutTicks` | Positive deadline from launch reservation, default 90; includes queued/chunked loading, publication and notify initialization |
+| `ControlAccess` | Optional `status` or `manage` per-run nondelegable Spark grant; absent by default |
+| `WatchdogTicks` | Optional positive interval; requires `Ready=notify`, starts at Ready and refreshes only on valid work-path Heartbeat |
 | `WorkingDirectory` | Only `/`, the default, is supported until atomic per-launch cwd exists |
 | `Restart` | `never` (default), `on-failure`, or `always` |
 | `RestartDelayTicks` | Positive initial backoff, default 18 |
@@ -74,7 +79,8 @@ environment names are rejected. `Requires=a` together with `After=a` is valid.
 Values follow the first `=`. Outer ASCII whitespace is trimmed, interior spaces
 are literal; UTF-8 is supported in arguments/values/paths. CRLF, blank lines and
 full-line `#` comments work. Control characters, unknown keys, malformed numbers,
-unsupported readiness/watchdogs/stop timeouts and other cwd values are rejected.
+unsupported readiness modes, stop timeouts and other cwd values are rejected.
+Timing fields must fit `1..=i64::MAX`; deadline arithmetic is checked.
 There is no shell quoting, expansion, interpolation, inline-comment language or
 command substitution. For example `Arg=$(literal)*` is one unchanged argument.
 Do not put secrets in diagnostic unit names; launch vectors are not logged.
@@ -108,8 +114,10 @@ One transaction runs at a time. Duplicate pending starts of the same root coales
 conflicting requests return Busy. Job IDs never wrap, and completion callbacks
 must carry the matching job ID. Every successful root retains its own desired
 closure, so rollback/stop of one root preserves services retained by another.
-There is a global admission limit of 56 services across retained roots, leaving
-kernel capacity for recovery and transient work. This admission budget does not
+Admission across retained roots is limited to 56 services and 112 parent
+endpoints: two per ordinary service, three when control is granted. Thus 37
+control-bearing services fit, while 38 do not. Remaining endpoint capacity
+supports temporary launch pairs, worker wakeup and recovery. This admission budget does not
 enforce descendants' memory/process limits; capability/resource enforcement is M5.
 
 A missing executable or other failed spawn fails that activation immediately;
@@ -118,8 +126,9 @@ errno, so retrying failed launch syscalls during activation is deferred. A proce
 that was successfully spawned can restart according to its policy. If its exit is
 observed while activation is still pending, dependents wait through retry backoff;
 terminal failure blocks them. The native loop drains child events between effects.
-Readiness means successful spawn, not application initialization, and an exit
-immediately after an observation is always possible. M3 adds explicit readiness.
+With `Ready=spawned`, readiness means successful spawn. With `Ready=notify`,
+the service remains Starting until an authenticated Ready for its current run.
+An exit immediately after an observation is always possible.
 
 Optional failures yield Degraded; required failures yield Failed. Cleanup stops
 only exclusively acquired services, in reverse actual activation order, and waits
@@ -141,9 +150,67 @@ Invalid catalogs print bounded file/line/key or graph diagnostics and enter reco
 mode with PID 1 alive and no services launched. Recovery has no reload channel yet. Valid but unsuccessful boot
 activation reports Failed/Degraded and keeps supervising retained services.
 
-`Manager::start`/`stop` and status APIs currently serve the native boot adapter and
-host tests; no public IPC control endpoint exists. Reload, notify readiness,
-watchdogs, cooperative stop, shutdown/poweroff, durable logs, user identities and
-Nest sessions remain future milestones. M2 adds no syscall numbers or privileges.
+Spark receives authority only through an explicit `ControlAccess` launch grant;
+ordinary application launch has no control access. Reload, cooperative stop,
+shutdown/poweroff, durable logs, user identities and Nest remain future work.
+M3 adds the documented native channel/image syscalls; M2 added none.
 FAT configuration is trusted image input until access enforcement exists; limits
 bound PID 1's own allocations but do not redesign kernel filesystem enumeration.
+
+
+## Explicit readiness and watchdogs (M3 work in progress)
+
+A notifying service uses `userlib::service::Client::bootstrap()` to take its
+nondelegable notify and optional log grants. It dispatches native port events to
+`on_event` until Init establishes its run. It calls `ready()` after initialization,
+then `heartbeat()` only after completed work when a watchdog is configured.
+A failed send does not commit client readiness; retry explicitly on writable
+interest. No background pinger makes a stalled service look healthy.
+
+The manager sends Init after registering the child's process identity and per-run
+endpoints. A payload run number cannot confer authority: the receiving endpoint,
+kernel-supplied sender, exact process identity and current run must all agree.
+Ready at or after the startup deadline is late; duplicate Ready does not refresh
+a watchdog. Heartbeat is invalid before Ready or without a configured watchdog.
+Logs use a separate channel and cannot authorize readiness.
+
+Startup/watchdog failure withdraws readiness and requests one termination for the
+owned process. Child completion acknowledges cleanup; issuing kill does not.
+An exit before Ready, including status zero, counts as failed initialization.
+Restart backoff/budgets still apply; healthy-history reset begins at readiness.
+Requires orders activation but is not a continuing liveness binding: an already
+active dependent survives prerequisite restart. Compositor/session failure policy
+requires the later explicit session lifecycle work.
+
+Native logging is a bounded volatile 256-record journal, not stdout capture or
+persistent storage. Records contain authenticated unit/run/process attribution,
+monotonic tick, severity and at most 232 UTF-8 bytes without control characters.
+Overwritten history reports a cursor gap. Per-run log/notify budgets pause receive
+interest and resume on deadlines; logging performs no disk or console output.
+Spark exposes bounded snapshot log queries; see the M3 progress record.
+
+## Spark control and asynchronous launch
+
+`Spark` is a transient controller executable (`/BIN/SPARK.SVC`), with no installed
+default unit or global broker. A configured service grants `ControlAccess=status`
+for `status`, `logs`, and `job ID`; `manage` additionally allows `start UNIT`,
+`stop UNIT`, and `restart UNIT`. These commands use literal arguments and return
+bounded protocol responses. A job reply means admission; query its exact ID for
+completion. Only the current/latest job is retained; older IDs return Stale.
+Shutdown remains Unsupported until the complete M4 stop/halt contract exists.
+A log overwrite yields Gap with the oldest available sequence. Fragment offsets
+refer to that exact record and respect UTF-8 boundaries. Queries are snapshots,
+with a finite page limit, rather than an unbounded follow loop.
+
+One restart job preserves existing owners and spans old-child completion plus new
+readiness. It does not bypass attempt limits; exhausted restarts retain Failed
+until explicit stop. Stop suppresses automatic restart and waits for completion.
+The existing M3 stop mechanism is forced termination; cooperative stop is M4.
+
+The actor admits starts independently of a single worker's bounded filesystem
+reads. Start deadlines include queued time. It cancels unwanted reservations
+cooperatively, retains early child completions, and accounts for late publication.
+`launching` diagnostics identify admission; `started` identify result publication.
+A cancelled start already committed in the kernel is killed/reaped before rollback
+finishes. There is no promise that a userspace cancellation check is atomic with
+kernel process creation. No Tokio or custom executor is used.

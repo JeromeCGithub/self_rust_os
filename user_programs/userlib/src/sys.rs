@@ -572,6 +572,8 @@ pub struct Events(u64);
 impl Events {
     /// An owned child has retained completion; consume through the child API.
     pub const CHILD: Self = Self(rustos_thread_abi::EVENT_CHILD);
+    /// Native channel message, closure or requested writable notification.
+    pub const PORT: Self = Self(rustos_thread_abi::EVENT_PORT);
     pub const MAILBOX: Self = Self(rustos_thread_abi::EVENT_MAILBOX);
     pub const STDIO_READ: Self = Self(rustos_thread_abi::EVENT_STDIO_READ);
     pub const STDIO_WRITE: Self = Self(rustos_thread_abi::EVENT_STDIO_WRITE);

@@ -18,6 +18,12 @@ pub enum Kind {
     Service,
     Target,
 }
+/// Successful spawn or explicit authenticated readiness.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Readiness {
+    Spawned,
+    Notify,
+}
 /// Immutable parsed definition. Names resolve only after the entire catalog loads.
 #[derive(Debug)]
 pub struct Unit {
@@ -30,6 +36,10 @@ pub struct Unit {
     pub wants: Vec<String>,
     pub after: Vec<String>,
     pub policy: Policy,
+    pub readiness: Readiness,
+    pub start_timeout: u64,
+    pub watchdog: Option<u64>,
+    pub control: Option<rustos_service_abi::control::Access>,
 }
 /// Parse errors retain the source line without allocating while reporting failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +82,10 @@ pub fn parse(bytes: &[u8]) -> Result<Unit, Error> {
         requires: Vec::new(),
         wants: Vec::new(),
         after: Vec::new(),
+        readiness: Readiness::Spawned,
+        start_timeout: 90,
+        watchdog: None,
+        control: None,
         policy: Policy {
             restart: crate::Restart::Never,
             delay: 18,
@@ -83,7 +97,8 @@ pub fn parse(bytes: &[u8]) -> Result<Unit, Error> {
     };
     let mut seen = 0u32;
     let mut policy_line = 1;
-    const KEYS: [&str; 17] = [
+    let mut watchdog_line = 1;
+    const KEYS: [&str; 20] = [
         "Version",
         "Kind",
         "Name",
@@ -101,6 +116,9 @@ pub fn parse(bytes: &[u8]) -> Result<Unit, Error> {
         "Requires",
         "Wants",
         "After",
+        "StartTimeoutTicks",
+        "WatchdogTicks",
+        "ControlAccess",
     ];
     let mut launch_bytes = 0usize;
     for (index, raw) in text.split('\n').enumerate() {
@@ -177,9 +195,11 @@ pub fn parse(bytes: &[u8]) -> Result<Unit, Error> {
                 }
             }
             7 => {
-                if value != "spawned" {
-                    return Err(error(line, ErrorKind::Unsupported));
-                }
+                unit.readiness = match value {
+                    "spawned" => Readiness::Spawned,
+                    "notify" => Readiness::Notify,
+                    _ => return Err(error(line, ErrorKind::Unsupported)),
+                };
             }
             8 => {
                 unit.policy.restart = match value {
@@ -224,6 +244,26 @@ pub fn parse(bytes: &[u8]) -> Result<Unit, Error> {
                 }
                 append(edges, value, MAX_EDGES, line)?;
             }
+            19 => {
+                unit.control = Some(match value {
+                    "status" => rustos_service_abi::control::Access::ReadOnly,
+                    "manage" => rustos_service_abi::control::Access::Manage,
+                    _ => return Err(error(line, ErrorKind::InvalidValue)),
+                });
+            }
+            17 | 18 => {
+                let ticks = value
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|&n| n != 0 && n <= i64::MAX as u64)
+                    .ok_or(error(line, ErrorKind::InvalidValue))?;
+                if id == 17 {
+                    unit.start_timeout = ticks;
+                } else {
+                    unit.watchdog = Some(ticks);
+                    watchdog_line = line;
+                }
+            }
             _ => return Err(error(line, ErrorKind::UnknownKey)),
         }
     }
@@ -231,9 +271,12 @@ pub fn parse(bytes: &[u8]) -> Result<Unit, Error> {
         return Err(error(1, ErrorKind::MissingField));
     }
     // Target definitions have no executable, launch vectors or runtime policy.
-    let service_fields = ((1u32 << 14) - 1) & !7;
+    let service_fields = (1 << 19) | (((1u32 << 14) - 1) & !7) | (3u32 << 17);
     if unit.kind == Kind::Target && seen & service_fields != 0 {
         return Err(error(1, ErrorKind::InvalidValue));
+    }
+    if unit.watchdog.is_some() && unit.readiness != Readiness::Notify {
+        return Err(error(watchdog_line, ErrorKind::InvalidValue));
     }
     crate::Supervisor::<1>::new([unit.policy])
         .map_err(|_| error(policy_line, ErrorKind::InvalidValue))?;

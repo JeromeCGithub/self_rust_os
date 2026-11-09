@@ -19,7 +19,7 @@ from qemu_test import copy_disk, disk_image, console_text, connect
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--case', choices=['two-services', 'fatal-exit', 'fatal-fault', 'fatal-thread', 'abi', 'lifecycle', 'orphans', 'exhaustion', 'missing-init', 'bad-init', 'fault-service', 'steady'], default='two-services')
+    parser.add_argument('--case', choices=['two-services', 'fatal-exit', 'fatal-fault', 'fatal-thread', 'abi', 'lifecycle', 'orphans', 'exhaustion', 'missing-init', 'bad-init', 'fault-service', 'steady', 'ipc', 'ipc-lifecycle'], default='two-services')
     case = parser.parse_args().case
     evidence = ROOT / 'target/init'
     evidence.mkdir(parents=True, exist_ok=True)
@@ -100,6 +100,16 @@ def main():
                     assert '[initator] PID 1 entered Ring 3' in output
                     assert '[flicker] started' in output
                     print('PASS: ordinary native boot keeps both foreground services live:', log)
+                    return
+                if case == 'ipc-lifecycle' and '[init-probe] IPC lifecycle PASS cycles=64 frames=' in output:
+                    print('PASS: Ring 3 bound-channel spawn/exit/reap cycles and exact frame recovery:', log)
+                    return
+                if case == 'ipc' and '[init-probe] IPC PASS fifo=8 moved=true closed=true' in output:
+                    assert '[init-probe] IPC PASS fifo=8 moved=true closed=true writable=true' in output
+                    assert '[init-probe] IPC validation PASS pointers=true rollback=true quota=true' in output
+                    assert '[init-probe] image startup PASS' in output
+                    assert '[init-probe] early publication PASS cycles=4' in output
+                    print('PASS: Ring 3 channels, binding move, FIFO/backpressure, peer/child lifecycle:', log)
                     return
                 if case == 'exhaustion' and '[init-probe] exhaustion PASS children=' in output:
                     print('PASS: spawn allocation failure rollback and complete recovery:', log)

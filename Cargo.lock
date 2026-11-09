@@ -267,6 +267,20 @@ name = "rustos-exec-image"
 version = "0.1.0"
 
 [[package]]
+name = "rustos-ipc-abi"
+version = "0.1.0"
+dependencies = [
+ "rustos-process-abi",
+]
+
+[[package]]
+name = "rustos-ipc-core"
+version = "0.1.0"
+dependencies = [
+ "rustos-ipc-abi",
+]
+
+[[package]]
 name = "rustos-net-abi"
 version = "0.1.0"
 
@@ -318,6 +332,8 @@ dependencies = [
  "rustos-audio-abi",
  "rustos-audio-queue",
  "rustos-exec-image",
+ "rustos-ipc-abi",
+ "rustos-ipc-core",
  "rustos-net-abi",
  "rustos-net-stack",
  "rustos-platform-abi",

@@ -70,3 +70,98 @@ pub(crate) fn spawn(path: u64, request: u64) -> u64 {
     envp.extend(environment.iter().map(String::as_str));
     super::syscall::spawn_at(&path, fields[1] == 1, &argv, &envp)
 }
+
+/// Copy the complete v2 request, vectors and endpoint records before filesystem
+/// loading can release entry. Rights/owner/quota checks repeat under the scheduler
+/// lock immediately before child resource construction and publication.
+pub(crate) fn spawn_bound(path: u64, request: u64) -> u64 {
+    use rustos_ipc_abi as abi;
+    let mut bytes = [0; abi::SPAWN_SIZE];
+    if !super::usercopy::from_user(request, &mut bytes) {
+        return ERROR;
+    }
+    let Ok(request) = abi::Spawn::decode(&bytes) else {
+        return ERROR;
+    };
+    let Some(path) = crate::fs::handles::path(path, crate::fs::handles::PathKind::Existing) else {
+        return ERROR;
+    };
+    bound(request, |argv, envp, bindings| {
+        super::syscall::spawn_at_bound(&path, argv, envp, bindings)
+    })
+}
+/// Snapshot an entire mapped user image, then let the existing native loader
+/// validate it and atomically publish its private frames/explicit endpoint moves.
+pub(crate) fn spawn_image(image: u64, packet: u64) -> u64 {
+    use rustos_ipc_abi as abi;
+    let mut bytes = [0; abi::IMAGE_SPAWN_SIZE];
+    if !super::usercopy::from_user(packet, &mut bytes) {
+        return ERROR;
+    }
+    let Ok(request) = abi::ImageSpawn::decode(&bytes) else {
+        return ERROR;
+    };
+    let maximum = rustos_thread_abi::IMAGE_END - super::USER_CODE_START;
+    if request.image_length > maximum
+        || !super::usercopy::validate(image, request.image_length, false)
+    {
+        return ERROR;
+    }
+    let mut binary = Vec::new();
+    if binary
+        .try_reserve_exact(request.image_length as usize)
+        .is_err()
+    {
+        return ERROR;
+    }
+    binary.resize(request.image_length as usize, 0);
+    if !super::usercopy::from_user(image, &mut binary) || !crate::scheduler::current_is_live() {
+        return ERROR;
+    }
+    bound(request.launch, |argv, envp, bindings| {
+        crate::scheduler::spawn_process_with_bindings(&binary, 0, argv, envp, bindings)
+            .map(u64::from)
+            .unwrap_or(ERROR)
+    })
+}
+fn bound(
+    request: rustos_ipc_abi::Spawn,
+    finish: impl FnOnce(&[&str], &[&str], &[rustos_ipc_abi::Binding]) -> u64,
+) -> u64 {
+    use rustos_ipc_abi as abi;
+    let mut records = [0; abi::MAX_BINDINGS * abi::BINDING_SIZE];
+    let length = request.binding_count as usize * abi::BINDING_SIZE;
+    if !super::usercopy::from_user(request.bindings, &mut records[..length]) {
+        return ERROR;
+    }
+    let mut bindings = Vec::new();
+    if bindings
+        .try_reserve_exact(request.binding_count as usize)
+        .is_err()
+    {
+        return ERROR;
+    }
+    for record in records[..length].chunks_exact(abi::BINDING_SIZE) {
+        let Ok(binding) = abi::Binding::decode(record) else {
+            return ERROR;
+        };
+        bindings.push(binding);
+    }
+    let mut budget = 0;
+    let Ok(arguments) = strings(request.argv, request.argc, &mut budget) else {
+        return ERROR;
+    };
+    let Ok(environment) = strings(request.envp, request.envc, &mut budget) else {
+        return ERROR;
+    };
+    let mut argv = Vec::new();
+    let mut envp = Vec::new();
+    if argv.try_reserve_exact(arguments.len()).is_err()
+        || envp.try_reserve_exact(environment.len()).is_err()
+    {
+        return ERROR;
+    }
+    argv.extend(arguments.iter().map(String::as_str));
+    envp.extend(environment.iter().map(String::as_str));
+    finish(&argv, &envp, &bindings)
+}

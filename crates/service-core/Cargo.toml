@@ -4,3 +4,6 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Bounded native service supervision policy for Initator"
+
+[dependencies]
+rustos-service-abi = { path = "../service-abi" }
