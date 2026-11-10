@@ -21,16 +21,18 @@ pub fn reap_retired() {
         let Some(tid) = dead else {
             break;
         };
-        let t = s.threads[(tid & 65535) as usize]
+        let mut t = s.threads[(tid & 65535) as usize]
             .take()
             .expect("retired thread");
+        let mut thread_charge = None;
         if let Some(UserStack {
             slot,
             user_base: base,
             frames,
             tls_base,
             tls_frames,
-        }) = t.user_stack
+            scope_charge,
+        }) = t.user_stack.take()
         {
             let root = s
                 .processes
@@ -95,11 +97,16 @@ pub fn reap_retired() {
                         .recycle(frame);
                 }
             }
+            thread_charge = scope_charge;
             if let Some(p) = s.processes.get_mut(t.pid as usize).and_then(Option::as_mut) {
                 p.stack_slots &= !(1u64 << slot);
             }
         }
-        // t.kernel_stack drops here, after all CPU execution has switched away.
+        // Kernel stack/metadata cease to exist before a scope can become closed.
+        drop(t);
+        if let Some(charge) = thread_charge {
+            s.scopes.release(charge).expect("owned thread scope charge");
+        }
     }
     let mut i = 0;
     while i < s.retired.len() {
@@ -108,9 +115,11 @@ pub fn reap_retired() {
             i += 1;
             continue;
         }
-        let p = s.retired.swap_remove(i);
+        let mut p = s.retired.swap_remove(i);
+        let scope_charge = p.scope_charge.take();
+        let frames = core::mem::take(&mut p.owned_frames);
         smp::shootdown();
-        for frame in p.owned_frames {
+        for frame in frames {
             // SAFETY: Every thread is off-CPU and gone; no user-copy reference
             // survives entry, and no TLB or DMA references these owned frames.
             unsafe {
@@ -119,6 +128,12 @@ pub fn reap_retired() {
                     .expect("frame pool")
                     .recycle(frame);
             }
+        }
+        drop(p);
+        if let Some(charge) = scope_charge {
+            s.scopes
+                .release(charge)
+                .expect("owned process scope charge");
         }
     }
 }

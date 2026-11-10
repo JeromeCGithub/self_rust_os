@@ -11,6 +11,7 @@ keywords = ["OS", "x86_64", "os-development", "no-std", "kernel-development"]
 [dependencies]
 rustos-ipc-abi = { path = "crates/ipc-abi" }
 rustos-ipc-core = { path = "crates/ipc-core" }
+rustos-scope-core = { path = "crates/scope-core" }
 rustos-audio-abi = { path = "crates/audio-abi" }
 rustos-audio-queue = { path = "crates/audio-queue" }
 rustos-process-abi = { path = "crates/process-abi" }

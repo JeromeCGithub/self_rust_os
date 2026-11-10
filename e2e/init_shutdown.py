@@ -13,6 +13,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode=True
 sys.path.insert(0,str(ROOT/'tools'))
 from init_latency import drive_options
+from init_shutdown import halt_record
 from qemu_platform import arguments
 from qemu_test import console_text,connect,copy_disk,disk_image
 
@@ -63,8 +64,9 @@ def main():
                 assert process.poll() is None,raw[-8000:]
                 assert 'panicked' not in raw and 'Kernel panic' not in raw and '[initator-fatal]' not in raw,raw[-8000:]
                 assert '[spark] unknown command' not in text,'Spark must implement shutdown requests'
-                if '[system-halt]' in raw:
-                    assert '[system-halt] action=Halt parked=true dma_disabled=true' in raw,raw[-8000:]
+                terminal=halt_record(raw)
+                if terminal is not None:
+                    assert '[system-halt] action=Halt parked=true dma_disabled=true' in terminal,raw[-8000:]
                     assert '[spark] shutdown accepted job=' in text
                     begun=re.search(r'\[initator\] shutdown job=(\d+) tick=(\d+) deadline=Some\((\d+)\)',text)
                     drained=re.search(r'\[initator\] shutdown drained job=(\d+) tick=(\d+)',text)

@@ -51,6 +51,8 @@ pub struct Process {
     pub pid: Pid,
     /// Kernel-owned native identity with irreversibly reducible mechanism rights.
     pub(crate) principal: rustos_process_abi::principal::Principal,
+    /// Native resource reservation, retained through off-CPU physical reclamation.
+    pub(crate) scope_charge: Option<rustos_scope_core::Charge>,
     /// Completion owner assigned before publishing the process.
     pub(crate) parent: Option<Pid>,
     pub(crate) adoption_pending: bool,
@@ -92,6 +94,7 @@ pub(crate) struct UserStack {
     pub(crate) frames: Vec<PhysFrame>,
     pub(crate) tls_base: u64,
     pub(crate) tls_frames: Vec<PhysFrame>,
+    pub(crate) scope_charge: Option<rustos_scope_core::Charge>,
 }
 pub(crate) struct Thread {
     pub(crate) tid: Tid,

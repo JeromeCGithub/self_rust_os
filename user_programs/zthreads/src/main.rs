@@ -132,7 +132,12 @@ fn main() {
     assert_eq!(raw(abi::SYS_EVENT_WAIT, abi::EVENT_MAILBOX, 1, 0), 0);
     let _ = sys::mouse();
     assert_eq!(raw(abi::SYS_EVENT_WAIT, abi::EVENT_POINTER, 1, 0), 0);
-    for (mask, timeout, reserved) in [(0, 0, 0), (32, 0, 0), (1, u64::MAX, 0), (1, 0, 1)] {
+    // Child and port readiness are supported even when this process has no
+    // children or endpoints. Their finite wait must time out, not be rejected.
+    for mask in [abi::EVENT_CHILD, abi::EVENT_PORT] {
+        assert_eq!(raw(abi::SYS_EVENT_WAIT, mask, 1, 0), 0);
+    }
+    for (mask, timeout, reserved) in [(0, 0, 0), (abi::EVENT_ALL + 1, 0, 0), (1, u64::MAX, 0), (1, 0, 1)] {
         assert_eq!(raw(abi::SYS_EVENT_WAIT, mask, timeout, reserved), sys::SYSCALL_ERROR);
     }
     assert_eq!(raw(abi::SYS_EVENT_WAIT, abi::EVENT_STDIO_READ, 0, 0), sys::SYSCALL_ERROR,

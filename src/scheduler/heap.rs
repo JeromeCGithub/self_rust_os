@@ -1,5 +1,5 @@
 //! Linux-style program break over owned, zero-filled private pages.
-use super::{smp, ERROR, SCHEDULER};
+use super::{smp, Scheduler, ERROR, SCHEDULER};
 use alloc::vec::Vec;
 use x86_64::{
     structures::paging::{
@@ -75,23 +75,94 @@ pub fn program_break(request: u64) -> u64 {
                     .recycle(frame);
             }
         }
+        let Scheduler {
+            scopes, processes, ..
+        } = &mut *scheduler;
+        if let Some(charge) = processes[pid as usize]
+            .as_mut()
+            .expect("owner")
+            .scope_charge
+            .as_mut()
+        {
+            scopes
+                .release_part(
+                    charge,
+                    rustos_scope_core::Usage {
+                        pages: count as u64,
+                        ..rustos_scope_core::Usage::ZERO
+                    },
+                )
+                .expect("unmapped heap page charge");
+        }
         return request;
     }
     let count = ((end - previous) / 4096) as usize;
-    let mut ownership = Vec::new();
+    let old_metadata = process.owned_frames.capacity()
+        * core::mem::size_of::<x86_64::structures::paging::PhysFrame>();
     let Some(capacity) = count
         .checked_mul(4)
         .and_then(|n| n.checked_add(process.owned_frames.len()))
     else {
         return old;
     };
+    let Some(expected_metadata) =
+        capacity.checked_mul(core::mem::size_of::<x86_64::structures::paging::PhysFrame>())
+    else {
+        return old;
+    };
+    let Scheduler {
+        scopes,
+        processes,
+        frame_allocator,
+        ..
+    } = &mut *scheduler;
+    let process = processes[pid as usize].as_mut().expect("owner");
+    let mut budget = match process.scope_charge.as_mut() {
+        Some(charge) => match scopes.growth(
+            charge,
+            rustos_scope_core::Usage {
+                kernel_bytes: expected_metadata.saturating_sub(old_metadata) as u64,
+                ..rustos_scope_core::Usage::ZERO
+            },
+        ) {
+            Ok(budget) => Some(budget),
+            Err(_) => return old,
+        },
+        None => None,
+    };
+    // The new ledger and mapping rollback are dropped before the quota guard.
+    let mut ownership = Vec::new();
     if ownership.try_reserve_exact(capacity).is_err() {
         return old;
     }
+    let actual_metadata =
+        ownership.capacity() * core::mem::size_of::<x86_64::structures::paging::PhysFrame>();
+    if let Some(budget) = budget.as_mut() {
+        if budget
+            .grow(rustos_scope_core::Usage {
+                kernel_bytes: actual_metadata.saturating_sub(expected_metadata) as u64,
+                ..rustos_scope_core::Usage::ZERO
+            })
+            .is_err()
+        {
+            return old;
+        }
+    }
+    let maximum = match budget.as_ref() {
+        Some(budget) => match budget
+            .available()
+            .ok()
+            .and_then(|room| usize::try_from(room.pages).ok())
+        {
+            Some(n) => n,
+            None => return old,
+        },
+        None => usize::MAX,
+    };
     let mut parents = Vec::new();
     let mut mapped = 0;
-    let pool = scheduler.frame_allocator.as_mut().expect("pool");
-    let mut transaction = crate::memory::owned::FrameTransaction::new(pool);
+    let pool = frame_allocator.as_mut().expect("pool");
+    let mut transaction = crate::memory::owned::FrameTransaction::bounded(pool, maximum);
     // SAFETY: Exclusive live root under entry/scheduler serialization. Temporary
     // raw parent links are used only while this mapper operation owns the tree.
     let mut mapper = unsafe { OffsetPageTable::new(&mut *table, offset) };
@@ -134,6 +205,14 @@ pub fn program_break(request: u64) -> u64 {
             .ignore();
             mapped += 1;
         }
+        if let Some(budget) = budget.as_mut() {
+            budget
+                .grow(rustos_scope_core::Usage {
+                    pages: transaction.allocated_frames() as u64,
+                    ..rustos_scope_core::Usage::ZERO
+                })
+                .map_err(|_| ())?;
+        }
         Ok::<_, ()>(())
     })();
     if result.is_err() {
@@ -157,11 +236,24 @@ pub fn program_break(request: u64) -> u64 {
     }
     drop(mapper);
     let frames = transaction.commit();
-    let process = scheduler.processes[pid as usize].as_mut().expect("owner");
     ownership.extend_from_slice(&process.owned_frames);
     ownership.extend(frames);
     process.owned_frames = ownership;
     process.heap_break = request;
+    budget.map(rustos_scope_core::Growth::commit);
+    if actual_metadata < old_metadata {
+        if let Some(charge) = process.scope_charge.as_mut() {
+            scopes
+                .release_part(
+                    charge,
+                    rustos_scope_core::Usage {
+                        kernel_bytes: (old_metadata - actual_metadata) as u64,
+                        ..rustos_scope_core::Usage::ZERO
+                    },
+                )
+                .expect("replaced heap ownership metadata");
+        }
+    }
     smp::shootdown();
     request
 }

@@ -208,6 +208,7 @@ pub(super) fn stop_owned_child_locked(sched: &mut Scheduler, parent: Pid) {
             p.files.clear();
             p.exit_code = 9;
             p.exit_cause = rustos_process_abi::supervision::Cause::Killed;
+            super::scopes::death_locked(sched,child);
         }
         crate::net::cleanup(child);
         crate::audio::cleanup(child);

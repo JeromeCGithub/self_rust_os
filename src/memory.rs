@@ -118,6 +118,11 @@ impl RegionFrameAllocator {
         self.recycled.push(frame);
     }
 
+    /// Total frame identities this pool can issue, using the same region rounding
+    /// as allocate_frame. Valid nonoverlapping physical RAM bounds the sum.
+    pub fn total_frames(&self) -> u64 {
+        self.regions.iter().map(|region|region.len().div_ceil(4096)).sum()
+    }
     /// Number of issued frames not returned to this allocator.
     pub fn allocated(&self) -> usize {
         self.next - self.recycled.len()
