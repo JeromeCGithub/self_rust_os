@@ -114,6 +114,8 @@ fn native_scope_allocation_lifecycle_and_identity() {
     scoped_process_heap_and_threads(&mut context, &initial);
     scoped_tls_and_thread_page_limits(&mut context, &initial);
     session_ownership_and_orphans(&mut context, &initial);
+    scoped_ipc_factory_limit(&mut context, &initial);
+    scoped_ipc_moves_and_recovery(&mut context, &initial);
 }
 fn failed_constructor_rolls_back(initial: &rustos_scope_core::Snapshot) {
     let mut base_bytes = limits(1, 1, 4096);
@@ -490,6 +492,223 @@ fn session_record_admission(
         scheduler::scope_close(id).unwrap();
         scheduler::scope_ack_closed(id).unwrap();
     }
+}
+fn scoped_ipc_factory_limit(context: &mut u64, initial: &rustos_scope_core::Snapshot) {
+    use rustos_ipc_abi as ipc;
+    let mut constructor_bytes = 0;
+    for bytes_limited in [false, true] {
+        let mut limit = limits(1, 1, 4096);
+        limit.ipc_handles = if bytes_limited { 2 } else { 1 };
+        if bytes_limited {
+            limit.kernel_bytes = constructor_bytes;
+        }
+        let scope = scheduler::scope_create_service(SYSTEM, limit).unwrap();
+        let child =
+            scheduler::spawn_process_in_scope(&[0xc3], 4096, &[], &[], scope, caps()).unwrap();
+        let usage = scheduler::scope_status(scope).unwrap().used;
+        constructor_bytes = usage.kernel_bytes;
+        activate(child, context);
+        let before = allocator::allocated_bytes();
+        let output = self_rust_os::userspace::USER_STACK_TOP - 4096;
+        for _ in 0..3 {
+            assert_eq!(
+                scheduler::ipc_syscall(ipc::SYS_PAIR, output, 16, 0),
+                u64::MAX - 1,
+                "scope handle and inbox-byte budgets must precede channel allocation"
+            );
+            assert_eq!(allocator::allocated_bytes(), before);
+        }
+        activate(1, context);
+        assert_eq!(scheduler::scope_status(scope).unwrap().used, usage);
+        scheduler::scope_close(scope).unwrap();
+        assert_eq!(scheduler::waitpid(child), 9);
+        scheduler::reap_retired();
+        scheduler::scope_ack_closed(scope).unwrap();
+        assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial.used);
+    }
+}
+fn pair(output: u64) -> [u64; 2] {
+    use rustos_ipc_abi as ipc;
+    assert_eq!(scheduler::ipc_syscall(ipc::SYS_PAIR, output, 16, 0), 0);
+    let mut bytes = [0; 16];
+    assert!(self_rust_os::userspace::usercopy::from_user(
+        output, &mut bytes
+    ));
+    [
+        u64::from_le_bytes(bytes[..8].try_into().unwrap()),
+        u64::from_le_bytes(bytes[8..].try_into().unwrap()),
+    ]
+}
+fn ipc_limit(handles: u64) -> Usage {
+    let mut limit = limits(2, 2, 8192);
+    limit.ipc_handles = handles;
+    limit
+}
+fn scoped_ipc_moves_and_recovery(context: &mut u64, initial: &rustos_scope_core::Snapshot) {
+    use rustos_ipc_abi as ipc;
+    let output = self_rust_os::userspace::USER_STACK_TOP - 4096;
+    let [a, b] = pair(output);
+    let source = scheduler::scope_status(SYSTEM).unwrap().used;
+    assert_eq!(source.ipc_handles, 2);
+    let denied = scheduler::scope_create_service(SYSTEM, ipc_limit(0)).unwrap();
+    let grant = [ipc::Binding {
+        source: ipc::Handle(b),
+        tag: 1,
+        rights: ipc::Rights::ALL,
+    }];
+    let before = scheduler::frame_count();
+    for _ in 0..3 {
+        assert!(scheduler::spawn_process_in_scope_with_bindings(
+            &[0xc3],
+            4096,
+            &[],
+            &[],
+            &grant,
+            denied,
+            Caps::NONE
+        )
+        .is_err());
+        let view = scheduler::scope_status(denied).unwrap();
+        assert_eq!(view.used, Usage::ZERO);
+        assert_eq!(view.leader, None);
+        assert_eq!(scheduler::frame_count(), before);
+        assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, source);
+    }
+    scheduler::scope_close(denied).unwrap();
+    scheduler::scope_ack_closed(denied).unwrap();
+    let scope = scheduler::scope_create_service(SYSTEM, ipc_limit(1)).unwrap();
+    let child = scheduler::spawn_process_in_scope_with_bindings(
+        &[0xc3],
+        4096,
+        &[],
+        &[],
+        &grant,
+        scope,
+        Caps::NONE,
+    )
+    .unwrap();
+    assert_eq!(scheduler::scope_status(scope).unwrap().used.ipc_handles, 1);
+    assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used.ipc_handles, 2);
+    assert_eq!(
+        scheduler::ipc_syscall(ipc::SYS_CLOSE, b, 0, 0),
+        u64::MAX - 1,
+        "source loses the moved endpoint"
+    );
+    activate(child, context);
+    assert_eq!(scheduler::ipc_syscall(ipc::SYS_BOOTSTRAP, 1, 0, 0), b);
+    assert_eq!(scheduler::ipc_syscall(ipc::SYS_CLOSE, b, 0, 0), 0);
+    activate(1, context);
+    assert_eq!(scheduler::scope_status(scope).unwrap().used.ipc_handles, 0);
+    assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used.ipc_handles, 1);
+    scheduler::scope_close(scope).unwrap();
+    assert_eq!(scheduler::waitpid(child), 9);
+    scheduler::reap_retired();
+    scheduler::scope_ack_closed(scope).unwrap();
+    assert_eq!(scheduler::ipc_syscall(ipc::SYS_CLOSE, a, 0, 0), 0);
+    assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial.used);
+
+    // Inherited-scope transfer must succeed even when all leaf handles are used.
+    let scope = scheduler::scope_create_service(SYSTEM, ipc_limit(2)).unwrap();
+    let leader = scheduler::spawn_process_in_scope(&[0xc3], 4096, &[], &[], scope, caps()).unwrap();
+    activate(leader, context);
+    let [a, b] = pair(output);
+    let descendant = scheduler::spawn_process_with_bindings(
+        &[0xc3],
+        4096,
+        &[],
+        &[],
+        &[ipc::Binding {
+            source: ipc::Handle(b),
+            tag: 1,
+            rights: ipc::Rights::ALL,
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        scheduler::ipc_syscall(ipc::SYS_PAIR, output, 16, 0),
+        u64::MAX - 1
+    );
+    activate(descendant, context);
+    assert_eq!(scheduler::ipc_syscall(ipc::SYS_BOOTSTRAP, 1, 0, 0), b);
+    assert_eq!(
+        scheduler::ipc_syscall(ipc::SYS_PAIR, output, 16, 0),
+        u64::MAX - 1
+    );
+    activate(1, context);
+    assert_eq!(scheduler::scope_status(scope).unwrap().used.ipc_handles, 2);
+    scheduler::scope_close(scope).unwrap();
+    assert_eq!(scheduler::waitpid(leader), 9);
+    assert_eq!(scheduler::waitpid(descendant), 9);
+    scheduler::reap_retired();
+    scheduler::scope_ack_closed(scope).unwrap();
+    assert_eq!(
+        scheduler::ipc_syscall(ipc::SYS_CLOSE, a, 0, 0),
+        u64::MAX - 1
+    );
+    assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial.used);
+
+    // Half-closed channels occupy slots with only one live handle each. An
+    // endpoint-count floor alone would let a session exhaust all 128 objects.
+    let scope = scheduler::scope_create_service(SYSTEM, ipc_limit(256)).unwrap();
+    let leader = scheduler::spawn_process_in_scope(&[0xc3], 4096, &[], &[], scope, caps()).unwrap();
+    activate(leader, context);
+    for _ in 0..120 {
+        let [_, b] = pair(output);
+        assert_eq!(scheduler::ipc_syscall(ipc::SYS_CLOSE, b, 0, 0), 0);
+    }
+    assert_eq!(
+        scheduler::ipc_syscall(ipc::SYS_PAIR, output, 16, 0),
+        u64::MAX - 1,
+        "sparse channels must leave physical object recovery capacity"
+    );
+    activate(1, context);
+    assert_eq!(
+        scheduler::scope_status(scope).unwrap().used.ipc_handles,
+        120
+    );
+    let mut recovery = [[0; 2]; 8];
+    for endpoints in &mut recovery {
+        *endpoints = pair(output);
+    }
+    assert_eq!(
+        scheduler::ipc_syscall(ipc::SYS_PAIR, output, 16, 0),
+        u64::MAX - 1
+    );
+    let target = scheduler::scope_create_service(SYSTEM, ipc_limit(1)).unwrap();
+    assert!(
+        scheduler::spawn_process_in_scope_with_bindings(
+            &[0xc3],
+            4096,
+            &[],
+            &[],
+            &[ipc::Binding {
+                source: ipc::Handle(recovery[0][1]),
+                tag: 1,
+                rights: ipc::Rights::ALL
+            }],
+            target,
+            Caps::NONE
+        )
+        .is_err(),
+        "grants cannot bypass physical recovery capacity"
+    );
+    scheduler::scope_close(target).unwrap();
+    scheduler::scope_ack_closed(target).unwrap();
+    scheduler::scope_close(scope).unwrap();
+    assert_eq!(scheduler::waitpid(leader), 9);
+    scheduler::reap_retired();
+    scheduler::scope_ack_closed(scope).unwrap();
+    assert_eq!(
+        scheduler::scope_status(SYSTEM).unwrap().used.ipc_handles,
+        16
+    );
+    for endpoints in recovery {
+        for handle in endpoints {
+            assert_eq!(scheduler::ipc_syscall(ipc::SYS_CLOSE, handle, 0, 0), 0);
+        }
+    }
+    assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial.used);
+    assert_eq!(scheduler::frame_count(), initial.used.pages);
 }
 fn activate(pid: u32, context: &mut u64) {
     for _ in 0..64 {

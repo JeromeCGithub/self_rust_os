@@ -22,8 +22,8 @@
 //! scope controls pass to init. These events never consume process completion.
 //! This crate is not a userspace ABI. The native scheduler adapter currently
 //! accounts process/thread reservations, private frames and selected persistent
-//! allocations; filesystem, IPC, socket and audio accounting remain separate
-//! work. Host tests alone do not prove kernel containment.
+//! allocations and IPC handles/inboxes; filesystem, socket and audio accounting
+//! remain separate work. Host tests alone do not prove kernel containment.
 #![no_std]
 pub use rustos_process_abi::supervision::ProcessKey;
 /// Fixed scope table, including the reserved system root.
@@ -78,6 +78,7 @@ macro_rules! resources {
             fn permits_growth(self, delta:Self, ceiling:Self)->bool {
                 $((delta.$field==0 || self.$field<=ceiling.$field))&&+
             }
+            fn increase_over(self, before:Self)->Self {Self{$($field:self.$field.saturating_sub(before.$field)),+}}
             fn room(self, used:Self)->Self {Self{$($field:self.$field.saturating_sub(used.$field)),+}}
             fn minimum(self, other:Self)->Self {Self{$($field:self.$field.min(other.$field)),+}}
             fn add(self, rhs:Self)->Result<Self,Error> {
@@ -604,3 +605,5 @@ mod tests {
 
 mod transaction;
 pub use transaction::{Growth, Reservation};
+
+mod transfer;

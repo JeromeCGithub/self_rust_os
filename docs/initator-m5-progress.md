@@ -11,7 +11,8 @@ kernel now attaches native principals, enforces mechanism capability domains and
 supports one-way process rights reduction and protects system-file mutations.
 Kernel-only scoped construction, page/thread accounting and descendant cleanup
 are now wired. The Ring 3 scope grant/event ABI, session home/tmp grants and
-filesystem/IPC/socket/audio accounting remain incomplete; Nest does not yet run.
+filesystem/socket/audio accounting remain incomplete; Nest does not yet run.
+IPC endpoint/inbox budgets and atomic grant accounting are now wired below.
 Syscalls 129–130 and their SDK wrappers are wired. The remaining authority/resource
 enforcement must be implemented in this same milestone before delivery. Do not interpret a decoded description as a
 grant.
@@ -417,6 +418,89 @@ nine real Ring 3 IPC/64-cycle cleanup/two-service supervision cases across
 This repairs allocation lifetime; scope accounting and atomic budget transfer for
 endpoint grants remain pending. It does not establish complete IPC isolation.
 
+## Native IPC resource accounting
+
+Native channel construction now reserves two handles and the bounded inbox storage
+before allocation. The actual VecDeque capacities are then charged before handle
+publication. A failure destroys new endpoints/inboxes before returning quota;
+invalid buffers and exhausted limits preserve older objects. Explicit close and
+all process-stop paths release endpoint/inbox charges after actual storage release.
+The process's charge retains its remaining reservations through deferred physical
+reclamation. The legacy desktop remains explicitly unscoped.
+
+[IPC storage snapshots](../crates/ipc-core/src/lib.rs) count allocated capacity,
+including live endpoints whose receive rights were removed, rather than just
+queued payload bytes. [Atomic charge transfers](../crates/scope-core/src/transfer.rs)
+validate source ownership counts, target limits and every affected ancestor before
+mutation. Shared ancestors receive only their net change, allowing an inherited
+endpoint handoff at a full scope limit. System-to-non-system transfers conservatively
+check the recovery ceiling even when the shared system aggregate is unchanged;
+existing non-system handoffs remain possible while init consumes recovery capacity.
+These checks account resource ownership; endpoint access still depends on the
+separately authenticated process key, explicit grant and attenuated rights.
+
+[Construction](../src/scheduler.rs) validates the whole proposed endpoint grant,
+finishes fallible image/mapping work and validates receiving quota under SCHEDULER
+before committing ownership. It then moves the endpoint charges onto the new PCB
+without another allocation or scheduling point. Failed construction leaves source
+handles/charges intact and removes unpublished leader appointments. The reservation
+commit error returns its guard so callers can roll back real resources before
+returning quota. A trusted kernel-only scoped constructor now accepts explicit
+bindings; this does not expose a Ring 3 scope factory.
+
+The root bounds live endpoints at 256, reserving 16 for recovery. A separate
+physical-object gate leaves eight of the 128 channel slots unavailable to ordinary
+scopes: a half-closed channel still occupies a slot with just one live endpoint.
+Ordinary pair creation and system-to-ordinary grant admission both honor this
+floor. The grant gate conservatively counts all current channels; it may reject
+a grant while trusted system channels occupy the recovery region. Endpoint charges
+do not include the shared bounded registry's retained slot-vector infrastructure;
+selected persistent allocations are still distinct from complete kernel-heap or
+temporary-I/O isolation.
+
+The native regression first allocated a pair in a scope limited to one handle
+(`scopes-ipc-budget-red.log`). Expanded kernel assertions cover handle and inbox-byte
+exhaustion before allocation; repeated failed scoped grant construction restoring
+frames, counters and leader state; a successful cross-scope endpoint move;
+inherited-scope moves at full handle quota; close/death releasing the correct
+owner's charge; 120 half-closed channels still leaving eight usable init slots;
+and grant admission refusing to consume recovery slots. Final cleanup restores
+the exact initial global frame and selected-resource counters. This remains a
+single-CPU kernel-context scope test; real Ring 3 scope-grant/SMP tests await the ABI.
+
+The host suites pass: 23 scope runtime tests plus two compile-fail checks, and
+16 IPC runtime tests. Transfer tests include shared-ancestor and cross-session
+pressure, recovery admission, arithmetic/boundary failure atomicity and guard
+retention on failed commit. API-absence red checks are recorded in
+`scopes-transfer-red.log`, `scopes-transfer-commit-guard-red.log` and
+`scopes-ipc-storage-query-red.log` (and the scoped constructor API check in
+`scopes-ipc-grant-red.log`); green host transcripts are
+`scopes-ipc-account-host-{scopes,ipc}.log`.
+
+Both boot-path builds, native/default GRUB release images, all rebuilt apps, test
+compilation, 95 kernel unit cases and all eight relevant integration executables
+pass. The fresh native image passes all 66 boot/supervision/principal/capability/
+filesystem cases on 1/8/32 CPUs; the fresh default image passes the complete
+eight-CPU desktop interaction suite. The final commit-error guard refinement then
+passes rebuilt scope/IPC integration and kernel unit tests, both builds, native
+release/all-app image and nine IPC/lifecycle/two-service runs. Its image also passes
+33 readiness/control/shutdown cases and all six isolated loader/watchdog latency
+profiles across 1/8/32 CPUs. Every latency run observes zero watchdog-delay ticks;
+no acceptance timeout/budget was increased. No project warning or required runtime
+failure remains in these selected checks; bootimage still reports its existing
+unused rustc-abi target-field warning.
+
+Transcripts: `scopes-ipc-account-{unit,integration,native,desktop}.log`,
+`scopes-ipc-account-final-{kernel,build-default,build-grub,no-run,build-native,native}.log`,
+`scopes-ipc-account-control-shutdown.log`, `scopes-ipc-account-latency.log` and
+`scopes-ipc-account-tooling.log` (79 Python cases). The tested desktop screenshots
+are retained under `target/initator-m5-evidence/scopes-ipc-account-screenshots/`;
+the repository's generic screenshots are restored. A screenshot cannot prove
+quota ownership or cleanup, so allocator assertions, durable-state assertions and
+serial transcripts are the primary evidence. Manual host GUI/physical hardware
+checks remain unverified. Normal Initator launches still use the trusted system
+root; this checkpoint does not complete M5 or justify opening its milestone PR.
+
 ## Scope integration invariants for the next implementation
 
 - Keep the initial hierarchy bounded: system/session roots and service scopes;
@@ -444,11 +528,11 @@ endpoint grants remain pending. It does not establish complete IPC isolation.
 ## Remaining milestone acceptance
 
 Finish the Ring 3 authenticated scope/session factory, scoped spawn/status/events,
-and filesystem/IPC/socket/audio accounting and permissions. Add
+and filesystem/socket/audio accounting and permissions. Add
 temporary-I/O reservations/cancellation and quiescence
 checks, home/tmp grants, old-syscall bypass denial and least-authority IPC.
 Bind Initator's launches to service scopes and wait for scope cleanup in stop/restart
-jobs. Kernel-only identity and frame/thread tests do not complete these gates.
+jobs. Kernel-only identity, frame/thread and IPC budget tests do not complete these gates.
 Only then launch Nest as an explicitly unauthenticated fixed developer session
 under a distinct kernel user/session identity, with two supervised user services.
 Test independent sessions, failures, cleanup and resource pressure in QEMU at

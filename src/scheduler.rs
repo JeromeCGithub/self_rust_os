@@ -109,7 +109,10 @@ impl Scheduler {
 static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 
 mod scopes;
-pub use scopes::{scope_create_session, scope_create_service, scope_status, scope_close, scope_next_closed, scope_ack_closed, spawn_process_in_scope};
+pub use scopes::{
+    scope_ack_closed, scope_close, scope_create_service, scope_create_session,
+    scope_next_closed, scope_status, spawn_process_in_scope, spawn_process_in_scope_with_bindings,
+};
 mod principal;
 pub use principal::{attenuate_principal, principal_user};
 pub(crate) use principal::system_write_authority;
@@ -347,8 +350,8 @@ fn spawn_process_inner(
             capabilities: abi::Capabilities::ALL,
         }
     };
-    let binding_owner = if bindings.is_empty() {
-        None
+    let (binding_owner, binding_usage) = if bindings.is_empty() {
+        (None, rustos_scope_core::Usage::ZERO)
     } else {
         let owner = parent.ok_or("endpoint bindings require a live parent")?;
         if !sched.processes.get(owner as usize).and_then(Option::as_ref)
@@ -357,9 +360,15 @@ fn spawn_process_inner(
             return Err("endpoint owner exited");
         }
         let key = rustos_ipc_abi::ProcessKey { pid: owner, generation: 1 };
-        sched.ipc.validate_bindings(key, rustos_ipc_abi::ProcessKey { pid, generation: 1 }, bindings)
+        let storage = sched.ipc.binding_usage(key, rustos_ipc_abi::ProcessKey { pid, generation: 1 }, bindings)
             .map_err(|_| "invalid endpoint bindings")?;
-        Some(key)
+        if sched.init_pid.is_some() && principal.scope != rustos_scope_core::SYSTEM
+            && sched.processes[owner as usize].as_ref().expect("live owner").principal.scope == rustos_scope_core::SYSTEM
+            && sched.ipc.channels() > rustos_ipc_abi::MAX_CHANNELS - ipc::RECOVERY_CHANNELS
+        {
+            return Err("IPC grant would consume recovery channel capacity");
+        }
+        (Some(key), ipc::usage(storage))
     };
     let tid = sched.reserve_tid()?;
     let phys_offset = VirtAddr::new(sched.phys_offset);
@@ -548,6 +557,13 @@ fn spawn_process_inner(
         budget.grow(rustos_scope_core::Usage {pages:transaction.allocated_frames() as u64,
             kernel_bytes:bytes.checked_sub(base_bytes).ok_or("scope metadata accounting")?,
             ..rustos_scope_core::Usage::ZERO}).map_err(|_|"scope allocation budget exhausted")?;
+        if let Some(owner) = binding_owner {
+            budget.can_receive(
+                processes[owner.pid as usize].as_ref().and_then(|p| p.scope_charge.as_ref())
+                    .ok_or("native IPC owner charge missing")?,
+                binding_usage,
+            ).map_err(|_| "endpoint scope budget exhausted")?;
+        }
         if grant.is_some() {
             budget.appoint_leader(rustos_scope_core::ProcessKey{pid:parent.ok_or("scope owner missing")?,generation:1},
                 rustos_scope_core::ProcessKey{pid,generation:1}).map_err(|_|"scope leader commit denied")?;
@@ -563,7 +579,15 @@ fn spawn_process_inner(
             .map_err(|_| "endpoint binding commit failed")?;
     }
     let owned_frames = transaction.commit();
-    let scope_charge = budget.map(rustos_scope_core::Reservation::commit);
+    let scope_charge = match (budget, binding_owner) {
+        (Some(budget), Some(owner)) => Some(budget.commit_receiving(
+            processes[owner.pid as usize].as_mut().and_then(|p| p.scope_charge.as_mut())
+                .expect("validated native IPC owner charge"),
+            binding_usage,
+        ).expect("IPC charge move prevalidated under scheduler lock")),
+        (Some(budget), None) => Some(budget.commit()),
+        (None, _) => None,
+    };
     let process = Process {
         pid,
         principal,
@@ -756,7 +780,7 @@ fn set_return(t: &mut Thread, value: u64) {
 fn stop_threads_locked(s: &mut Scheduler, pid: Pid) {
     // Every whole-process stop, including connected descendants, revokes IPC
     // before waking waiters. This requires no allocation or additional lock.
-    s.ipc.close_owner(rustos_ipc_abi::ProcessKey { pid, generation: 1 });
+    ipc::close_owner_locked(s, pid);
     for t in s.threads.iter_mut().flatten().filter(|t| t.pid == pid) {
         t.state = ThreadState::Zombie;
         t.detached = true;

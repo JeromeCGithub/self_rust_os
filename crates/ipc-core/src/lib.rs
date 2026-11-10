@@ -20,6 +20,18 @@ pub struct Pending {
     pub event: Event,
     pub token: u64,
 }
+/// Live endpoint-owned reservations, including empty inbox capacity. Native
+/// kernels serialize snapshots with object publication/charge transfer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Storage {
+    /// Number of live owned endpoint objects.
+    pub handles: usize,
+    /// Reserved queue capacity in bytes, independent of queued message count.
+    pub inbox_bytes: usize,
+}
+/// Minimum queue storage to reserve before a pair allocation. The actual
+/// allocator capacity is returned by owner_usage and must also be charged.
+pub const PAIR_INBOX_BYTES: usize = 2 * abi::MAX_MESSAGES * core::mem::size_of::<Pending>();
 struct Endpoint {
     handle: Handle,
     owner: Option<ProcessKey>,
@@ -396,6 +408,43 @@ impl Registry {
             .find(|e| e.owner == Some(owner) && e.tag == Some(tag))
             .map(|e| e.handle)
             .ok_or(Error::Denied)
+    }
+    /// Snapshot live objects owned by an authenticated process. Queue capacity
+    /// remains charged even when rights attenuation discards its messages.
+    pub fn owner_usage(&self, owner: ProcessKey) -> Result<Storage, Error> {
+        if !Self::valid(owner) {
+            return Err(Error::Denied);
+        }
+        let mut result = Storage::default();
+        for endpoint in self
+            .slots
+            .iter()
+            .flatten()
+            .flat_map(|channel| channel.ends.iter())
+        {
+            if endpoint.owner == Some(owner) {
+                result.handles += 1;
+                result.inbox_bytes += endpoint.inbox.capacity() * core::mem::size_of::<Pending>();
+            }
+        }
+        Ok(result)
+    }
+    /// Validate the whole proposed move and snapshot its existing reservations;
+    /// no endpoint, ownership or queue changes until bindings commits.
+    pub fn binding_usage(
+        &self,
+        parent: ProcessKey,
+        child: ProcessKey,
+        bindings: &[Binding],
+    ) -> Result<Storage, Error> {
+        let locations = self.binding_locations(parent, child, bindings)?;
+        let mut result = Storage::default();
+        for &(index, side) in &locations[..bindings.len()] {
+            let endpoint = &self.slots[index].as_ref().ok_or(Error::Invalid)?.ends[side];
+            result.handles += 1;
+            result.inbox_bytes += endpoint.inbox.capacity() * core::mem::size_of::<Pending>();
+        }
+        Ok(result)
     }
     pub fn channels(&self) -> usize {
         self.slots.iter().filter(|slot| slot.is_some()).count()

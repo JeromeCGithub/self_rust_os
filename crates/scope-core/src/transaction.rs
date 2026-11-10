@@ -9,6 +9,14 @@ pub struct Reservation<'a> {
     charge: Option<Charge>,
     leader: Option<ProcessKey>,
 }
+impl core::fmt::Debug for Reservation<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Reservation")
+            .field("charge", &self.charge)
+            .field("leader", &self.leader)
+            .finish_non_exhaustive()
+    }
+}
 impl Reservation<'_> {
     /// Remaining room after this transaction's reservations and ancestor pressure.
     pub fn available(&self) -> Result<Usage, Error> {
@@ -39,6 +47,31 @@ impl Reservation<'_> {
         self.registry.appoint_leader(caller, scope, leader)?;
         self.leader = Some(leader);
         Ok(())
+    }
+    /// Validate admission of existing resources from a native parent before
+    /// committing its endpoint moves under the same external resource lock.
+    pub fn can_receive(&self, source: &Charge, used: Usage) -> Result<(), Error> {
+        self.registry
+            .can_transfer(source, self.charge.as_ref().expect("pending charge"), used)
+    }
+    /// Finalize a previously validated native object handoff. On error source
+    /// stays intact and the reservation is returned: destroy real construction
+    /// resources before dropping that guard to release quota/leader appointment.
+    /// Serialize object/charge publication and avoid fallible work after moving
+    /// objects. A failed earlier object move simply drops the original guard
+    /// after construction rollback.
+    pub fn commit_receiving(
+        mut self,
+        source: &mut Charge,
+        used: Usage,
+    ) -> Result<Charge, (Error, Self)> {
+        if let Err(error) =
+            self.registry
+                .transfer(source, self.charge.as_mut().expect("pending charge"), used)
+        {
+            return Err((error, self));
+        }
+        Ok(self.charge.take().expect("reservation commits once"))
     }
     /// Retain usage and any leader binding; the resource owner must later release
     /// this charge only after destroying all corresponding resources.

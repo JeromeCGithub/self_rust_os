@@ -112,11 +112,12 @@ remote TLB invalidation has completed. User page faults and general-protection
 faults terminate the affected process; supervisor faults remain fatal.
 
 M5's [kernel-only scope adapter](../src/scheduler/scopes.rs) now assigns immutable
-native identities, enforces inherited process/page/thread budgets and closes scoped
-descendants on owner/leader death. Quota follows frames/stacks into deferred
-reclamation. This remains work in progress: the Ring 3 scope ABI, filesystem/IPC/
-network/audio accounting, session grants and Nest are not yet complete. Normal
-Initator launches still use its trusted system root. See [current tests and gaps](initator-m5-progress.md).
+native identities, enforces inherited process/page/thread and IPC budgets, and
+closes scoped descendants on owner/leader death. Quota follows frames/stacks into deferred
+reclamation. IPC handles/inboxes follow explicit ownership moves and release, with
+reserved recovery capacity. This remains work in progress: the Ring 3 scope ABI,
+filesystem/network/audio accounting, session grants and Nest are not yet complete.
+Normal Initator launches still use its trusted system root. See [current tests and gaps](initator-m5-progress.md).
 
 Current virtual layout, defined in [kernel constants](../src/userspace/mod.rs):
 

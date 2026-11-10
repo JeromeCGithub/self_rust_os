@@ -74,9 +74,9 @@ pub fn configure_native_init() -> Result<(), &'static str> {
     let heap=crate::allocator::HEAP_SIZE as u64;
     s.scopes.bootstrap(ProcessKey{pid:1,generation:1},rustos_scope_core::Usage {
         processes:128,threads:super::MAX_THREADS as u64,pages,kernel_bytes:heap/2,
-        descriptors:u64::MAX,ipc_handles:u64::MAX,sockets:u64::MAX,audio_streams:u64::MAX,
+        descriptors:u64::MAX,ipc_handles:(rustos_ipc_abi::MAX_CHANNELS*2) as u64,sockets:u64::MAX,audio_streams:u64::MAX,
     },rustos_scope_core::Usage {processes:4,threads:8,pages:(pages/4).min(8192),
-        kernel_bytes:heap/16,..rustos_scope_core::Usage::ZERO}).map_err(|_|"scope bootstrap failed")?;
+        kernel_bytes:heap/16,ipc_handles:(super::ipc::RECOVERY_CHANNELS*2) as u64,..rustos_scope_core::Usage::ZERO}).map_err(|_|"scope bootstrap failed")?;
     s.next_pid = 1;
     s.init_pid = Some(1);
     Ok(())
