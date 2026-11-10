@@ -74,9 +74,14 @@ where
 
 /// Process filesystem resources and regular-file syscall mechanisms.
 pub(crate) mod handles;
+pub(crate) mod access;
+/// Read/write upper bounds for kernel-created filesystem grants.
+pub use access::Rights as FileRights;
 
 /// Validated native descriptor/cwd operations for kernel entry and harnesses.
 pub use handles::syscall as file_syscall;
+/// Native directory creation with caller grants and protected-root checks.
+pub use handles::create_directory;
 /// Copy versioned directory records using the current process and native quotas.
 pub use handles::readdir as read_directory;
 /// Copy legacy short-name records using the current process and native quotas.

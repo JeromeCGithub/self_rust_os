@@ -42,8 +42,8 @@ pub fn scope_create_service(parent: u64, limit: Usage) -> Result<u64, Error> {
 }
 /// Snapshot an owned scope. Currently charged: processes/base threads, private
 /// frames, constructor/heap/thread allocations, IPC handles/inboxes, descriptors
-/// and descriptor I/O buffers. Filesystem grants/remaining allocations and socket/
-/// audio accounting are pending; this is not a Ring 3 ABI.
+/// and descriptor I/O buffers. Kernel filesystem grants are enforced; initial
+/// grants, I/O lifetime and socket/audio isolation remain pending. No Ring 3 ABI.
 pub fn scope_status(scope: u64) -> Result<Snapshot, Error> {
     let s = SCHEDULER.lock();
     s.scopes.status(caller(&s)?, scope)

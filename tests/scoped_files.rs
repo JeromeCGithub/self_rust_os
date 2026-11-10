@@ -165,6 +165,7 @@ fn native_file_quota_precedes_create_and_truncate() {
     scheduler::reap_retired();
     scheduler::scope_ack_closed(scope).unwrap();
     assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial);
+    directory_grants_cover_paths_descriptors_and_children(&mut context, initial);
     directory_output_requires_budget(&mut context, initial);
     path_storage_requires_budget(&mut context, initial);
     file_success_failure_and_io_budgets(&mut context, initial);
@@ -825,4 +826,170 @@ fn directory_output_requires_budget(context: &mut u64, initial: Usage) {
     scheduler::reap_retired();
     scheduler::scope_ack_closed(scope).unwrap();
     assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial);
+}
+
+fn directory_grants_cover_paths_descriptors_and_children(context: &mut u64, initial: Usage) {
+    use self_rust_os::fs::{self, FileRights};
+    assert!(
+        scheduler::restrict_filesystem(&[]).is_err(),
+        "init must retain recovery access"
+    );
+    fs::with_fs(|fs| {
+        for directory in ["/GRANTHOME", "/GRANTTMP", "/GRANTPUBLIC", "/FOREIGN"] {
+            fs.create_dir(directory).unwrap();
+        }
+        for path in [
+            "/GRANTHOME/DATA",
+            "/GRANTPUBLIC/PROBE.BIN",
+            "/FOREIGN/SECRET",
+        ] {
+            fs.create_file(path).unwrap();
+            fs.write_file(path, b"abc").unwrap();
+        }
+    })
+    .unwrap();
+    let mut limit = limits(6);
+    limit.processes = 2;
+    limit.threads = 2;
+    let scope = scheduler::scope_create_service(SYSTEM, limit).unwrap();
+    let caps = Capabilities::from_bits(
+        Capabilities::FILE_READ.bits()
+            | Capabilities::FILE_WRITE.bits()
+            | Capabilities::SPAWN.bits(),
+    )
+    .unwrap();
+    let child = scheduler::spawn_process_in_scope(&[0xc3], 4096, &[], &[], scope, caps).unwrap();
+    activate(child, context);
+    let outside = fs::file_syscall(23, input(b"/FOREIGN/SECRET\0"), 2, 0);
+    assert_eq!(outside, 3);
+    let home = fs::file_syscall(23, input(b"/GRANTHOME/DATA\0"), 2, 0);
+    assert_eq!(home, 4);
+    let public = fs::file_syscall(23, input(b"/GRANTPUBLIC/PROBE.BIN\0"), 2, 0);
+    assert_eq!(public, 5);
+    scheduler::restrict_filesystem(&[
+        ("/GRANTHOME", FileRights::READ_WRITE),
+        ("/GRANTTMP", FileRights::WRITE),
+        ("/GRANTPUBLIC", FileRights::READ),
+    ])
+    .unwrap();
+    let output = self_rust_os::userspace::USER_STACK_TOP - 128 * 1024;
+    assert!(self_rust_os::userspace::usercopy::to_user(
+        output,
+        &[0xa5; 16]
+    ));
+    assert_eq!(
+        fs::file_read(outside, output, 3),
+        u64::MAX - 1,
+        "existing descriptors must not bypass narrowed directory grants"
+    );
+    let mut untouched = [0; 16];
+    assert!(self_rust_os::userspace::usercopy::from_user(
+        output,
+        &mut untouched
+    ));
+    assert_eq!(untouched, [0xa5; 16]);
+    assert_eq!(fs::file_syscall(26, outside, 0, 2), u64::MAX - 1);
+    assert_eq!(fs::file_syscall(25, outside, output, 3), u64::MAX - 1);
+    assert_eq!(fs::file_read(public, output, 3), 3);
+    assert_eq!(fs::file_syscall(25, public, output, 3), u64::MAX - 1);
+    assert_eq!(
+        fs::create_directory(input(b"/FOREIGN/new/sub\0")),
+        u64::MAX - 1
+    );
+    assert_eq!(
+        fs::create_directory(input(b"/GRANTPUBLIC/new\0")),
+        u64::MAX - 1
+    );
+    assert_eq!(fs::create_directory(input(b"/GRANTHOME/new/sub\0")), 0);
+    assert_eq!(fs::write_path(input(b"/GRANTTMP/WRITE\0"), output, 3), 3);
+    assert_eq!(
+        fs::read_path(input(b"/GRANTTMP/WRITE\0"), output, 3),
+        u64::MAX - 1
+    );
+
+    assert_eq!(
+        fs::file_syscall(23, input(b"/FOREIGN/SECRET\0"), 0, 0),
+        u64::MAX - 1
+    );
+    assert_eq!(
+        fs::file_syscall(23, input(b"/FOREIGN/../GRANTHOME/DATA\0"), 0, 0),
+        u64::MAX - 1
+    );
+    assert_eq!(
+        fs::read_path(input(b"/FOREIGN/SECRET\0"), output, 3),
+        u64::MAX - 1
+    );
+    assert_eq!(
+        fs::write_path(input(b"/FOREIGN/SECRET\0"), output, 3),
+        u64::MAX - 1
+    );
+    assert_eq!(
+        fs::read_directory(input(b"/\0"), output, 4096),
+        u64::MAX - 1
+    );
+    assert_eq!(fs::list_directory(input(b"/\0"), output, 4), u64::MAX - 1);
+    assert_eq!(
+        fs::read_directory(input(b"/GRANTTMP\0"), output, 4096),
+        u64::MAX - 1
+    );
+    assert!(scheduler::load_program_from_disk("/FOREIGN/SECRET").is_err());
+    let binary = scheduler::load_program_from_disk("/GRANTPUBLIC/PROBE.BIN").unwrap();
+    assert_eq!(&binary[..], b"abc");
+    drop(binary);
+    assert_eq!(fs::file_read(home, output, 3), 3);
+    assert_eq!(fs::file_syscall(27, input(b"/GRANTHOME\0"), 0, 0), 0);
+    assert_eq!(
+        fs::file_syscall(27, input(b"/FOREIGN\0"), 0, 0),
+        u64::MAX - 1
+    );
+    assert_eq!(
+        fs::file_syscall(23, input(b"/GRANTPUBLIC/PROBE.BIN\0"), 1 | 0o1000, 0),
+        u64::MAX - 1
+    );
+    assert!(scheduler::restrict_filesystem(&[("/", FileRights::READ)]).is_err());
+    let grandchild = scheduler::spawn_process(&[0xc3], 4096).unwrap();
+    activate(grandchild, context);
+    assert_eq!(
+        fs::read_path(input(b"/FOREIGN/SECRET\0"), output, 3),
+        u64::MAX - 1
+    );
+    assert!(scheduler::restrict_filesystem(&[("/FOREIGN", FileRights::READ)]).is_err());
+    assert_eq!(fs::read_path(input(b"/GRANTHOME/DATA\0"), output, 3), 3);
+    scheduler::restrict_filesystem(&[]).unwrap();
+    assert_eq!(
+        fs::read_path(input(b"/GRANTHOME/DATA\0"), output, 3),
+        u64::MAX - 1
+    );
+    activate(1, context);
+    scheduler::scope_close(scope).unwrap();
+    assert_eq!(scheduler::waitpid(child), 9);
+    assert_eq!(scheduler::waitpid(grandchild), 9);
+    scheduler::reap_retired();
+    scheduler::scope_ack_closed(scope).unwrap();
+    assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial);
+    let scope = scheduler::scope_create_service(SYSTEM, limits(0)).unwrap();
+    let no_read =
+        scheduler::spawn_process_in_scope(&[0xc3], 4096, &[], &[], scope, Capabilities::SPAWN)
+            .unwrap();
+    activate(no_read, context);
+    assert!(
+        scheduler::load_program_from_disk("/GRANTPUBLIC/PROBE.BIN").is_err(),
+        "path loading requires FILE_READ as well as SPAWN"
+    );
+    assert!(scheduler::restrict_filesystem(&[("/GRANTPUBLIC", FileRights::READ)]).is_err());
+    activate(1, context);
+    scheduler::scope_close(scope).unwrap();
+    assert_eq!(scheduler::waitpid(no_read), 9);
+    scheduler::reap_retired();
+    scheduler::scope_ack_closed(scope).unwrap();
+    assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial);
+    fs::with_fs(|fs| {
+        let mut data = [0; 3];
+        fs.read_file("/FOREIGN/SECRET", &mut data).unwrap();
+        assert_eq!(&data, b"abc");
+        assert!(fs.check_directory("/FOREIGN/new").is_err());
+        assert!(fs.check_directory("/GRANTPUBLIC/new").is_err());
+        assert!(fs.check_directory("/GRANTHOME/new/sub").is_ok());
+    })
+    .unwrap();
 }

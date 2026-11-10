@@ -118,7 +118,8 @@ pub use scopes::{
     scope_next_closed, scope_status, spawn_process_in_scope, spawn_process_in_scope_with_bindings,
 };
 mod principal;
-pub use principal::{attenuate_principal, principal_user};
+pub use principal::{attenuate_principal, principal_user, restrict_filesystem};
+pub(crate) use principal::{filesystem_authority, filesystem_read_authority};
 pub(crate) use principal::system_write_authority;
 mod supervision;
 pub(crate) use supervision::system_action_gate;
@@ -354,6 +355,13 @@ fn spawn_process_inner(
             capabilities: abi::Capabilities::ALL,
         }
     };
+    let filesystem_authority = if let Some(owner) = parent {
+        let source = sched.processes.get(owner as usize).and_then(Option::as_ref)
+            .ok_or("filesystem authority owner exited")?;
+        if principal.session != source.principal.session {
+            crate::fs::access::Authority::none()
+        } else { source.filesystem_authority }
+    } else { crate::fs::access::Authority::System };
     let (binding_owner, binding_usage) = if bindings.is_empty() {
         (None, rustos_scope_core::Usage::ZERO)
     } else {
@@ -595,6 +603,7 @@ fn spawn_process_inner(
     let process = Process {
         pid,
         principal,
+        filesystem_authority,
         scope_charge,
         parent,
         adoption_pending: false,
@@ -1038,9 +1047,15 @@ pub fn load_program_from_disk(path: &str) -> Result<ResourceBuffer, &'static str
             && s.retired.is_empty()
             && s.threads.iter().flatten().next().is_none()
     };
+    let authority = if boot { crate::fs::access::Authority::System } else {
+        filesystem_read_authority().ok_or("executable file-read authority denied")?
+    };
     // Never acquire SCHEDULER under the filesystem lock. Query size first,
     // reserve/copy outside it, then recheck and read one consistent FS snapshot.
-    let size = crate::fs::with_fs(|fs| fs.file_size(path))
+    let size = crate::fs::with_fs(|fs| {
+        authority.file(fs, path, crate::fs::FileRights::READ)?;
+        fs.file_size(path)
+    })
         .ok_or("filesystem not initialized")?
         .map_err(|_| "failed to query program size")?;
     if size == 0 {
@@ -1056,6 +1071,7 @@ pub fn load_program_from_disk(path: &str) -> Result<ResourceBuffer, &'static str
     }
     .map_err(|_| "not enough scoped capacity to stage program")?;
     crate::fs::with_fs(|fs| {
+        authority.file(fs, path, crate::fs::FileRights::READ).map_err(|_| "executable filesystem grant denied")?;
         if fs
             .file_size(path)
             .map_err(|_| "failed to recheck program size")?

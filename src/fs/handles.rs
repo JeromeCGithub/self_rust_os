@@ -1,6 +1,7 @@
 //! Process-owned working directories and bounded regular-file descriptors.
 //! Lock order: filesystem service -> open file. Never hold the scheduler lock
 //! during disk I/O or while taking either service lock.
+use super::access::Rights;
 use crate::scheduler::ResourceString;
 use alloc::{string::String, sync::Arc};
 use rustos_scope_core::Usage;
@@ -68,6 +69,7 @@ fn cwd_snapshot(extra: usize) -> Option<ResourceString> {
 /// Copy and resolve a user path; validate every traversed directory, including
 /// those canceled by `..`. Only recursive mkdir permits missing intermediates.
 pub(crate) fn path(pointer: u64, kind: PathKind) -> Option<ResourceString> {
+    let authority = crate::scheduler::filesystem_authority()?;
     let bytes = crate::userspace::usercopy::cstring(pointer, 4096)?;
     if bytes.is_empty() && !matches!(kind, PathKind::Listing) {
         return None;
@@ -93,7 +95,7 @@ pub(crate) fn path(pointer: u64, kind: PathKind) -> Option<ResourceString> {
         while let Some(component) = components.next() {
             match component {
                 "." | ".." => {
-                    fs.check_directory(&out).ok()?;
+                    authority.search(fs, &out).ok()?;
                     if component == ".." {
                         let index = out.rfind('/').unwrap_or(0);
                         out.truncate(index.max(1));
@@ -120,7 +122,7 @@ pub(crate) fn path(pointer: u64, kind: PathKind) -> Option<ResourceString> {
                     if !matches!(kind, PathKind::RecursiveCreate)
                         && (components.peek().is_some() || input.ends_with('/'))
                     {
-                        fs.check_directory(&out).ok()?;
+                        authority.search(fs, &out).ok()?;
                     }
                 }
             }
@@ -149,7 +151,13 @@ pub fn syscall(number: u64, first: u64, second: u64, third: u64) -> u64 {
             let Some(path) = path(first, PathKind::Existing) else {
                 return ERROR;
             };
-            if !matches!(super::with_fs(|fs| fs.check_directory(&path)), Some(Ok(()))) {
+            let Some(authority) = crate::scheduler::filesystem_authority() else {
+                return ERROR;
+            };
+            if !matches!(
+                super::with_fs(|fs| authority.search(fs, &path)),
+                Some(Ok(()))
+            ) {
                 return ERROR;
             }
             crate::scheduler::with_files(|files| {
@@ -184,6 +192,18 @@ fn open(pointer: u64, flags: u64) -> u64 {
     }
     let Some(path) = path(pointer, PathKind::Existing) else {
         return ERROR;
+    };
+    let Some(authority) = crate::scheduler::filesystem_authority() else {
+        return ERROR;
+    };
+    let reads = flags & 3 != 1;
+    let writes = flags & 3 != 0 || flags & (CREAT | TRUNC) != 0;
+    let required = if reads && writes {
+        Rights::READ_WRITE
+    } else if writes {
+        Rights::WRITE
+    } else {
+        Rights::READ
     };
     // Reserve the slot before any create/truncate side effects. This also makes
     // concurrent opens in sibling threads observe the process descriptor quota.
@@ -224,6 +244,7 @@ fn open(pointer: u64, flags: u64) -> u64 {
         // The service lock precedes the open-file lock. No scheduler acquisition
         // occurs here; path and reservation remain owned through the whole I/O.
         let mut open_file = file.lock();
+        authority.file(fs, &open_file.path, required)?;
         if flags & 3 != 0 || flags & (CREAT | TRUNC) != 0 {
             super::authorize_write(fs, &open_file.path, system)?;
         }
@@ -271,11 +292,15 @@ pub fn read(fd: u64, pointer: u64, length: u64) -> u64 {
     };
     // Copying to user memory requires the entry gate. Reserve an offset only
     // after disk I/O succeeded; the full destination was validated above.
+    let Some(authority) = crate::scheduler::filesystem_authority() else {
+        return ERROR;
+    };
     let result = super::with_fs(|fs| {
         let mut file = file.lock();
         if !file.ready || file.access == 1 {
             return Err(crate::fat32::FatError::InvalidName);
         }
+        authority.file(fs, &file.path, Rights::READ)?;
         let n = fs.read_at(&file.path, file.offset, &mut bytes)?;
         file.offset += n;
         Ok(n)
@@ -299,9 +324,15 @@ fn write(fd: u64, pointer: u64, length: u64) -> u64 {
     if !crate::userspace::usercopy::from_user(pointer, &mut bytes) {
         return ERROR;
     }
+    let Some(authority) = crate::scheduler::filesystem_authority() else {
+        return ERROR;
+    };
     let system = crate::scheduler::system_write_authority();
     super::with_fs(|fs| {
         let mut file = file.lock();
+        if authority.file(fs, &file.path, Rights::WRITE).is_err() {
+            return ERROR;
+        }
         if super::authorize_write(fs, &file.path, system).is_err() {
             return ERROR;
         }
@@ -323,9 +354,20 @@ fn seek(fd: u64, offset: i64, whence: u64) -> u64 {
     let Some(file) = descriptor(fd) else {
         return ERROR;
     };
+    let Some(authority) = crate::scheduler::filesystem_authority() else {
+        return ERROR;
+    };
     super::with_fs(|fs| {
         let mut file = file.lock();
         if !file.ready {
+            return ERROR;
+        }
+        let required = if file.access == 1 {
+            Rights::WRITE
+        } else {
+            Rights::READ
+        };
+        if authority.file(fs, &file.path, required).is_err() {
             return ERROR;
         }
         let base = match whence {
@@ -355,7 +397,11 @@ pub fn readdir(path_pointer: u64, output: u64, capacity: u64) -> u64 {
     let Some(path) = path(path_pointer, PathKind::Listing) else {
         return ERROR;
     };
+    let Some(authority) = crate::scheduler::filesystem_authority() else {
+        return ERROR;
+    };
     let size = super::with_fs(|fs| {
+        authority.directory(fs, &path, Rights::READ)?;
         let mut size = 0usize;
         fs.visit_dir(&path, |_, name, _, _| {
             size = size
@@ -378,6 +424,7 @@ pub fn readdir(path_pointer: u64, output: u64, capacity: u64) -> u64 {
         return ERROR;
     };
     let filled = super::with_fs(|fs| {
+        authority.directory(fs, &path, Rights::READ)?;
         let mut position = 0usize;
         fs.visit_dir(&path, |_, name, attr, file_size| {
             let length = (16 + name.len() + 1 + 7) & !7;
@@ -419,7 +466,11 @@ pub fn list_short(path_pointer: u64, output: u64, maximum: u64) -> u64 {
     let Some(path) = path(path_pointer, PathKind::Listing) else {
         return ERROR;
     };
+    let Some(authority) = crate::scheduler::filesystem_authority() else {
+        return ERROR;
+    };
     let count = super::with_fs(|fs| {
+        authority.directory(fs, &path, Rights::READ)?;
         let mut count = 0u64;
         fs.visit_dir(&path, |_, _, _, _| {
             count = count.saturating_add(1).min(maximum);
@@ -437,6 +488,7 @@ pub fn list_short(path_pointer: u64, output: u64, maximum: u64) -> u64 {
         return ERROR;
     };
     let filled = super::with_fs(|fs| {
+        authority.directory(fs, &path, Rights::READ)?;
         let mut position = 0u64;
         fs.visit_dir(&path, |alias, _, attr, _| {
             if position == maximum {
@@ -478,7 +530,13 @@ pub fn read_path(path_pointer: u64, output: u64, length: u64) -> u64 {
     let Some(path) = path(path_pointer, PathKind::Existing) else {
         return ERROR;
     };
-    match super::with_fs(|fs| fs.read_file(&path, &mut bytes)) {
+    let Some(authority) = crate::scheduler::filesystem_authority() else {
+        return ERROR;
+    };
+    match super::with_fs(|fs| {
+        authority.file(fs, &path, Rights::READ)?;
+        fs.read_file(&path, &mut bytes)
+    }) {
         Some(Ok(n)) if crate::userspace::usercopy::to_user(output, &bytes[..n]) => n as u64,
         _ => ERROR,
     }
@@ -501,13 +559,36 @@ pub fn write_path(path_pointer: u64, input: u64, length: u64) -> u64 {
     let Some(path) = path(path_pointer, PathKind::Existing) else {
         return ERROR;
     };
+    let Some(authority) = crate::scheduler::filesystem_authority() else {
+        return ERROR;
+    };
     let system = crate::scheduler::system_write_authority();
     match super::with_fs(|fs| {
+        authority.file(fs, &path, Rights::WRITE)?;
         super::authorize_write(fs, &path, system)?;
         let _ = fs.create_file(&path);
         fs.write_file(&path, &bytes)
     }) {
         Some(Ok(n)) => n as u64,
+        _ => ERROR,
+    }
+}
+
+/// Recursive directory creation under the caller's immutable authority snapshot.
+pub fn create_directory(pointer: u64) -> u64 {
+    let Some(path) = path(pointer, PathKind::RecursiveCreate) else {
+        return ERROR;
+    };
+    let Some(authority) = crate::scheduler::filesystem_authority() else {
+        return ERROR;
+    };
+    let system = crate::scheduler::system_write_authority();
+    match super::with_fs(|fs| {
+        authority.recursive_create(fs, &path)?;
+        super::authorize_write(fs, &path, system)?;
+        fs.create_dir(&path)
+    }) {
+        Some(Ok(())) => 0,
         _ => ERROR,
     }
 }

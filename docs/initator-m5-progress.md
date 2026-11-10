@@ -975,6 +975,103 @@ The Ring 3 scope factory stays closed until those permissions and remaining
 resource/lifetime gates are enforced. Nest and scoped Initator restart/cleanup
 integration remain unfinished; no M5 PR is claimed by these kernel prerequisites.
 
+## Enforced kernel directory grants
+
+[`fs/access.rs`](../src/fs/access.rs) adds READ/WRITE upper bounds for up to eight
+existing directory roots. Requests resolve to opaque FAT directory identities,
+including long/short aliases, rather than relying on string prefixes. Root
+creation validates directory geometry and a bounded, acyclic parent chain to the
+mounted root. Subtree and ancestor checks use those validated parent links.
+There is one immutable boot mount; no userspace directory deletion, rename or
+remount can recycle identities. Those future APIs require explicit grant
+invalidation/generation handling before introduction. Filesystem metadata remains
+trusted kernel-maintained data; this is not resistance to an attacker replacing
+the whole boot disk.
+
+Each PCB owns a fixed grant set in the existing bounded process table.
+`scheduler::restrict_filesystem` is a kernel-only adapter: it snapshots the live
+caller, excludes PID 1 and sibling/unreaped threads, validates roots/rights under
+FS, then revalidates and publishes the complete subset under SCHEDULER. No
+scheduler lock is acquired under FS. Empty grants deny all file access. Existing
+children retain copied rights; future ordinary children inherit the current set.
+Kernel scoped construction across a session boundary defaults to no access.
+Initial grants must still be added atomically to the future public scope factory.
+The kernel chooses no home/tmp names or login policy.
+
+The [filesystem adapter](../src/fs/handles.rs) applies these bounds to path
+traversal, cwd changes, open/create/truncate, reads/writes, metadata seeks and both
+directory formats, including both passes of staged listings. Search can traverse
+ancestors of a grant without granting a directory listing there. Write-only roots
+do not allow reads or listings. Existing descriptors are checked against current
+authority on each operation, so opening before reduction cannot retain outside
+access. Cleanup/close stays available. Recursive mkdir is now routed through the
+same adapter. Existing protected-system-root checks remain additional bounds.
+
+[Disk executable loading](../src/scheduler.rs) checks FILE_READ and directory
+rights before metadata access and again for the data pass. This closes the old
+SPAWN-only file-loading bypass across path-based spawn routes. Owned-image launch
+still needs only SPAWN and the caller's valid owned bytes. No syscall numbers or
+principal wire layout changed; there is no Ring 3 grant configuration API yet.
+
+Observed red evidence in `target/initator-m5-evidence/`:
+
+- `fs-grants-policy-red.log`: a requested write outside the allowed rights still
+  succeeded before the policy checks were implemented.
+- `fs-grants-native-red.log`: an already-open outside descriptor returned three
+  bytes after filesystem attenuation instead of failing without output.
+- `fs-grants-malformed-root-red.log`: an invalid zero-cluster directory could mint
+  a root grant; root sealing now rejects invalid geometry and cyclic parents.
+- `fs-grants-spawn-read-red.log`: the strengthened real Ring 3 probe, booted with
+  the previous kernel image, published a path-spawned child without FILE_READ.
+  The current kernel passes those denials while owned-image spawning succeeds.
+
+The first full native run (`fs-grants-pre-migration.log`) exposed the previous
+probe's obsolete SPAWN-only positive path launch. The updated probe preserves
+SPAWN-only inheritance through an owned image, asserts all path-spawn denials,
+and adds positive path inheritance with SPAWN plus FILE_READ. It was run against
+the old kernel to demonstrate the missing check, then rebuilt with the current
+kernel. No timeout, expected child exit or existing cleanup assertion was relaxed.
+
+Kernel policy tests cover aliases, subset/expansion, empty/oversized grants,
+readonly/write-only roots, nested unions, malformed links and allocation-free
+checks. The scoped-files integration exercises old descriptors, whole-file I/O,
+listings, traversal canceled by `..`, mkdir effects, executable reads, inherited
+children, further reduction, capability bounds and exact scope resource recovery.
+These are kernel-context restricted-process tests. Real Ring 3 probes exercise the
+read/spawn fix and compatibility, but do not yet configure restricted directory
+grants through the still-closed scope/session factory. That native matrix, initial
+assignment, I/O quiescence/cancellation, socket/audio accounting, scope-aware
+Initator stop/restart and Nest remain required before M5 delivery.
+
+Validation for the directory-grant checkpoint:
+
+- Default and GRUB debug builds; both complete release builders produced
+  `target/init-m5-fs-grants.img` and `target/init-m5-fs-grants-desktop.img`.
+- 108 kernel unit cases and ten integration executables (`display_mapping`,
+  `fat32`, `ipc`, `keyboard_timer`, `native_supervision`, `process_supervision`,
+  `scoped_files`, `scopes`, `stdio`, `threads`), serialized around writable
+  fixtures. These include restricted kernel-context grant tests, not a Ring 3
+  scope-factory acceptance claim.
+- 81 real Ring 3 runs: all 22 native init cases, native `init_file_io.py`, unit
+  `vectors`, default `file_io.py`, and capability `names`/`files`, each at 1/8/32
+  CPUs. The migrated capability probe checks file-read permission on every path
+  spawn route, positive owned-image inheritance and positive read+spawn paths.
+- Full default desktop at eight CPUs; six isolated 8 MiB/s loader/watchdog
+  normal/cancellation checks at 1/8/32 CPUs, all with zero watchdog delay ticks.
+- Documentation/link and whitespace checks. Unchanged host policy/tooling suites
+  were not rerun, and no timeout or latency budget was increased.
+
+Evidence is retained as `fs-grants-*.log` under `target/initator-m5-evidence/`.
+The successful focused capability run at one CPU was included once in the full
+matrix rather than needlessly repeated. Probe binaries and read-only metadata
+were regenerated together with `tools/build-user.sh`; metadata bytes remained
+unchanged. Final source edits after the builds are documentation only. Tested
+screenshots are in `fs-grants-screenshots/`; tracked generic screenshots and the
+FAT fixture are restored. Permission/resource assertions establish these
+properties; screenshots demonstrate desktop compatibility only. Manual host GUI
+and physical hardware remain unverified. The known debug heap-stress timeout
+was not rerun or claimed as passing.
+
 ## Scope integration invariants for the next implementation
 
 - Keep the initial hierarchy bounded: system/session roots and service scopes;

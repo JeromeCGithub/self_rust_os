@@ -694,9 +694,10 @@ threads share process metadata. The existing restricted-worker allowlist remains
 stricter and denies this newly added syscall. Normal boot still launches system
 contexts. Kernel-only scoped constructors can now attach other identities and
 account private pages/threads and IPC endpoint/inbox ownership, but no Ring 3
-session/scope factory is exposed yet; filesystem/socket/audio accounting and
-per-session filesystem grants remain incomplete in M5. These bytes describe metadata and never confer
-authority. See [M5 progress](initator-m5-progress.md).
+session/scope factory is exposed yet. Kernel directory grants are enforced, while
+initial grant assignment, I/O lifecycle and remaining socket/audio isolation are
+unfinished in M5. These bytes describe metadata and never confer authority; the
+40-byte record does not enumerate filesystem object grants. See [M5 progress](initator-m5-progress.md).
 
 `userlib::principal::attenuate()` performs one-way process-wide reduction to a
 subset. It requires exactly one owned thread (including unreaped thread records)
@@ -730,5 +731,36 @@ creation. FAT root-entry identity resolves long/short aliases; normalized paths
 cover cwd, case, `.` and `..`. Read-only opens without create stay available with
 FILE_READ. Denial precedes create/truncate/write; failed opens roll back reserved
 descriptors. Internal `FatError::AccessDenied` maps to the existing general syscall
-error without adding a Linux errno ABI. Per-session read/write grants for home/tmp,
-storage quotas and generic filesystem object delegation remain separate M5 work.
+error without adding a Linux errno ABI. Storage quotas and initial session/service
+filesystem grant assignment remain separate work.
+
+Kernel-only filesystem attenuation uses `scheduler::restrict_filesystem` with up
+to eight existing absolute directory roots and `fs::FileRights` READ/WRITE upper
+bounds. It can only narrow the live caller, requires exactly one owned thread,
+and refuses native PID 1. It is not a syscall or SDK interface yet. Requests resolve
+case/VFAT aliases to sealed directory identities under FS, then revalidate the
+caller and publish a complete subset under SCHEDULER. Invalid roots, malformed or
+cyclic parent links, expansion and excess roots fail without changing authority.
+
+Ordinary children inherit these grants. Crossing to a new session through the
+kernel scoped constructor starts with no filesystem access; the future factory
+must assign approved roots before publication. Search of granted roots and their
+ancestors permits traversal, while listing/data access needs the appropriate
+subtree right. Cwd metadata alone confers no access. Reads, both listing formats,
+open/create/truncate, whole-file writes, descriptor reads/writes/seeks and recursive
+mkdir enforce current grants under the same FS lock as their work. Existing open
+descriptors cannot bypass a later filesystem reduction; close remains available.
+Protected-system-write checks apply in addition to these grants.
+
+All path-based executable loading also requires FILE_READ, as well as the spawn
+operation's SPAWN capability, and checks directory grants on both metadata and
+data passes. Owned-image syscall 127 needs SPAWN and valid already-owned image
+bytes; it does not read a filesystem executable. These checks close the old
+SPAWN-only path-loading bypass.
+
+Directory identities are valid only for the single boot mount. There is no
+userspace directory deletion, rename or remount API that recycles them. Adding
+those operations requires grant lifetime/generation handling first. Grant setup
+and restricted-context assertions currently use kernel harnesses; the Ring 3
+scope/session factory, home/tmp policy, cancellation and cleanup barriers remain
+unfinished. See [current M5 evidence](initator-m5-progress.md).
