@@ -111,7 +111,7 @@ impl Scheduler {
 static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 
 mod resources;
-pub use resources::{grow_resource, reserve_resource, ResourceBuffer, ResourceLease};
+pub use resources::{grow_resource, reserve_resource, ResourceBuffer, ResourceLease, ResourceString};
 mod scopes;
 pub use scopes::{
     scope_ack_closed, scope_close, scope_create_service, scope_create_session,

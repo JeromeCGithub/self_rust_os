@@ -140,4 +140,10 @@ pub fn reap_retired() {
                 .expect("owned process scope charge");
         }
     }
+    // Dropping retired cwd/path owners can queue leases during the pass.
+    // Return those charges only after their owning allocations were destroyed.
+    let Scheduler {
+        resources, scopes, ..
+    } = &mut *s;
+    resources.collect(scopes);
 }

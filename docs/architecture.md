@@ -118,7 +118,9 @@ reclamation. IPC handles/inboxes follow explicit ownership moves and release, wi
 reserved recovery capacity. Descriptor objects and owned descriptor-I/O buffers
 also retain scoped leases through blocked work and deferred release. Owned path-I/O,
 executable/image and startup snapshots now retain byte charges through construction.
-Boot staging is released after private image/TLS copying. This remains work in progress: the Ring 3 scope ABI, remaining filesystem allocation/grant and
+Boot staging is released after private image/TLS copying. Charged path/cwd storage
+uses bounded appends, with published cwd retained through PCB reclamation. This
+remains work in progress: the Ring 3 scope ABI, remaining filesystem allocation/grant and
 network/audio accounting, session grants and Nest are not yet complete.
 Normal Initator launches still use its trusted system root. See [current tests and gaps](initator-m5-progress.md).
 

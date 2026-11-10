@@ -87,6 +87,9 @@ impl ResourceBuffer {
             _lease: ResourceLease::unscoped(),
         })
     }
+    pub(crate) fn truncate(&mut self, length: usize) {
+        self.bytes.truncate(length);
+    }
     fn allocate(length: usize) -> Result<Vec<u8>, Error> {
         let mut bytes = Vec::new();
         bytes.try_reserve_exact(length).map_err(|_| Error::Limit)?;
@@ -103,6 +106,72 @@ impl core::ops::Deref for ResourceBuffer {
 impl core::ops::DerefMut for ResourceBuffer {
     fn deref_mut(&mut self) -> &mut [u8] {
         &mut self.bytes
+    }
+}
+/// Bounded owned UTF-8 path/cwd storage. Mutations cannot grow beyond the
+/// precharged capacity; the String allocation drops before its resource lease.
+pub struct ResourceString {
+    value: alloc::string::String,
+    lease: ResourceLease,
+}
+impl ResourceString {
+    /// Allocate fallibly outside service locks, with actual capacity charged.
+    pub fn with_capacity(capacity: usize) -> Result<Self, Error> {
+        let lease = reserve_resource(Usage {
+            kernel_bytes: capacity as u64,
+            ..Usage::ZERO
+        })?;
+        let mut value = alloc::string::String::new();
+        value
+            .try_reserve_exact(capacity)
+            .map_err(|_| Error::Limit)?;
+        grow_resource(
+            &lease,
+            Usage {
+                kernel_bytes: (value.capacity() - capacity) as u64,
+                ..Usage::ZERO
+            },
+        )?;
+        Ok(Self { value, lease })
+    }
+    /// Constructor-only adapter: the caller must already retain the allocation's
+    /// charge. Later path allocations use with_capacity and keep their own lease.
+    pub(crate) fn from_accounted(value: alloc::string::String) -> Self {
+        Self {
+            value,
+            lease: ResourceLease::unscoped(),
+        }
+    }
+    /// Append without allocating, including when a service lock is held.
+    pub fn push_str(&mut self, text: &str) -> Result<(), Error> {
+        if text.len() > self.value.capacity() - self.value.len() {
+            return Err(Error::Limit);
+        }
+        self.value.push_str(text);
+        Ok(())
+    }
+    /// Borrow initialized UTF-8 bytes without releasing their ownership charge.
+    pub fn as_str(&self) -> &str {
+        &self.value
+    }
+    /// Mutate existing UTF-8 bytes without granting allocation/growth access.
+    pub(crate) fn as_mut_str(&mut self) -> &mut str {
+        self.value.as_mut_str()
+    }
+    pub(crate) fn capacity(&self) -> usize {
+        self.value.capacity()
+    }
+    pub(crate) fn truncate(&mut self, length: usize) {
+        self.value.truncate(length);
+    }
+    pub(crate) fn charge(&self, used: Usage) -> Result<(), Error> {
+        grow_resource(&self.lease, used)
+    }
+}
+impl core::ops::Deref for ResourceString {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.value
     }
 }
 struct Record {

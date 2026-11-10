@@ -165,6 +165,7 @@ fn native_file_quota_precedes_create_and_truncate() {
     scheduler::reap_retired();
     scheduler::scope_ack_closed(scope).unwrap();
     assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial);
+    path_storage_requires_budget(&mut context, initial);
     file_success_failure_and_io_budgets(&mut context, initial);
     retained_resource_blocks_scope_cleanup(&mut context, initial);
     descriptor_recovery_capacity(&mut context, initial);
@@ -220,12 +221,19 @@ fn file_success_failure_and_io_budgets(context: &mut u64, initial: Usage) {
     assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial);
 
     let mut tight = limits(1);
-    tight.kernel_bytes = open.kernel_bytes;
+    // Path copying now needs temporary admission before the FD exists. Allow
+    // that setup, then exhaust the exact remaining bytes before I/O assertions.
+    tight.kernel_bytes = open.kernel_bytes + 16 * 1024;
     let scope = scheduler::scope_create_service(SYSTEM, tight).unwrap();
     let child = scheduler::spawn_process_in_scope(&[0xc3], 4096, &[], &[], scope, caps).unwrap();
     activate(child, context);
     let fd = call(23, input(b"/LIMIT.TXT\0"), 2, 0);
     assert_eq!(fd, 3);
+    let pressure = scheduler::reserve_resource(Usage {
+        kernel_bytes: tight.kernel_bytes - open.kernel_bytes,
+        ..Usage::ZERO
+    })
+    .unwrap();
     for _ in 0..3 {
         assert_eq!(
             file_read(fd, output, 1),
@@ -240,6 +248,7 @@ fn file_success_failure_and_io_budgets(context: &mut u64, initial: Usage) {
         assert_eq!(file_read(fd, output, 0), 0);
         assert_eq!(call(26, fd, 0, 1), 0);
     }
+    drop(pressure);
     activate(1, context);
     scheduler::reap_retired();
     assert_eq!(scheduler::scope_status(scope).unwrap().used, open);
@@ -582,6 +591,98 @@ fn image_snapshot_requires_budget(context: &mut u64, initial: Usage) {
     activate(1, context);
     scheduler::reap_retired();
     assert_eq!(scheduler::scope_status(scope).unwrap().used, base);
+    scheduler::scope_close(scope).unwrap();
+    assert_eq!(scheduler::waitpid(child), 9);
+    scheduler::reap_retired();
+    scheduler::scope_ack_closed(scope).unwrap();
+    assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial);
+}
+fn path_storage_requires_budget(context: &mut u64, initial: Usage) {
+    use self_rust_os::fs::file_syscall as call;
+    self_rust_os::fs::with_fs(|fs| fs.create_dir("/WORK").unwrap()).unwrap();
+    let limit = limits(1);
+    let scope = scheduler::scope_create_service(SYSTEM, limit).unwrap();
+    let caps =
+        Capabilities::from_bits(Capabilities::FILE_READ.bits() | Capabilities::FILE_WRITE.bits())
+            .unwrap();
+    let child = scheduler::spawn_process_in_scope(&[0xc3], 4096, &[], &[], scope, caps).unwrap();
+    let base = scheduler::scope_status(scope).unwrap().used;
+    activate(child, context);
+    let output = self_rust_os::userspace::USER_STACK_TOP - 128 * 1024;
+    let pressure = scheduler::reserve_resource(Usage {
+        kernel_bytes: limit.kernel_bytes - base.kernel_bytes,
+        ..Usage::ZERO
+    })
+    .unwrap();
+    for _ in 0..3 {
+        assert!(self_rust_os::userspace::usercopy::to_user(
+            output,
+            &[0xa5; 16]
+        ));
+        assert_eq!(
+            call(28, output, 16, 0),
+            u64::MAX - 1,
+            "getcwd must reserve copied path storage"
+        );
+        let mut unchanged = [0; 16];
+        assert!(self_rust_os::userspace::usercopy::from_user(
+            output,
+            &mut unchanged
+        ));
+        assert_eq!(unchanged, [0xa5; 16]);
+        assert_eq!(
+            call(27, input(b"/WORK\0"), 0, 0),
+            u64::MAX - 1,
+            "failed path admission must preserve cwd"
+        );
+    }
+    drop(pressure);
+    scheduler::reap_retired();
+    let mut bounded = scheduler::ResourceString::with_capacity(4).unwrap();
+    bounded.push_str("é").unwrap();
+    let heap = allocator::allocated_bytes();
+    assert!(bounded.push_str("日").is_err());
+    assert_eq!(bounded.as_str(), "é");
+    assert_eq!(allocator::allocated_bytes(), heap);
+    drop(bounded);
+    let edge = self_rust_os::userspace::USER_STACK_TOP - 1;
+    assert!(self_rust_os::userspace::usercopy::to_user(edge, &[0]));
+    let empty = self_rust_os::userspace::usercopy::cstring(edge, 4096).unwrap();
+    assert!(empty.is_empty());
+    drop(empty);
+    let unterminated = self_rust_os::userspace::USER_STACK_TOP - 8192;
+    let contents = alloc::vec![b'x';4096];
+    assert!(self_rust_os::userspace::usercopy::to_user(
+        unterminated,
+        &contents
+    ));
+    drop(contents);
+    assert!(self_rust_os::userspace::usercopy::cstring(unterminated, 4096).is_none());
+    assert_eq!(call(28, output, 16, 0), 2);
+    let mut bytes = [0; 2];
+    assert!(self_rust_os::userspace::usercopy::from_user(
+        output, &mut bytes
+    ));
+    assert_eq!(&bytes, b"/\0");
+    assert_eq!(call(27, input(b"/WORK\0"), 0, 0), 0);
+    activate(1, context);
+    scheduler::reap_retired();
+    let changed = scheduler::scope_status(scope).unwrap().used;
+    assert!(
+        changed.kernel_bytes > base.kernel_bytes,
+        "published cwd storage retains its own charge"
+    );
+    activate(child, context);
+    assert_eq!(call(27, input(b"/MISSING/..\0"), 0, 0), u64::MAX - 1);
+    assert_eq!(call(28, output, 16, 0), 6);
+    let mut bytes = [0; 6];
+    assert!(self_rust_os::userspace::usercopy::from_user(
+        output, &mut bytes
+    ));
+    assert_eq!(&bytes, b"/WORK\0");
+    activate(1, context);
+    scheduler::reap_retired();
+    assert_eq!(scheduler::scope_status(scope).unwrap().used, changed);
     scheduler::scope_close(scope).unwrap();
     assert_eq!(scheduler::waitpid(child), 9);
     scheduler::reap_retired();

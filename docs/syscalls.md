@@ -203,9 +203,10 @@ returns quota. The next syscall/resource reservation collects queued releases.
 Kernel-only scope factories can set tighter limits; there is no public Ring 3
 scope configuration API yet. The trusted legacy desktop retains its existing
 unscoped limits. Owned whole-file path-read/write and executable/image/startup
-snapshots now use native byte admission too. This remains partial accounting:
-C-string/path/cwd copies, listings/internal FAT allocations and session filesystem
-grants are unfinished. See [M5 evidence](initator-m5-progress.md).
+snapshots now use native byte admission too. C-string/path/cwd copies now retain native charges too, including cwd published
+by chdir. Normalized paths retain the existing 4095-byte bound, with temporary
+capture capacity included in admission. Listings/internal FAT allocations and
+session filesystem grants remain unfinished. See [M5 evidence](initator-m5-progress.md).
 
 Offset writes reserve any extension chain before modifying existing data. Disk-full
 allocation failure preserves old bytes and frees the partial extension. Hardware

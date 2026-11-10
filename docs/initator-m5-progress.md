@@ -677,6 +677,73 @@ prove the snapshot accounting; screenshots do not demonstrate ownership or clean
 The original disposable FAT fixture is restored after serialized kernel tests.
 This checkpoint does not complete M5 and no milestone PR is opened.
 
+## Path and cwd ownership
+
+[ResourceString](../src/scheduler/resources.rs) couples UTF-8 storage with a scope
+lease and exposes bounded append operations, not a growable String reference.
+Capacity is reserved fallibly and charged before allocation; an append beyond
+capacity returns Limit without allocating or changing bytes. Existing UTF-8 bytes
+can be normalized without growth. Initial process cwd storage uses an explicit
+already-accounted adapter because common construction retains that allocation's
+charge. Later chdir values retain independent leases through PCB reclamation.
+
+[C-string capture](../src/userspace/usercopy.rs) now reserves the bounded path
+buffer before copying. Its 4096-byte capacity remains charged even when the NUL
+terminator shortens the visible slice. Copies remain page bounded; a terminator
+at the final byte of a mapped page does not touch the following unmapped page.
+[Path normalization](../src/fs/handles.rs) takes a charged cwd snapshot only for
+relative paths and reserves all output capacity before taking the filesystem
+lock. Checked appends preserve the existing 4095-byte normalized bound and still
+validate traversed directories canceled by `..`. Recursive mkdir alone permits
+missing intermediate components. FAT spelling, short aliases and Unicode remain
+filesystem mechanisms, not access grants.
+
+Cwd copying allocates outside SCHEDULER and then copies coherent metadata under
+that lock, failing safely if a concurrent longer cwd no longer fits. getcwd adds
+its NUL terminator within precharged capacity and validates/copies the complete
+advertised output. Open moves its charged normalized path into OpenFile and adds
+the descriptor reservation to that same lease, avoiding duplicate path charges
+or an extra persistent lease per descriptor. Reclamation collects releases again
+after dropping retired PCBs, so newly released cwd leases complete only after
+actual allocation destruction. Service locks never allocate/grow these strings
+or acquire scheduler reservations; internal FAT metadata allocations remain a
+separate unfinished boundary.
+
+The regression first returned two cwd bytes with a fully exhausted native budget
+(`scopes-path-budget-red.log`). It now denies repeated getcwd/chdir attempts while
+preserving output and cwd. Further assertions cover retained cwd charges, failed
+`/MISSING/..` traversal, exact cleanup, bounded multibyte append failure without
+heap growth, a final-page NUL terminator and a missing terminator across the full
+4096-byte bound. The prior I/O-byte exhaustion test now admits temporary path
+setup first, then explicitly reserves all remaining capacity before exercising
+its unchanged read/write/cursor/file-preservation assertions. Its first run after
+path charging correctly rejected setup (`scopes-path-first-green.log`); this test
+migration preserves the intended exhausted-I/O condition. Expanded scoped-file
+and existing scope integrations pass (`scopes-path-green.log`).
+
+Both boot-path builds, test compilation, 98 kernel unit cases and all nine kernel
+integration executables pass, along with fresh native/default GRUB release images
+and all rebuilt apps. Across 1/8/32 CPUs the native image passes all 66 existing
+boot/supervision/principal/capability/system-file cases. Fifteen further cases pass:
+native supervised file I/O, literal-vector activation, legacy file I/O and Unicode
+name/environment checks on each profile. The complete eight-CPU desktop regression
+and all 15 shutdown cases pass. Six isolated loader/watchdog profiles report zero
+watchdog-delay ticks with unchanged acceptance budgets. All 85 Python tooling
+cases and documentation checks pass. No required check in this selected scope
+remains failing; bootimage retains its pre-existing rustc-abi warning. Manual host
+GUI and physical hardware checks remain unverified.
+
+Evidence in `target/initator-m5-evidence/`:
+`scopes-path-{budget-red,first-green,green,unit,integration,native,files-vectors,desktop,shutdown,latency,tooling}.log`
+and `scopes-path-{build-default,build-grub,no-run,native-build,desktop-build}.log`.
+Tested screenshots are retained in `scopes-path-screenshots/`; the generic tracked
+images and disposable FAT fixture are restored after testing. Quota/cwd lifetime
+proof comes from the executable counter, allocation and data assertions rather
+than a screenshot. Listings/internal FAT allocations, grants, I/O
+cancellation/quiescence, socket/audio budgets and the Ring 3 scope/session factory
+remain unfinished. Normal services still share the trusted system root; Nest does
+not run yet, and this is not a completed filesystem sandbox or M5 milestone.
+
 ## Scope integration invariants for the next implementation
 
 - Keep the initial hierarchy bounded: system/session roots and service scopes;
