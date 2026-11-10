@@ -4,6 +4,14 @@ mod abi;
 mod ipc_probe;
 use userlib::{recordln, supervision, sys};
 fn main(argc: usize, argv: &[&str]) {
+    if argc > 1 && argv[1] == "--halt-intruder" {
+        abi::halt_intruder();
+        return;
+    }
+    if argc > 1 && argv[1] == "--stop-peer" {
+        ipc_probe::stop_peer();
+        return;
+    }
     if argc > 1 && argv[1] == "--ipc-quick" {
         ipc_probe::quick_peer();
         return;
@@ -46,6 +54,15 @@ fn main(argc: usize, argv: &[&str]) {
     assert_eq!(supervision::current().expect("identity").pid, 1);
     let mut mode = [0; 32];
     let n = sys::read_file("/ETC/INIT.RUN", &mut mode).expect("test mode");
+    if matches!(&mode[..n], b"halt" | b"halt-audio" | b"halt-no-devices") {
+        abi::halt(&mode[..n] == b"halt-audio");
+    }
+    if &mode[..n] == b"halt-abi" {
+        abi::halt_abi();
+    }
+    if &mode[..n] == b"stop-protocol" {
+        ipc_probe::stop_protocol();
+    }
     if &mode[..n] == b"ipc-lifecycle" {
         ipc_probe::lifecycle();
     }

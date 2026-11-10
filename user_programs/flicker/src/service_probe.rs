@@ -38,6 +38,30 @@ pub fn run(mode: &str) {
         client.run().unwrap(),
         sys::ticks()
     );
+    if mode == "--stop-close" {
+        drop(client);
+        loop {
+            sys::wait_events(sys::Events::CHILD, 0).unwrap();
+        }
+    }
+    if mode == "--cooperative" {
+        loop {
+            while let Some(event) = ipc::next().unwrap() {
+                client
+                    .on_event(&event)
+                    .expect("cooperative service control");
+            }
+            if client.stop_requested() {
+                recordln!(
+                    "[service-probe] cooperative-cleaned run={} tick={}",
+                    client.run().unwrap(),
+                    sys::ticks()
+                );
+                return;
+            }
+            sys::wait_events(sys::Events::PORT, 0).unwrap();
+        }
+    }
     if mode == "--watchdog" {
         loop {
             sys::wait_events(sys::Events::PORT, 0).expect("intentionally wedged work path");

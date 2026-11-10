@@ -50,7 +50,7 @@ def fixture(case):
             'D.UNIT': unit('wick','/BIN/FLICKER.SVC','Ready=notify\nStartTimeoutTicks=18\nWatchdogTicks=6\nArg=--watchdog\nRestart=on-failure\nRestartDelayTicks=2\nRestartMaxDelayTicks=8\nRestartBurst=3\nRestartWindowTicks=1000\nHealthyResetTicks=90\n'),
             'BOOT.UNIT': 'Version=1\nKind=target\nName=boot\nRequires=beacon\nRequires=spark\nWants=wick\n',
         }
-    if case in ('control-status', 'control-manage', 'control-restart'):
+    if case in ('control-status', 'control-manage', 'control-restart', 'control-cooperative', 'control-stop-closed'):
         access = 'status' if case == 'control-status' else 'manage'
         probe = 'restart' if case == 'control-restart' else access
         files = {
@@ -58,7 +58,10 @@ def fixture(case):
             'C.UNIT': unit('spark', '/BIN/SPARK.SVC', f'ControlAccess={access}\nArg=--probe-{probe}\n'),
             'BOOT.UNIT': 'Version=1\nKind=target\nName=boot\nRequires=beacon\nRequires=spark\n',
         }
-        if case == 'control-manage': files['D.UNIT'] = unit('fern', '/BIN/FLICKER.SVC', 'RestartBurst=32\n')
+        if case in ('control-manage','control-cooperative','control-stop-closed'):
+            extra='RestartBurst=32\nStopTimeoutTicks=4\n'+('Ready=notify\nStartTimeoutTicks=18\nArg=--cooperative\n' if case=='control-cooperative' else '')
+            if case=='control-stop-closed': extra='RestartBurst=32\nStopTimeoutTicks=90\nReady=notify\nStartTimeoutTicks=18\nArg=--stop-close\n'
+            files['D.UNIT'] = unit('fern', '/BIN/FLICKER.SVC', extra)
         return files
     if case == 'service-budget':
         files={f'U{n:02}.UNIT':unit(f'u{n:02}','/BIN/GLOW.SVC') for n in range(57)}
@@ -107,7 +110,7 @@ def fixture(case):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--case', choices=['configured','packaged','cycle','unknown','malformed',
-        'required-failure','optional-failure','vectors','too-many','total-budget','oversize','encoding','early-exit','service-budget','order-only','notify','notify-timeout','watchdog','heartbeat','wrong-ready','log-ready','foreign-ready','log-flood','log-exit','control-status','control-manage','control-pressure','control-restart'], default='configured')
+        'required-failure','optional-failure','vectors','too-many','total-budget','oversize','encoding','early-exit','service-budget','order-only','notify','notify-timeout','watchdog','heartbeat','wrong-ready','log-ready','foreign-ready','log-flood','log-exit','control-status','control-manage','control-pressure','control-restart','control-cooperative','control-stop-closed'], default='configured')
     parser.add_argument('--timeout', type=float, default=60)
     args = parser.parse_args()
     cpus = int(os.environ.get('RUSTOS_CPUS','1'))
@@ -166,13 +169,29 @@ def main():
                         assert output.index('cause=Killed status=9')<output.index('[spark] referenced restart PASS')
                         assert output.count('[initator] started name=spark ')==1
                         print(f'PASS: one restart job replaces a referenced service after completion: {log}');return
-                if args.case == 'control-manage':
+                if args.case in ('control-manage','control-cooperative','control-stop-closed'):
                     assert 'panicked' not in raw and '[spark] unknown command' not in output,raw[-6000:]
                     if '[spark] management lifecycle PASS cycles=16' in output and '[glow] beat=3' in output:
                         starts=re.findall(r'\[initator\] started name=fern unit=2 run=(\d+) pid=(\d+)',output)
                         assert len(starts)==17 and len({pid for _,pid in starts})==17
                         assert output.count('[initator] stopping name=fern ')==17
-                        assert output.count('cause=Killed status=9')==17
+                        if args.case == 'control-cooperative':
+                            assert output.count('[service-probe] cooperative-cleaned ')==17,'cooperative cleanup must run before service completion'
+                            assert 'cause=Killed status=9' not in output,'cooperative services must not be killed'
+                            for _,pid in starts:
+                                assert f'[initator] completion pid={pid} cause=Exited status=0' in output
+                        else:
+                            assert output.count('cause=Killed status=9')==17
+                            if args.case=='control-manage':
+                                assert output.count('reason=Some(StopTimeout)')==17
+                                stops=dict(re.findall(r'\[initator\] stopping name=fern unit=2 pid=(\d+) tick=(\d+)',output))
+                                forced=re.findall(r'\[initator\] escalating name=fern unit=2 pid=(\d+) tick=(\d+)',output)
+                                assert len(forced)==17
+                                assert all(int(tick)-int(stops[pid])>=4 for pid,tick in forced),'forced stop preceded grace deadline'
+
+                        if args.case=='control-stop-closed':
+                            assert output.count('reason=Some(StopDelivery)')==17,'closed peer must force exact pending stops without grace delay'
+                            assert 'reason=Some(StopTimeout)' not in output
                         assert '[initator] stopping name=beacon ' not in output
                         print(f'PASS: Spark start/stop jobs, identities and repeated resource recovery: {log}');return
                 if args.case == 'control-status':

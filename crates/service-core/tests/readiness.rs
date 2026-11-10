@@ -215,7 +215,8 @@ fn explicit_stop_disarms_watchdog_and_suppresses_automatic_restart() {
     );
     assert_eq!(
         next(&mut m, 2),
-        Some(Action::Terminate {
+        Some(Action::NotifyStop {
+            run: m.run_status(a.unit).unwrap().run,
             unit: a.unit,
             process: key(10)
         })
@@ -249,7 +250,8 @@ fn stopping_an_unready_replacement_waits_for_its_real_process_completion() {
     m.stop("a").unwrap();
     assert_eq!(
         next(&mut m, 4),
-        Some(Action::Terminate {
+        Some(Action::NotifyStop {
+            run: m.run_status(again.unit).unwrap().run,
             unit: again.unit,
             process: key(11)
         })
@@ -285,7 +287,8 @@ fn stop_waits_for_an_inflight_replacement_and_terminates_its_late_publication() 
     m.spawned(again, key(11), 5).unwrap();
     assert_eq!(
         next(&mut m, 5),
-        Some(Action::Terminate {
+        Some(Action::NotifyStop {
+            run: m.run_status(again.unit).unwrap().run,
             unit: again.unit,
             process: key(11)
         })
@@ -352,7 +355,8 @@ fn explicit_restart_keeps_one_job_until_new_ready_and_ignores_old_completion() {
     let job = m.restart("a").unwrap();
     assert_eq!(
         next(&mut m, 2),
-        Some(Action::Terminate {
+        Some(Action::NotifyStop {
+            run: m.run_status(a.unit).unwrap().run,
             unit: a.unit,
             process: key(10)
         })
@@ -385,7 +389,8 @@ fn explicit_restart_does_not_bypass_rolling_start_limit() {
         m.restart("a").unwrap();
         assert_eq!(
             next(&mut m, now),
-            Some(Action::Terminate {
+            Some(Action::NotifyStop {
+                run: m.run_status(a.unit).unwrap().run,
                 unit: a.unit,
                 process: old
             })
@@ -397,7 +402,7 @@ fn explicit_restart_does_not_bypass_rolling_start_limit() {
         next(&mut m, now);
     }
     m.restart("a").unwrap();
-    assert!(matches!(next(&mut m, 3), Some(Action::Terminate { .. })));
+    assert!(matches!(next(&mut m, 3), Some(Action::NotifyStop { .. })));
     m.completed(key(12), Completion::Killed, 3);
     assert_eq!(next(&mut m, 3), None);
     assert_eq!(m.outcome(), Outcome::Failed);
@@ -426,7 +431,8 @@ fn restart_during_automatic_launch_waits_for_late_publication_and_termination() 
     m.spawned(late, key(12), 3).unwrap();
     assert_eq!(
         next(&mut m, 3),
-        Some(Action::Terminate {
+        Some(Action::NotifyStop {
+            run: m.run_status(first.unit).unwrap().run,
             unit: first.unit,
             process: key(12)
         })
@@ -499,4 +505,64 @@ fn prerequisite_failure_cancels_an_unpublished_dependent_before_its_loader_finis
     next(&mut m, 2);
     assert_eq!(m.outcome(), Outcome::Failed);
     assert!(!m.launch_cancelled(b));
+}
+
+#[test]
+fn stopping_a_graph_waits_for_dependents_before_an_unready_prerequisite_replacement() {
+    let mut m = manager("on-failure", false);
+    m.start("b").unwrap();
+    let a = launch(&mut m, 0, 10);
+    m.notify(a.unit, a.run, key(10), Notification::Ready, 0)
+        .unwrap();
+    let b = launch(&mut m, 0, 11);
+    next(&mut m, 0);
+    m.completed(key(10), Completion::Fault(6), 1);
+    let replacement = launch(&mut m, 3, 12);
+    assert_eq!(m.state(a.unit), Some(State::Starting(key(12))));
+    m.stop("b").unwrap();
+    assert_eq!(
+        next(&mut m, 4),
+        Some(Action::NotifyStop {
+            unit: b.unit,
+            run: b.run,
+            process: key(11)
+        }),
+        "unready resource ownership must preserve stop ordering"
+    );
+    assert_eq!(m.state(a.unit), Some(State::Starting(key(12))));
+    assert_eq!(next(&mut m, 4), None);
+    m.completed(key(11), Completion::Exit(0), 5);
+    assert_eq!(
+        next(&mut m, 5),
+        Some(Action::NotifyStop {
+            unit: replacement.unit,
+            run: replacement.run,
+            process: key(12)
+        })
+    );
+    m.completed(key(12), Completion::Exit(0), 6);
+    next(&mut m, 6);
+    assert_eq!(m.outcome(), Outcome::Succeeded);
+}
+
+#[test]
+fn stopping_a_graph_cannot_rearm_prerequisite_watchdogs_while_waiting_for_dependents() {
+    let mut m = manager("on-failure", true);
+    m.start("b").unwrap();
+    let a = launch(&mut m, 0, 10);
+    m.notify(a.unit, a.run, key(10), Notification::Ready, 0)
+        .unwrap();
+    launch(&mut m, 0, 11);
+    next(&mut m, 0);
+    m.stop("b").unwrap();
+    next(&mut m, 1);
+    assert_eq!(
+        m.notify(a.unit, a.run, key(10), Notification::Heartbeat, 2),
+        Err(NotifyError::Unexpected)
+    );
+    assert_eq!(
+        m.next_deadline(),
+        Some(91),
+        "withdrawn health cannot shorten ordered stop grace"
+    );
 }

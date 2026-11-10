@@ -105,6 +105,7 @@ impl Scheduler {
 static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 
 mod supervision;
+pub(crate) use supervision::system_action_gate;
 pub use supervision::{child_next_user, terminate_child, configure_native_init, fault_current};
 mod events;
 mod ipc;

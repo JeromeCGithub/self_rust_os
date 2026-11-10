@@ -234,6 +234,8 @@ fn main() {
     let mut pending: [Option<Start>; MAX_UNITS] = [None; MAX_UNITS];
     let mut cursor = 0;
     let mut last_outcome = Outcome::Running;
+    let mut shutdown_reported = false;
+    let mut drained_reported = false;
     let mut states = [None; MAX_UNITS];
     loop {
         if let Some((start, result)) = launcher.take() {
@@ -345,14 +347,46 @@ fn main() {
                         "one pending start per unit"
                     );
                 }
-                Action::Terminate { unit, process } => {
+                Action::NotifyStop { unit, process, run } => {
                     let name = &manager
                         .catalog()
                         .unit(unit)
                         .expect("stop catalog index")
                         .name;
                     println!(
-                        "[initator] stopping name={} unit={} pid={} tick={} reason={:?}",
+                        "[initator] stopping name={} unit={} pid={} tick={} reason=None",
+                        name,
+                        unit,
+                        process.pid,
+                        sys::ticks()
+                    );
+                    if ports.request_stop(unit, run, process).is_err() {
+                        manager
+                            .stop_delivery_failed(unit, run, process)
+                            .expect("current stop delivery");
+                    }
+                }
+                Action::Terminate { unit, process } => {
+                    let name = &manager
+                        .catalog()
+                        .unit(unit)
+                        .expect("stop catalog index")
+                        .name;
+                    let failure = manager.run_status(unit).and_then(|r| r.failure);
+                    let action = if matches!(
+                        failure,
+                        Some(
+                            rustos_service_core::manager::Failure::StopTimeout
+                                | rustos_service_core::manager::Failure::StopDelivery
+                        )
+                    ) {
+                        "escalating"
+                    } else {
+                        "stopping"
+                    };
+                    println!(
+                        "[initator] {} name={} unit={} pid={} tick={} reason={:?}",
+                        action,
                         name,
                         unit,
                         process.pid,
@@ -416,6 +450,39 @@ fn main() {
         if outcome != last_outcome {
             println!("[initator] activation outcome={:?}", outcome);
             last_outcome = outcome;
+        }
+        if let Some(job) = manager.shutdown_job() {
+            if !shutdown_reported {
+                println!(
+                    "[initator] shutdown job={} tick={} deadline={:?}",
+                    job,
+                    sys::ticks(),
+                    manager.shutdown_deadline()
+                );
+                shutdown_reported = true;
+            }
+            if manager.shutdown_ready() {
+                if !drained_reported {
+                    println!(
+                        "[initator] shutdown drained job={} tick={}",
+                        job,
+                        sys::ticks()
+                    );
+                    drained_reported = true;
+                }
+                // Every launch reservation has been acknowledged. The idle
+                // worker belongs to PID 1; terminal halt retains its memory and
+                // parks all CPUs. Kernel refusal leaves PID 1 alive to collect
+                // adopted children before trying again after durable events.
+                match userlib::system::system_action(userlib::system::SystemAction::Halt) {
+                    Err(userlib::system::Error::Busy) => {}
+                    Err(error) => {
+                        println!("[initator] terminal halt refused: {:?}", error);
+                        recovery("terminal halt unavailable");
+                    }
+                    Ok(never) => match never {},
+                }
+            }
         }
         if issued_action || submitted {
             continue;

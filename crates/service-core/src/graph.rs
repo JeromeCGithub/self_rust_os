@@ -141,6 +141,25 @@ impl Catalog {
     pub fn edges(&self, id: usize) -> Option<Edges> {
         self.edges.get(id).copied()
     }
+    /// Transitive ordering restricted to this operation's selected nodes. Target
+    /// nodes preserve indirect dependencies without inventing a process lifetime.
+    pub(crate) fn ordering_closure(&self, selected: u64) -> [u64; 64] {
+        let mut before = [0; 64];
+        for (unit, edges) in self.edges.iter().enumerate() {
+            if selected & (1u64 << unit) != 0 {
+                before[unit] = (edges.requires | edges.after) & selected;
+            }
+        }
+        for via in 0..self.len() {
+            let prerequisites = before[via];
+            for row in &mut before[..self.len()] {
+                if *row & (1u64 << via) != 0 {
+                    *row |= prerequisites;
+                }
+            }
+        }
+        before
+    }
     /// Wants/Requires pull units in; After only orders units already selected.
     pub fn plan_start(&self, root: &str) -> Result<Plan, Error> {
         let id = self

@@ -46,6 +46,7 @@ const _: () = assert!(core::mem::size_of::<RxDesc>() == 16 && core::mem::size_of
 /// A single polled NIC. Addresses are integers to avoid references to DMA-owned
 /// memory. CPU access is serialized by the outer network lock.
 pub struct E1000 {
+    function: pci::Function,
     mmio: usize,
     rx_ring: usize,
     tx_ring: usize,
@@ -108,6 +109,7 @@ impl E1000 {
         // until every owned frame and descriptor is initialized below.
         pci::enable_memory(function);
         let mut nic = Self {
+            function,
             mmio: MMIO as usize,
             rx_ring: 0,
             tx_ring: 0,
@@ -203,6 +205,17 @@ impl E1000 {
         Ok(nic)
     }
 
+    /// Terminal-only shutdown under the network lock and kernel entry, after
+    /// remote CPUs park. Disable packet engines/IRQs and PCI bus mastering;
+    /// descriptor/buffer frames remain permanently owned, even on bad readback.
+    pub fn disable_dma_terminal(&mut self) -> bool {
+        self.write(0xd8, u32::MAX);
+        self.write(0x100, self.read(0x100) & !2);
+        self.write(0x400, self.read(0x400) & !2);
+        let _ = self.read(8); // Flush posted MMIO writes before config readback.
+        let disabled = pci::disable_bus_master(self.function);
+        disabled && self.read(0x100) & 2 == 0 && self.read(0x400) & 2 == 0
+    }
     /// Factory MAC address.
     pub fn mac(&self) -> [u8; 6] {
         self.mac

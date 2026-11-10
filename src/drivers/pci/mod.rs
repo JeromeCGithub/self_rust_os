@@ -61,11 +61,13 @@ pub fn memory_bar(raw: u32) -> Option<u64> {
     }
 }
 
-/// Read a configuration dword. Boot-only callers serialize the address/data pair.
+/// Read a configuration dword. Callers serialize the address/data pair during
+/// boot or under kernel entry; IRQ handlers never access these configuration ports.
 #[cfg(target_os = "none")]
 pub fn read(function: Function, offset: u8) -> u32 {
     use x86_64::instructions::port::Port;
-    // SAFETY: x86 PC configuration mechanism #1; Ring 0 boot runs on one CPU.
+    // SAFETY: x86 PC configuration mechanism #1; caller holds boot ownership
+    // or serialized kernel entry (terminal callers have parked other CPUs).
     // The aligned address selects only a PCI configuration register. No IRQ uses it.
     unsafe {
         Port::<u32>::new(0xcf8).write(function.address(offset));
@@ -84,6 +86,23 @@ pub fn enable_bus_master(function: Function) {
         Port::<u32>::new(0xcf8).write(function.address(4));
         Port::<u16>::new(0xcfc).write(command | 6);
     }
+}
+
+/// Disable new PCI bus-master transactions while retaining all DMA allocations.
+/// Terminal callers own kernel entry and have parked other CPUs. Readback checks
+/// the command bit; it is not permission to recycle possibly in-flight buffers.
+#[cfg(target_os = "none")]
+pub fn disable_bus_master(function: Function) -> bool {
+    use x86_64::instructions::port::Port;
+    let command = read(function, 4) as u16;
+    // SAFETY: The caller serializes this fixed configuration address/data pair.
+    // A halfword write accesses only command, preserving adjacent W1C status.
+    // No pointers or memory references cross these Ring 0 I/O instructions.
+    unsafe {
+        Port::<u32>::new(0xcf8).write(function.address(4));
+        Port::<u16>::new(0xcfc).write(command & !4);
+    }
+    read(function, 4) & 4 == 0
 }
 
 /// Enable MMIO but prevent firmware DMA from running while rings are reset.

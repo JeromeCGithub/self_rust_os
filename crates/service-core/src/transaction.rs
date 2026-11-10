@@ -148,6 +148,26 @@ impl Engine {
         tx.cleanup = Some((0, !(1u64 << root), Outcome::Succeeded));
         Ok(job)
     }
+    /// Replace activation with a terminal cleanup job. Reservations remain owned
+    /// until runtime failure/publication/completion acknowledges their lifetimes.
+    pub(crate) fn begin_shutdown(&mut self) -> Result<u64, Error> {
+        let next = self.sequence.checked_add(1).ok_or(Error::Sequence)?;
+        self.sequence = next;
+        self.owners.fill(0);
+        self.transaction = Some(Transaction {
+            id: next,
+            root: 0,
+            stopping: true,
+            restarting: false,
+            selected: 0,
+            order: alloc::vec::Vec::new(),
+            phases: [Phase::Idle; 64],
+            outcome: Outcome::Running,
+            cleanup: Some((0, 0, Outcome::Succeeded)),
+            pending_stop: None,
+        });
+        Ok(next)
+    }
     pub fn begin_stop(&mut self, name: &str) -> Result<u64, Error> {
         let root = self.catalog.lookup(name).ok_or(Error::Unknown)?;
         if self.busy() {
@@ -191,12 +211,27 @@ impl Engine {
                     self.transaction = Some(tx);
                     return None;
                 }
+                let stopping = self.resources & !(desired | retain);
+                let groups = (0..self.catalog.len())
+                    .filter(|&unit| {
+                        self.catalog
+                            .unit(unit)
+                            .is_some_and(|unit| unit.kind == crate::config::Kind::Target)
+                    })
+                    .fold(0, |mask, unit| mask | (1u64 << unit))
+                    & (self.active | tx.selected)
+                    & !(desired | retain);
+                let before = self.catalog.ordering_closure(stopping | groups);
                 if let Some(id) = self.order[..self.order_len]
                     .iter()
                     .rev()
                     .copied()
                     .find(|&id| {
-                        self.resources & (1u64 << id) != 0 && (desired | retain) & (1u64 << id) == 0
+                        stopping & (1u64 << id) != 0
+                            && !(0..self.catalog.len()).any(|dependent| {
+                                stopping & (1u64 << dependent) != 0
+                                    && before[dependent] & (1u64 << id) != 0
+                            })
                     })
                 {
                     tx.pending_stop = Some(id);
@@ -512,6 +547,9 @@ impl Engine {
             .as_ref()
             .map(|t| t.outcome)
             .unwrap_or(Outcome::Succeeded)
+    }
+    pub(crate) fn owns_resource(&self, unit: usize) -> bool {
+        unit < self.catalog.len() && self.resources & (1u64 << unit) != 0
     }
     pub fn active(&self, unit: usize) -> bool {
         unit < self.catalog.len() && self.active & (1u64 << unit) != 0

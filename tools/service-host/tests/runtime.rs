@@ -238,3 +238,149 @@ fn launch_worker_backpressure_queues_admitted_units_instead_of_failing_the_boot_
     assert_eq!(r.live_count(), 8);
     assert_eq!(r.pending_count(), 0);
 }
+
+#[test]
+fn cooperative_host_child_receives_stop_and_exits_without_a_kill() {
+    let mut r = runtime("cooperative", "StopTimeoutTicks=20\nRestart=always\n");
+    r.manager.start("beacon").unwrap();
+    r.drive_until(Duration::from_secs(5), |r| {
+        r.events().any(|e| matches!(e, Event::Ready { .. }))
+    })
+    .unwrap();
+    r.manager.stop("beacon").unwrap();
+    r.drive_until(Duration::from_secs(5), |r| {
+        r.live_count() == 0 && r.manager.outcome() == Outcome::Succeeded
+    })
+    .unwrap();
+    let completed = r
+        .events()
+        .find_map(|e| {
+            if let Event::Completed { cause, .. } = e {
+                Some(*cause)
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(
+        completed,
+        rustos_service_core::Completion::Exit(0),
+        "cooperative stop must deliver a frame, not kill"
+    );
+    assert_eq!(r.manager.next_deadline(), None);
+    assert_eq!(r.pending_count(), 0);
+}
+#[test]
+fn ignored_host_stop_waits_until_policy_deadline_before_forcing_termination() {
+    let mut r = runtime("wedge", "StopTimeoutTicks=5\nRestart=always\n");
+    r.manager.start("beacon").unwrap();
+    r.drive_until(Duration::from_secs(5), |r| {
+        r.events().any(|e| matches!(e, Event::Ready { .. }))
+    })
+    .unwrap();
+    let stop_tick = r.tick();
+    r.manager.stop("beacon").unwrap();
+    r.drive_until(Duration::from_secs(5), |r| {
+        r.live_count() == 0 && r.manager.outcome() == Outcome::Succeeded
+    })
+    .unwrap();
+    let (cause, tick) = r
+        .events()
+        .find_map(|e| {
+            if let Event::Completed { cause, tick, .. } = e {
+                Some((*cause, *tick))
+            } else {
+                None
+            }
+        })
+        .unwrap();
+    assert_eq!(cause, rustos_service_core::Completion::Killed);
+    assert!(
+        tick >= stop_tick + 5,
+        "ignored stop killed before its configured grace period"
+    );
+    assert_eq!(
+        r.manager.run_status(0).unwrap().failure,
+        Some(rustos_service_core::manager::Failure::StopTimeout)
+    );
+}
+
+#[test]
+fn host_shutdown_collects_cooperative_dependents_before_their_prerequisites() {
+    let executable = env!("CARGO_BIN_EXE_service-fixture");
+    let a=format!("Version=1\nKind=service\nName=a\nExec={executable}\nArg=cooperative\nReady=notify\nRestart=always\nStopTimeoutTicks=50\n");
+    let b=format!("Version=1\nKind=service\nName=b\nExec={executable}\nArg=cooperative\nReady=notify\nRequires=a\nStopTimeoutTicks=50\n");
+    let mut r =
+        Runtime::new(Catalog::load(&[("A.UNIT", a.as_bytes()), ("B.UNIT", b.as_bytes())]).unwrap())
+            .unwrap();
+    r.manager.start("b").unwrap();
+    r.drive_until(Duration::from_secs(5), |r| {
+        r.events()
+            .filter(|e| matches!(e, Event::Ready { .. }))
+            .count()
+            == 2
+    })
+    .unwrap();
+    r.manager.shutdown(100).unwrap();
+    r.drive_until(Duration::from_secs(5), |r| r.manager.shutdown_ready())
+        .unwrap();
+    let exits: Vec<_> = r
+        .events()
+        .filter_map(|e| {
+            if let Event::Completed { unit, cause, .. } = e {
+                Some((*unit, *cause))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(
+        exits,
+        [
+            (1, rustos_service_core::Completion::Exit(0)),
+            (0, rustos_service_core::Completion::Exit(0))
+        ]
+    );
+    assert_eq!(r.live_count(), 0);
+    assert_eq!(r.pending_count(), 0);
+    assert_eq!(r.manager.next_deadline(), None);
+}
+#[test]
+fn host_shutdown_global_deadline_forces_hung_dependents_and_all_remaining_children() {
+    let executable = env!("CARGO_BIN_EXE_service-fixture");
+    let a=format!("Version=1\nKind=service\nName=a\nExec={executable}\nArg=wedge\nReady=notify\nRestart=always\nStopTimeoutTicks=50\n");
+    let b = a.replace("Name=a", "Name=b") + "Requires=a\n";
+    let mut r =
+        Runtime::new(Catalog::load(&[("A.UNIT", a.as_bytes()), ("B.UNIT", b.as_bytes())]).unwrap())
+            .unwrap();
+    r.manager.start("b").unwrap();
+    r.drive_until(Duration::from_secs(5), |r| {
+        r.events()
+            .filter(|e| matches!(e, Event::Ready { .. }))
+            .count()
+            == 2
+    })
+    .unwrap();
+    let before = r.tick();
+    r.manager.shutdown(5).unwrap();
+    r.drive_until(Duration::from_secs(5), |r| r.manager.shutdown_ready())
+        .unwrap();
+    let exits: Vec<_> = r
+        .events()
+        .filter_map(|e| {
+            if let Event::Completed { cause, tick, .. } = e {
+                Some((*cause, *tick))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(exits.len(), 2);
+    assert!(exits.iter().all(
+        |(cause, tick)| *cause == rustos_service_core::Completion::Killed
+            && *tick >= before + 5
+            && *tick < before + 50
+    ));
+    assert_eq!(r.live_count(), 0);
+    assert_eq!(r.pending_count(), 0);
+}

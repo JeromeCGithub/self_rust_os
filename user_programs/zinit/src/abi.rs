@@ -238,3 +238,52 @@ pub fn exhaustion() {
         sys::wait_events(sys::Events::CHILD, 0).expect("finished probe stays live");
     }
 }
+
+pub fn halt_intruder() {
+    use rustos_platform_abi as abi;
+    for (action, flags, reserved) in [(1,0,0),(1,1,0),(2,0,0),(u64::MAX,u64::MAX,u64::MAX)] {
+        assert_eq!(raw(abi::SYS_SYSTEM_ACTION,action,flags,reserved),abi::Error::Denied.encode(),"system action requires init authority before argument validation");
+    }
+}
+pub fn halt_abi() -> ! {
+    use rustos_platform_abi as abi;
+    let child = sys::spawn_with_args("/BIN/ZINIT.SVC", &["--halt-intruder"]).unwrap();
+    // Retain the child, live or zombie, throughout these calls. A successful halt
+    // would be a bug: its process lifetime must be collected before commitment.
+    for (action,flags,reserved,error) in [
+        (1,0,0,abi::Error::Busy),
+        (1,1,0,abi::Error::Invalid),
+        (1,0,1,abi::Error::Invalid),
+        (2,0,0,abi::Error::Unsupported),
+        (3,0,0,abi::Error::Unsupported),
+        (u64::MAX,0,0,abi::Error::Unsupported),
+    ] {
+        assert_eq!(raw(abi::SYS_SYSTEM_ACTION,action,flags,reserved),error.encode(),"native system action validation");
+    }
+    let ChildEvent::Completed{process,cause,status}=completion()else{panic!("halt intruder completion")};
+    assert_eq!(process.pid,child);assert_eq!(cause,Cause::Exited);assert_eq!(status,0);
+    recordln!("[init-probe] halt ABI PASS");
+    loop{sys::wait_events(sys::Events::CHILD,0).unwrap();}
+}
+
+pub fn halt(audio: bool) -> ! {
+    let stream = if audio {
+        let mut stream=userlib::audio::Stream::open().expect("halt probe requires configured AC97");
+        let block=[0x10;4096];
+        for _ in 0..32 {
+            match stream.write(&block) {
+                Ok(n)=>assert_eq!(n,block.len()),
+                Err(userlib::audio::Error::WouldBlock)=>break,
+                Err(error)=>panic!("halt probe audio write: {:?}",error),
+            }
+        }
+        let status=stream.status().unwrap();
+        assert!(status.flags&1!=0 && status.queued_frames>0,"test must actually start DMA");
+        recordln!("[init-probe] active audio queued={}",status.queued_frames);
+        Some(stream)
+    } else {None};
+    recordln!("[init-probe] requesting terminal halt");
+    let result=userlib::system::system_action(userlib::system::SystemAction::Halt);
+    drop(stream);
+    panic!("terminal halt returned: {:?}",result);
+}

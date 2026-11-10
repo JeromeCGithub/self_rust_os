@@ -18,7 +18,8 @@ M2 is implemented; see [the native unit interface](initator-units.md) and
 see [its evidence and limits](initator-m3-progress.md) and
 [the real host backend](initator-host.md). M3 now includes native control and a
 chunked launch worker with image syscall 127, added after measured single-CPU
-synchronous loading exceeded the declared watchdog tolerance. M4–M7 remain
+synchronous loading exceeded the declared watchdog tolerance. M4 is implemented and locally validated; see
+[stop/shutdown/halt evidence and limits](initator-m4-progress.md). M5–M7 remain
 future milestones.
 
 The requested outcome is a native Ring 3 PID 1 that orchestrates boot and supervises
@@ -1517,7 +1518,7 @@ when M5 scopes arrive.
 
 **Tests/QEMU:** well-behaved stop, ignored stop, exit during request, failed sends,
 already-dead dependency, simultaneous stop+crash, global deadline, queued restart
-cancellation, unauthorized shutdown. `e2e/init.py --case shutdown` asserts ordered
+cancellation, unauthorized shutdown. `e2e/init_shutdown.py` asserts ordered
 stop acknowledgements **and actual completions**, forced cleanup of the hung child,
 no restart, then kernel terminal state. Verify multi-CPU and DMA quiescence where
 devices were active. No timeout-only success and no test debug-exit production API.

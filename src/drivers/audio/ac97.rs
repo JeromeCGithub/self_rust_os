@@ -112,6 +112,14 @@ impl Device {
         set_command(function, true);
         Ok(device)
     }
+    /// Terminal-only stop: never recycle buffers or resume this controller.
+    /// Keep disabling bus mastering even if the bounded hardware reset fails.
+    pub fn disable_dma_terminal(&mut self) -> bool {
+        let stopped = self.reset_hardware().is_ok();
+        let disabled = pci::disable_bus_master(self.function);
+        self.failed = true;
+        stopped && disabled
+    }
     /// Stop/reset DMA with bounded polling before changing lease ownership.
     pub fn reset(&mut self) -> Result<(), Error> {
         self.reset_hardware()?;

@@ -443,6 +443,12 @@ impl<D: Device> Network<D> {
         &self.device
     }
 
+    /// Exclusive device access for owner-controlled transport lifecycle changes.
+    /// The kernel facade holds its service lock; protocol progress cannot overlap.
+    pub fn device_mut(&mut self) -> &mut D {
+        &mut self.device
+    }
+
     /// Number of live endpoints.
     pub fn count(&self) -> usize {
         self.slots.iter().flatten().count()

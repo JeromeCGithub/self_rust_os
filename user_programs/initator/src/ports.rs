@@ -22,6 +22,7 @@ pub struct Run {
     run: u64,
     init: abi::Message<'static>,
     init_sent: bool,
+    stop_pending: bool,
     closing: bool,
     notify_budget: Budget,
     log_budget: Budget,
@@ -115,6 +116,7 @@ impl Run {
                 watchdog: unit.watchdog,
             },
             init_sent: false,
+            stop_pending: false,
             closing: false,
             notify_budget,
             log_budget,
@@ -127,6 +129,24 @@ impl Run {
             pid: self.key.pid,
             generation: self.key.generation,
         }
+    }
+    fn send_stop(&mut self) -> Result<(), ()> {
+        if !self.stop_pending || !self.init_sent || self.closing {
+            return Ok(());
+        }
+        let mut bytes = [0; abi::MAX_FRAME];
+        let length = abi::Message::Stop { run: self.run }
+            .encode(&mut bytes)
+            .map_err(|_| ())?;
+        match self.notify.send(&bytes[..length]) {
+            Ok(()) => self.stop_pending = false,
+            Err(ipc::SendError::Full) => self.notify.request_writable(true)?,
+            Err(_) => {
+                self.stop_pending = false;
+                return Err(());
+            }
+        }
+        Ok(())
     }
     fn initialize(&mut self) -> Result<(), ()> {
         if self.init_sent || self.closing {
@@ -167,6 +187,19 @@ impl Ports {
         run.initialize()?;
         *slot = Some(run);
         Ok(())
+    }
+    /// Queue one run-scoped cooperative stop after Init. A full channel arms
+    /// writable interest; the manager's grace deadline bounds delivery and exit.
+    pub fn request_stop(&mut self, unit: usize, run: u64, key: ProcessKey) -> Result<(), ()> {
+        let current = self
+            .runs
+            .get_mut(unit)
+            .and_then(Option::as_mut)
+            .filter(|current| current.run == run && current.key() == key && !current.closing)
+            .ok_or(())?;
+        current.stop_pending = true;
+        current.initialize()?;
+        current.send_stop()
     }
     pub fn mark_exit(&mut self, key: ipc::ProcessKey) {
         for run in self.runs.iter_mut().flatten() {
@@ -256,10 +289,17 @@ impl Ports {
             if event.kind == Kind::Writable {
                 if notify {
                     run.initialize()?;
+                    if run.send_stop().is_err() {
+                        let _ = manager.stop_delivery_failed(unit, run.run, run.key());
+                    }
                 }
                 continue;
             }
             if event.kind == Kind::PeerClosed {
+                if notify {
+                    run.stop_pending = false;
+                    let _ = manager.stop_delivery_failed(unit, run.run, run.key());
+                }
                 continue;
             }
             if event.sender != Some(run.key) {

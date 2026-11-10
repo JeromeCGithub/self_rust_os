@@ -106,7 +106,7 @@ fn lifecycle_job_reply_never_acknowledges_stop_before_child_completion() {
     };
     assert!(matches!(
         m.next_action(1).unwrap(),
-        Some(Action::Terminate { process: CHILD, .. })
+        Some(Action::NotifyStop { process: CHILD, .. })
     ));
     assert_eq!(
         s.dispatch(
@@ -279,7 +279,7 @@ fn restart_reply_tracks_the_complete_stop_and_replacement_job() {
     };
     assert!(matches!(
         m.next_action(1).unwrap(),
-        Some(Action::Terminate { process: CHILD, .. })
+        Some(Action::NotifyStop { process: CHILD, .. })
     ));
     m.completed(CHILD, Completion::Killed, 2);
     let Some(Action::Start(replacement)) = m.next_action(2).unwrap() else {
@@ -299,6 +299,58 @@ fn restart_reply_tracks_the_complete_stop_and_replacement_job() {
     m.next_action(2).unwrap();
     assert_eq!(
         s.dispatch(PEER, 1, request(2, Operation::Job { job }), &mut m, &j)
+            .body,
+        Body::Job {
+            job,
+            phase: JobPhase::Succeeded
+        }
+    );
+}
+
+#[test]
+fn management_shutdown_replaces_pending_activation_and_retains_one_terminal_job() {
+    let mut m = manager();
+    let journal = Journal::<2>::new();
+    m.start("a").unwrap();
+    let Some(Action::Start(pending)) = m.next_action(0).unwrap() else {
+        panic!("pending launch")
+    };
+    let mut session = Session::new(PEER, 1, Access::Manage).unwrap();
+    let Body::Job { job, phase } = session
+        .dispatch(PEER, 1, request(1, Operation::Shutdown), &mut m, &journal)
+        .body
+    else {
+        panic!("authorized shutdown must admit a terminal job")
+    };
+    assert_eq!(phase, JobPhase::Running);
+    assert!(m.launch_cancelled(pending));
+    assert_eq!(
+        session
+            .dispatch(PEER, 1, request(2, Operation::Shutdown), &mut m, &journal)
+            .body,
+        Body::Job {
+            job,
+            phase: JobPhase::Running
+        }
+    );
+    assert_eq!(
+        m.start("a"),
+        Err(rustos_service_core::transaction::Error::Busy)
+    );
+    m.next_action(1).unwrap();
+    assert!(!m.shutdown_ready());
+    m.spawn_failed(pending, 1).unwrap();
+    m.next_action(1).unwrap();
+    assert!(m.shutdown_ready());
+    assert_eq!(
+        session
+            .dispatch(
+                PEER,
+                1,
+                request(3, Operation::Job { job }),
+                &mut m,
+                &journal
+            )
             .body,
         Body::Job {
             job,

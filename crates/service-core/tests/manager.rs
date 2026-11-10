@@ -57,7 +57,8 @@ fn spawn_failure_rolls_back_and_suppresses_retries_for_unowned_branches() {
     m.spawn_failed(start, 0).unwrap();
     assert_eq!(
         next(&mut m, 0),
-        Some(Action::Terminate {
+        Some(Action::NotifyStop {
+            run: m.run_status(a).unwrap().run,
             unit: a,
             process: key(10)
         })
@@ -109,7 +110,7 @@ fn explicit_activation_at_exhausted_rate_limit_fails_instead_of_stalling() {
         launch(&mut m, 0, pid);
         next(&mut m, 0);
         m.stop("a").unwrap();
-        assert!(matches!(next(&mut m, 0), Some(Action::Terminate { .. })));
+        assert!(matches!(next(&mut m, 0), Some(Action::NotifyStop { .. })));
         m.completed(key(pid), Completion::Killed, 0);
         next(&mut m, 0);
     }

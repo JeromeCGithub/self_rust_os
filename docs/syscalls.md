@@ -488,7 +488,7 @@ Both profiles reject PID values above `u32::MAX` and nonzero unused arguments to
 kill/wait before side effects. See [M1 evidence](initator-progress.md).
 
 
-## Native owned channels and bound spawn (M3 work in progress)
+## Native owned channels and bound spawn (M3)
 
 These operations are implemented in [scheduler IPC](../src/scheduler/ipc.rs),
 [the channel object registry](../crates/ipc-core/src/lib.rs),
@@ -577,6 +577,13 @@ The userspace [service protocol](../crates/service-abi/src/lib.rs) uses notify t
 u64, payload length u32 and detail u32. Init=1 carries eight watchdog ticks bytes
 (zero disables) and detail notify bit; Ready=2/Heartbeat=3 have no payload/detail.
 Log=4 carries up to 232 UTF-8 bytes, detail severity 1–4, and rejects controls.
+On the M4 branch, Stop=5 has zero payload/detail and the current nonzero run.
+It travels manager-to-service over the notify endpoint. SDK client state accepts it
+only after Init from the same authenticated sender/run, sets `stop_requested()`,
+and rejects subsequent readiness/heartbeat while permitting cleanup logs. This is
+an application protocol addition, not a kernel signal syscall. M4 adds authorized shutdown and the final halt operation described below;
+see [M4 progress](initator-m4-progress.md) for execution evidence.
+
 Init/watchdog constraints and exact frame lengths are validated. The manager checks
 receiving endpoint, authenticated sender, run and lifecycle before policy effects.
 The separate [control codec](../crates/service-abi/src/control.rs) uses kinds
@@ -594,5 +601,51 @@ matching connection identity/run and authorization precede all policy effects.
 There is no public discovery endpoint. A slow client retains at most one reply;
 read interest pauses while writable interest awaits capacity. Spark exercises this
 interface; [unit control documentation](initator-units.md#spark-control-and-asynchronous-launch)
-describes commands and budgets. Shutdown remains Unsupported for management and
-Denied for read-only peers; no shutdown/halt syscall is added in M3.
+describes commands and budgets. M3 left Shutdown unsupported. On the M4 branch, management Shutdown admits one
+terminal job and read-only peers remain denied before mutation. The terminal job
+coalesces repeated requests, rejects new lifecycle work, cancels pending starts and
+restart backoff, and stops the selected graph before requesting kernel halt.
+
+
+## Terminal system action (M4)
+
+| Number | Operation | Arguments | Result |
+| --- | --- | --- | --- |
+| 128 | system action | action u64, flags=0, reserved=0 | typed platform error before commitment; successful Halt never returns |
+
+[The platform ABI](../crates/platform-abi/src/lib.rs) defines Halt=1, Reboot=2 and
+PowerOff=3. Only Halt is implemented. Errors extend the existing platform range:
+Invalid=1, Unavailable=2, Failed=3, Denied=4, Unsupported=5, Busy=6, each encoded
+as `u64::MAX - 511 + discriminant`. Existing random/time numbers and errors retain
+their values. Unsupported requests return Unsupported; nonzero reserved words
+return Invalid after authority validation. Existing restricted-worker filtering
+still rejects disallowed syscall numbers before dispatch.
+
+Authority comes from the kernel-selected native init identity, not the numeric
+PID alone or the legacy desktop display-owner exception. An ordinary child is
+Denied even with malformed arguments. After scalar validation, any other process
+record, including an uncollected zombie, returns Busy. No device or CPU state is
+changed by these refusal paths. The scheduler gate is checked again immediately
+before irreversible commitment.
+
+Commitment parks other CPUs using the existing terminal NMI path, disables the
+supported E1000 packet engines/interrupts and PCI bus mastering, and stops AC97 DMA
+with bounded reset/readback before disabling its PCI bus mastering. The kernel
+retains every device allocation/frame and never returns or releases entry after
+commitment, including on a failed acknowledgement/readback. Diagnostics distinguish
+`parked` and `dma_disabled` failure. Retaining all DMA storage is necessary even
+after command-bit readback; it is not proof that buffers can be recycled.
+ATA uses PIO here; no filesystem power-loss durability or ACPI poweroff is promised.
+
+The SDK [system action wrapper](../user_programs/userlib/src/system.rs) returns
+`Result<Infallible, Error>`. PID 1 first drains core-owned lifetimes, then lets the
+kernel's Busy check catch remaining adopted children before retrying after durable
+child events. PID 1 does not exit during graceful shutdown. Its idle launch worker
+belongs to the same process; all launch reservations have been acknowledged and
+terminal halt retains that process's memory and stops its CPUs.
+
+The [native halt probes](../e2e/init.py) check actual all-CPU HLT states through QMP,
+PCI command registers through monitor I/O reads, active queued AC97 DMA and absent
+hardware. The [shutdown runner](../e2e/init_shutdown.py) additionally checks exact
+service completions, ordered stop, global escalation, pending-load and backoff
+cancellation, and a restarted prerequisite before terminal halt.

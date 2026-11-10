@@ -59,6 +59,7 @@ struct Child {
     key: ProcessKey,
     input: Option<UnixStream>,
     output: Option<wire::Frame>,
+    stop: Option<wire::Frame>,
     notify: wire::Reader,
     log: wire::Reader,
     budgets: [Budget; 2],
@@ -135,7 +136,7 @@ impl Runtime {
         self.events.push_back(event);
     }
     /// Close the development command stream, delivering EOF to a cooperative host
-    /// fixture. This is not the future native Stop protocol.
+    /// fixture. Service stop uses a separate framed Stop request.
     pub fn close_input(&mut self, unit: usize) -> io::Result<()> {
         let child = self
             .children
@@ -144,6 +145,7 @@ impl Runtime {
             .ok_or(io::ErrorKind::NotFound)?;
         child.input = None;
         child.output = None;
+        child.stop = None;
         Ok(())
     }
     /// Runtime authority uses complete synthetic identity and stable kernel pidfd,
@@ -208,6 +210,7 @@ impl Runtime {
                         key: event.key,
                         input: Some(input),
                         output: Some(frame),
+                        stop: None,
                         notify: wire::Reader::new(),
                         log: wire::Reader::new(),
                         budgets: [
@@ -239,6 +242,22 @@ impl Runtime {
         match action {
             Action::Terminate { process, .. } => {
                 let _ = self.terminate(process);
+            }
+            Action::NotifyStop { unit, process, run } => {
+                if let Some(child) =
+                    self.children
+                        .get_mut(unit)
+                        .and_then(Option::as_mut)
+                        .filter(|child| {
+                            child.key == process && child.start.run == run && child.input.is_some()
+                        })
+                {
+                    child.stop = Some(wire::Frame::message(Message::Stop { run })?);
+                } else {
+                    self.manager
+                        .stop_delivery_failed(unit, run, process)
+                        .map_err(|_| io::Error::other("stop delivery identity"))?;
+                }
             }
             Action::Start(start) => {
                 let definition = self
@@ -337,7 +356,7 @@ impl Runtime {
                 .then(|| child.process.notify.as_raw_fd());
             let log =
                 (!child.log.closed && !child.paused[1]).then(|| child.process.log.as_raw_fd());
-            let input = if child.output.is_some() {
+            let input = if child.output.is_some() || child.stop.is_some() {
                 child.input.as_ref().map(AsRawFd::as_raw_fd)
             } else {
                 None
@@ -383,15 +402,29 @@ impl Runtime {
         let Some(child) = self.children[unit].as_mut() else {
             return;
         };
-        let (Some(frame), Some(input)) = (&mut child.output, &mut child.input) else {
+        // An Init frame already partially written must finish before Stop. The
+        // independent second slot retains bounded progress without overwriting it.
+        let initialization = child.output.is_some();
+        let output = if initialization {
+            &mut child.output
+        } else {
+            &mut child.stop
+        };
+        let (Some(frame), Some(input)) = (output.as_mut(), &mut child.input) else {
             return;
         };
         match frame.write(input) {
-            Ok(true) => child.output = None,
+            Ok(true) => *output = None,
             Ok(false) => {}
             Err(_) => {
+                let stopping = child.stop.is_some();
+                let (run, key) = (child.start.run, child.key);
                 child.output = None;
+                child.stop = None;
                 child.input = None;
+                if stopping {
+                    let _ = self.manager.stop_delivery_failed(unit, run, key);
+                }
             }
         }
     }

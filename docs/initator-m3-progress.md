@@ -78,7 +78,7 @@ record subsequent changes and final verification. M4–M7 remain future work.
   precede lookup or effects. At this checkpoint these were not yet wired; see the subsequent implementation
   below. Shutdown remains unsupported until M4.
 
-The full register/wire contracts are in [syscalls](syscalls.md#native-owned-channels-and-bound-spawn-m3-work-in-progress).
+The full register/wire contracts are in [syscalls](syscalls.md#native-owned-channels-and-bound-spawn-m3).
 Configuration/readiness semantics are in [native units](initator-units.md).
 
 ## Red and green evidence

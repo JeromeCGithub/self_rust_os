@@ -1,6 +1,9 @@
 //! Per-connection authorization; only the authenticated transport supplies identity.
 use crate::{Invalid, ProcessKey};
 use rustos_service_abi::control::{Access, Operation, Request};
+/// Global stop budget for native control requests, in the manager's clock ticks.
+/// Direct host/native adapters may choose a different bounded budget explicitly.
+pub const SHUTDOWN_TIMEOUT_TICKS: u64 = 180;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Denied {
     Peer,
@@ -145,6 +148,7 @@ impl Session {
                         s.start_deadline
                             .into_iter()
                             .chain(s.watchdog_deadline)
+                            .chain(s.stop_deadline)
                             .min()
                     }),
                 };
@@ -201,8 +205,13 @@ impl Session {
                     text: &text[start..end],
                 }
             }
-            // Shutdown requires M4's bounded stop and final halt contract.
-            Operation::Shutdown => return error(Code::Unsupported, 0),
+            Operation::Shutdown => match manager.shutdown(SHUTDOWN_TIMEOUT_TICKS) {
+                Ok(job) => Body::Job {
+                    job,
+                    phase: job_phase(manager.outcome()),
+                },
+                Err(_) => return error(Code::Limit, 0),
+            },
         };
         Reply {
             id: request.id,

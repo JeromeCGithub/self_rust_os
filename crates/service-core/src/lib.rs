@@ -317,6 +317,15 @@ impl<const N: usize> Supervisor<N> {
             .get(unit)
             .is_some_and(|i| i.state == State::Failed && !i.wanted)
     }
+    /// Withdraw restart desire while preserving live state for ordered shutdown.
+    pub(crate) fn suppress_restart(&mut self, unit: usize) -> Result<(), Invalid> {
+        let instance = self.instances.get_mut(unit).ok_or(Invalid)?;
+        instance.wanted = false;
+        if matches!(instance.state, State::Ready | State::Backoff(_)) {
+            instance.state = State::Inactive;
+        }
+        Ok(())
+    }
     /// Suppress automatic restart before requesting native termination. An in-flight
     /// spawn retains its token so a late successful result can still be cleaned up.
     pub fn stop(&mut self, unit: usize) -> Result<Option<ProcessKey>, Invalid> {

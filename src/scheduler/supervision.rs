@@ -129,3 +129,33 @@ pub(super) fn fatal_init(cause: rustos_process_abi::supervision::Cause, status: 
         x86_64::instructions::hlt();
     }
 }
+
+/// Native-init identity is selected by kernel boot, never inferred from PID alone.
+/// The entry gate excludes competing publication; the scheduler lock stabilizes
+/// current-process metadata. Terminal halt must recheck drained ownership last.
+pub(crate) fn system_action_gate(require_drained: bool) -> Result<(), rustos_platform_abi::Error> {
+    use rustos_platform_abi::Error;
+    let scheduler = SCHEDULER.lock();
+    let owner = scheduler.current_pid().ok_or(Error::Denied)?;
+    if scheduler.init_pid != Some(owner)
+        || !scheduler
+            .processes
+            .get(owner as usize)
+            .and_then(Option::as_ref)
+            .is_some_and(|process| process.state == ProcessState::Live)
+    {
+        return Err(Error::Denied);
+    }
+    // Zombies still own collection obligations. Retired frames are never reused
+    // by terminal halt; they need not be freed merely to enter the final state.
+    if require_drained
+        && scheduler
+            .processes
+            .iter()
+            .flatten()
+            .any(|process| process.pid != owner)
+    {
+        return Err(Error::Busy);
+    }
+    Ok(())
+}

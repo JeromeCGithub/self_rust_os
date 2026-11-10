@@ -288,8 +288,8 @@ fn post_activation_loss_keeps_desire_without_binding_dependents_to_liveness() {
     e.begin_stop("b").unwrap();
     assert_eq!(
         complete(&mut e),
-        [Command::Stop(a), Command::Stop(b)],
-        "reverse actual restart order"
+        [Command::Stop(b), Command::Stop(a)],
+        "M4 preserves reverse dependency order even after prerequisite restart"
     );
     assert!(e.restored(a).is_err(), "unowned unit must not restart");
 }
