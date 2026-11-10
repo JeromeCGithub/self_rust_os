@@ -71,6 +71,7 @@ def main():
                     assert begun and drained and begun[1]==drained[1],text[-8000:]
                     starts=re.findall(r'\[initator\] started name=(\w+) unit=\d+ run=\d+ pid=(\d+)',text)
                     assert len(starts)==(2 if case=='pending-launch' else 4 if case=='restarted-prerequisite' else 3),starts
+                    assert len({pid for _,pid in starts})==len(starts),'native identities must not be reused'
                     for name,pid in starts:
                         completion=re.search(r'\[initator\] completion pid='+pid+r' cause=(\w+) status=(\d+) tick=(\d+)',text)
                         assert completion and completion.start()<drained.start(),(name,pid,text[-8000:])
@@ -86,7 +87,7 @@ def main():
                         stop=text.index(f'[initator] stopping name=beacon ',begun.start())
                         assert end<stop,'prerequisite stopped before dependent completion'
                         assert text.count('[service-probe] cooperative-cleaned ')==(3 if case=='restarted-prerequisite' else 2)
-                    if case=='global-deadline':assert int(drained[2])-int(begun[2])<1000,'global stop failed to override per-service grace'
+                    if case=='global-deadline':assert int(drained[2])<=int(begun[3])+3,'global stop failed to drain within deadline plus bounded acknowledgement allowance'
                     if case=='pending-launch':
                         assert '[initator] launching name=bulk ' in text
                         assert '[initator] started name=bulk ' not in text

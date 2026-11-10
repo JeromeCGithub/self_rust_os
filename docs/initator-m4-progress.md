@@ -4,7 +4,7 @@ M3 is submitted as [PR #56](https://github.com/JeromeCGithub/self_rust_os/pull/5
 stacked on M2. Its documentation CI passed at `8a4a432`. The full M3 runtime and
 compatibility evidence is in [the M3 record](initator-m3-progress.md).
 
-M4 is on `feat/initator-m4`, based on that commit. **M4 is implemented and its local milestone checks pass; PR delivery is next.**
+M4 is on `feat/initator-m4`, based on that commit. **M4 is implemented, locally validated and submitted as [PR #57](https://github.com/JeromeCGithub/self_rust_os/pull/57).**
 The additions span userspace stop/shutdown policy and a minimal native kernel halt
 operation with CPU/device checks.
 M5–M7 remain future work; no user/session/resource isolation is claimed.
@@ -167,6 +167,9 @@ full local logs remain under `target/initator-m4-evidence/`.
 - Shutdown runner: **15 scenarios** at 1/8/32 CPUs. Cooperative shutdown requires
   exact exit-zero completions and dependent-before-prerequisite ordering. Hung
   services use 1000-tick local grace but are killed at the 180-tick global deadline.
+  Final review strengthened this case to require drained completion no later than
+  three ticks after the global deadline, plus distinct process identities. The
+  strengthened 1/8/32 runs passed in `global-bound-confirmed.log`.
   Other cases cancel an active slow loader without publication, cancel restart
   backoff, and preserve stop ordering after prerequisite restart. Every started
   process completes before drained state, and every CPU is actually halted.
@@ -206,8 +209,9 @@ stop or dependency ordering.
 
 ## Limits and next milestone
 
-No current required local check is failing. Final diff review and the single M4 PR
-based on `feat/initator-m3` remain delivery actions; no merge is performed.
+No current required local check is failing. The single M4 PR targets
+`feat/initator-m3` and remains open and unmerged. Documentation CI is checked
+separately from runtime evidence.
 
 Halt covers initialized supported DMA drivers, not arbitrary firmware devices or
 power management. A post-commit hardware/CPU acknowledgement failure still enters

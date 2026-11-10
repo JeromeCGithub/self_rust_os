@@ -1417,3 +1417,11 @@ display_mapping::drawing_at_display_edges_preserves_padding_and_guards...	[ok]
 [ok]
      Running tests/threads.rs (target/x86_64-self-rust-os/debug/deps/threads-876283b88cb93705)
 [ok]
+
+=== GREEN strengthened global deadline/identity assertions ===
+qemu-system-x86_64: terminating on signal 15 from pid 106019 (python3)
+PASS: 1 CPUs global-deadline, all owned children completed and system halted: /home/jay/personal/self_rust_os-initator/target/init-shutdown/global-deadline-1.log
+qemu-system-x86_64: terminating on signal 15 from pid 106041 (python3)
+PASS: 8 CPUs global-deadline, all owned children completed and system halted: /home/jay/personal/self_rust_os-initator/target/init-shutdown/global-deadline-8.log
+qemu-system-x86_64: terminating on signal 15 from pid 106064 (python3)
+PASS: 32 CPUs global-deadline, all owned children completed and system halted: /home/jay/personal/self_rust_os-initator/target/init-shutdown/global-deadline-32.log
