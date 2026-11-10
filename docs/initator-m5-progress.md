@@ -896,6 +896,85 @@ next filesystem accounting gap. Filesystem grants, I/O cancellation/quiescence,
 socket/audio budgets, the Ring 3 scope factory, scope-aware Initator cleanup and
 Nest remain unfinished; this is not a completed M5 or hostile-service sandbox.
 
+## Bounded namespace creation metadata and failure cleanup
+
+The native FAT namespace operations now use fixed scratch alongside the bounded
+I/O paths above. [`fat32.rs`](../src/fat32.rs) cleans only the eight base and three
+extension bytes needed for an alias, formats its bounded numeric suffix on the
+stack, reserves at most 21 directory locations, and installs at most twenty VFAT
+records plus one short record. Deletion copies at most twenty linked locations
+without allocating a vector. [`lfn.rs`](../src/fat32/lfn.rs) encodes into caller
+storage using at most 255 UTF-16 units; insufficient output or invalid names fail
+before any output record is changed. Host tests retain a collecting convenience
+wrapper; production uses the bounded interface.
+
+The collecting `list_dir`/`DirEntry::file_name` helpers remain trusted kernel
+conveniences and still allocate. Neither directory syscall uses them. This
+checkpoint removes transient FAT heap allocations from native lookup, read,
+write, create and listing paths; syscall staging/path ownership and persistent
+file objects still use their existing admission/count limits. It does not claim
+that every kernel subsystem allocation has byte accounting. The descriptor object
+and slot-table bounds, socket/audio ownership, filesystem grants and I/O lifetime
+rules must remain part of the full M5 isolation audit.
+
+Red evidence under `target/initator-m5-evidence/`:
+
+- `fat-names-allocation-red.log`: creating a long-name directory exceeded the
+  RAM device's pre-operation heap baseline during I/O.
+- `fat-names-directory-cleanup-red.log`: a failed directory initialization left
+  117 free clusters instead of 118. `make_dir` now reclaims its unpublished
+  cluster on every post-allocation initialization or publication error, including
+  failures writing `.` or `..`. Completed ancestors of recursive mkdir remain;
+  the operation is not a multi-directory transaction.
+
+Tests keep operation inputs allocated before enabling the heap guard, then
+exercise Unicode directory creation, twelve colliding aliases including the
+single-to-double-digit suffix transition, directory growth, maximum 255-unit
+names, repeated delete/recreate and complete borrowed enumeration. Slot counts
+zero/22 fail without I/O. Repeated dot/dotdot failures preserve exact free space,
+then successful retry and idempotent mkdir succeed. A publication failure spanning
+the last old slot and a newly allocated directory cluster reclaims growth,
+preserves existing files and permits retry. Host encoding cases check untouched
+output on errors, record order, padding/checksum and the maximum encoding bound.
+
+The first extra growth fixture (`fat-names-growth-fixture-failure.log`) targeted
+the next-allocation hint, which may still identify an occupied cluster; its
+injected error did not fire. The corrected fixture resolves the actual next free
+cluster before injecting the same failure. Expected errors, free-space checks
+and timeouts were not weakened. Persistent device errors may still prevent
+rollback; no FAT journal, crash consistency or new unlink syscall is introduced.
+
+Validation run for this checkpoint:
+
+- Default and GRUB debug builds and both complete release disk builders:
+  `target/init-m5-fat-names.img` and `target/init-m5-fat-names-desktop.img`.
+- 105 kernel unit cases; ten integration executables (`display_mapping`, `fat32`,
+  `ipc`, `keyboard_timer`, `native_supervision`, `process_supervision`,
+  `scoped_files`, `scopes`, `stdio`, `threads`), serialized around writable
+  fixtures. The FAT wrapper's underlying test ran directly in that selection.
+- 81 real Ring 3 runs: all 22 native init cases, native `init_file_io.py`, unit
+  `vectors`, default `file_io.py`, and capability `names`/`files`, each at 1/8/32
+  CPUs. This includes host-mtools interoperability and the native worker probe.
+- Full default desktop at eight CPUs; six isolated 8 MiB/s loader/watchdog
+  normal/cancellation runs at 1/8/32 CPUs, all with zero watchdog delay ticks.
+- Four host VFAT cases, documentation/link and whitespace checks. No timeout or
+  latency budget changed. Unchanged host core/tooling suites were not rerun.
+
+Transcripts are `fat-names-*.log` under `target/initator-m5-evidence/`; screenshots
+from the tested desktop are in `fat-names-screenshots/`. Generated tracked images
+and the disposable FAT fixture are restored. Kernel allocation/free-space
+assertions establish the accounting and recovery properties; a screenshot cannot.
+Source additions after the release builds were unit tests only. Manual host GUI
+and physical hardware remain unverified, and the existing debug heap-stress
+baseline was not rerun or claimed as passing.
+
+Filesystem grants must cover path traversal, directory listing and executable
+loads as well as final read/write effects. In particular, the current path helper
+checks intermediate directories, so guarding only the final open is insufficient.
+The Ring 3 scope factory stays closed until those permissions and remaining
+resource/lifetime gates are enforced. Nest and scoped Initator restart/cleanup
+integration remain unfinished; no M5 PR is claimed by these kernel prerequisites.
+
 ## Scope integration invariants for the next implementation
 
 - Keep the initial hierarchy bounded: system/session roots and service scopes;
