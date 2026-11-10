@@ -116,6 +116,7 @@ mod scopes;
 pub use scopes::{
     scope_ack_closed, scope_close, scope_create_service, scope_create_session,
     scope_next_closed, scope_status, spawn_process_in_scope, spawn_process_in_scope_with_bindings,
+    InitialGrants, spawn_process_in_scope_with_grants,
 };
 mod principal;
 pub use principal::{attenuate_principal, principal_user, restrict_filesystem};
@@ -229,7 +230,7 @@ pub fn spawn_process_with_environment(
 ) -> Result<Pid, &'static str> {
     rustos_process_abi::startup_size(argv, envp).map_err(|_| "invalid startup vectors")?;
     x86_64::instructions::interrupts::without_interrupts(|| {
-        spawn_process_inner(binary, readonly_size, argv, envp, &[], None)
+        spawn_process_inner(binary, readonly_size, argv, envp, &[], None, None)
     })
 }
 /// Deep-copies the page-table subtree under `new_p3[0]` (the first GB).
@@ -321,6 +322,7 @@ fn spawn_process_inner(
     envp: &[&str],
     bindings: &[rustos_ipc_abi::Binding],
     grant: Option<(u64, rustos_process_abi::principal::Capabilities)>,
+    filesystem: Option<&scopes::InitialFilesystem>,
 ) -> Result<Pid, &'static str> {
     if binary.len() as u64 > rustos_thread_abi::IMAGE_END - userspace::USER_CODE_START {
         return Err("user binary overlaps stack");
@@ -355,7 +357,10 @@ fn spawn_process_inner(
             capabilities: abi::Capabilities::ALL,
         }
     };
-    let filesystem_authority = if let Some(owner) = parent {
+    let filesystem_authority = if let Some(prepared) = filesystem {
+        if grant.is_none() { return Err("initial filesystem grants require a scoped launch"); }
+        scopes::filesystem_for_launch(&sched, &principal, prepared)?
+    } else if let Some(owner) = parent {
         let source = sched.processes.get(owner as usize).and_then(Option::as_ref)
             .ok_or("filesystem authority owner exited")?;
         if principal.session != source.principal.session {
@@ -1494,6 +1499,6 @@ pub fn spawn_process_with_bindings(
 ) -> Result<Pid, &'static str> {
     rustos_process_abi::startup_size(argv, envp).map_err(|_| "invalid startup vectors")?;
     x86_64::instructions::interrupts::without_interrupts(|| {
-        spawn_process_inner(binary, readonly_size, argv, envp, bindings, None)
+        spawn_process_inner(binary, readonly_size, argv, envp, bindings, None, None)
     })
 }

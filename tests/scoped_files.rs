@@ -165,6 +165,7 @@ fn native_file_quota_precedes_create_and_truncate() {
     scheduler::reap_retired();
     scheduler::scope_ack_closed(scope).unwrap();
     assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial);
+    initial_session_grants_publish_with_the_leader(&mut context, initial);
     directory_grants_cover_paths_descriptors_and_children(&mut context, initial);
     directory_output_requires_budget(&mut context, initial);
     path_storage_requires_budget(&mut context, initial);
@@ -992,4 +993,218 @@ fn directory_grants_cover_paths_descriptors_and_children(context: &mut u64, init
         assert!(fs.check_directory("/GRANTHOME/new/sub").is_ok());
     })
     .unwrap();
+}
+
+fn initial_session_grants_publish_with_the_leader(context: &mut u64, initial: Usage) {
+    use self_rust_os::fs::{self, FileRights};
+    fs::with_fs(|fs| {
+        fs.create_dir("/SESSIONHOME").unwrap();
+        fs.create_dir("/SESSIONOUT").unwrap();
+        fs.create_file("/SESSIONHOME/DATA").unwrap();
+        fs.write_file("/SESSIONHOME/DATA", b"abc").unwrap();
+        fs.create_file("/SESSIONOUT/SECRET").unwrap();
+        fs.write_file("/SESSIONOUT/SECRET", b"out").unwrap();
+    })
+    .unwrap();
+    use rustos_ipc_abi as ipc;
+    let output = self_rust_os::userspace::USER_STACK_TOP - 128 * 1024;
+    assert_eq!(scheduler::ipc_syscall(ipc::SYS_PAIR, output, 16, 0), 0);
+    let mut pair = [0; 16];
+    assert!(self_rust_os::userspace::usercopy::from_user(
+        output, &mut pair
+    ));
+    let peer = u64::from_le_bytes(pair[..8].try_into().unwrap());
+    let moved = u64::from_le_bytes(pair[8..].try_into().unwrap());
+    let bindings = [ipc::Binding {
+        source: ipc::Handle(moved),
+        tag: 7,
+        rights: ipc::Rights::ALL,
+    }];
+    let source = scheduler::scope_status(SYSTEM).unwrap().used;
+    for deny_frames in [false, true] {
+        let mut bad_limit = limits(0);
+        bad_limit.ipc_handles = 1;
+        if deny_frames {
+            bad_limit.pages = 0;
+        }
+        let denied = scheduler::scope_create_session(1000, bad_limit).unwrap();
+        let before = scheduler::frame_count();
+        for _ in 0..3 {
+            let root = if deny_frames {
+                "/SESSIONHOME"
+            } else {
+                "/NO_SUCH_GRANT_ROOT"
+            };
+            assert!(scheduler::spawn_process_in_scope_with_grants(
+                &[0xc3],
+                4096,
+                &[],
+                &[],
+                denied,
+                Capabilities::FILE_READ,
+                scheduler::InitialGrants {
+                    bindings: &bindings,
+                    filesystem: &[(root, FileRights::READ)]
+                }
+            )
+            .is_err());
+            let state = scheduler::scope_status(denied).unwrap();
+            assert_eq!(state.used, Usage::ZERO);
+            assert_eq!(state.leader, None);
+            assert_eq!(scheduler::frame_count(), before);
+            assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, source);
+            assert_eq!(
+                scheduler::ipc_syscall(ipc::SYS_INTEREST, moved, ipc::INTEREST_READ, 0),
+                0,
+                "failed initial grants must retain source endpoint ownership"
+            );
+        }
+        scheduler::scope_close(denied).unwrap();
+        scheduler::scope_ack_closed(denied).unwrap();
+    }
+    let mut limit = limits(4);
+    limit.processes = 2;
+    limit.threads = 2;
+    limit.pages = 4096;
+    limit.ipc_handles = 1;
+    let session = scheduler::scope_create_session(1000, limit).unwrap();
+    let caps = Capabilities::from_bits(
+        Capabilities::FILE_READ.bits()
+            | Capabilities::FILE_WRITE.bits()
+            | Capabilities::SPAWN.bits()
+            | Capabilities::SCOPE_CREATE.bits(),
+    )
+    .unwrap();
+    let leader = scheduler::spawn_process_in_scope_with_grants(
+        &[0xc3],
+        4096,
+        &[],
+        &[],
+        session,
+        caps,
+        scheduler::InitialGrants {
+            bindings: &bindings,
+            filesystem: &[("/SESSIONHOME", FileRights::READ_WRITE)],
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        scheduler::scope_status(session)
+            .unwrap()
+            .leader
+            .unwrap()
+            .pid,
+        leader
+    );
+    assert_eq!(
+        scheduler::ipc_syscall(ipc::SYS_CLOSE, moved, 0, 0),
+        u64::MAX - 1,
+        "publication moves the endpoint and filesystem authority together"
+    );
+    activate(leader, context);
+    assert_eq!(scheduler::ipc_syscall(ipc::SYS_BOOTSTRAP, 7, 0, 0), moved);
+
+    let output = self_rust_os::userspace::USER_STACK_TOP - 128 * 1024;
+    assert_eq!(
+        fs::read_path(input(b"/SESSIONHOME/DATA\0"), output, 3),
+        3,
+        "the first filesystem operation must see the approved initial session grants"
+    );
+    assert_eq!(
+        fs::read_path(input(b"/SESSIONOUT/SECRET\0"), output, 3),
+        u64::MAX - 1
+    );
+    let child_caps =
+        Capabilities::from_bits(Capabilities::FILE_READ.bits() | Capabilities::FILE_WRITE.bits())
+            .unwrap();
+    let service = scheduler::scope_create_service(session, limits(2)).unwrap();
+    assert!(scheduler::spawn_process_in_scope_with_grants(
+        &[0xc3],
+        4096,
+        &[],
+        &[],
+        service,
+        child_caps,
+        scheduler::InitialGrants {
+            bindings: &[],
+            filesystem: &[("/SESSIONOUT", FileRights::READ)]
+        }
+    )
+    .is_err());
+    let child = scheduler::spawn_process_in_scope_with_grants(
+        &[0xc3],
+        4096,
+        &[],
+        &[],
+        service,
+        child_caps,
+        scheduler::InitialGrants {
+            bindings: &[],
+            filesystem: &[("/SESSIONHOME", FileRights::READ)],
+        },
+    )
+    .unwrap();
+    activate(child, context);
+    assert_eq!(fs::read_path(input(b"/SESSIONHOME/DATA\0"), output, 3), 3);
+    assert_eq!(
+        fs::write_path(input(b"/SESSIONHOME/DATA\0"), output, 3),
+        u64::MAX - 1
+    );
+    assert_eq!(
+        fs::read_path(input(b"/SESSIONOUT/SECRET\0"), output, 3),
+        u64::MAX - 1
+    );
+    activate(1, context);
+    scheduler::scope_close(session).unwrap();
+    assert_eq!(scheduler::waitpid(leader), 9);
+    assert_eq!(scheduler::waitpid(child), 9);
+    scheduler::reap_retired();
+    scheduler::scope_ack_closed(service).unwrap();
+    scheduler::scope_ack_closed(session).unwrap();
+    assert_eq!(scheduler::ipc_syscall(ipc::SYS_CLOSE, peer, 0, 0), 0);
+    assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial);
+    // Explicit empty grants must override same-session inherited system access.
+    let empty = scheduler::scope_create_service(SYSTEM, limits(0)).unwrap();
+    assert!(
+        scheduler::spawn_process_in_scope_with_grants(
+            &[0xc3],
+            4096,
+            &[],
+            &[],
+            empty,
+            Capabilities::NONE,
+            scheduler::InitialGrants {
+                bindings: &[],
+                filesystem: &[("/SESSIONHOME", FileRights::READ)]
+            }
+        )
+        .is_err(),
+        "initial object rights must fit target mechanism rights"
+    );
+    assert_eq!(scheduler::scope_status(empty).unwrap().leader, None);
+    assert_eq!(scheduler::scope_status(empty).unwrap().used, Usage::ZERO);
+    let no_files = scheduler::spawn_process_in_scope_with_grants(
+        &[0xc3],
+        4096,
+        &[],
+        &[],
+        empty,
+        Capabilities::FILE_READ,
+        scheduler::InitialGrants {
+            bindings: &[],
+            filesystem: &[],
+        },
+    )
+    .unwrap();
+    activate(no_files, context);
+    assert_eq!(
+        fs::read_path(input(b"/SESSIONHOME/DATA\0"), output, 3),
+        u64::MAX - 1
+    );
+    activate(1, context);
+    scheduler::scope_close(empty).unwrap();
+    assert_eq!(scheduler::waitpid(no_files), 9);
+    scheduler::reap_retired();
+    scheduler::scope_ack_closed(empty).unwrap();
+    assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial);
 }

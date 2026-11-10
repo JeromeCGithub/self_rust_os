@@ -743,8 +743,11 @@ caller and publish a complete subset under SCHEDULER. Invalid roots, malformed o
 cyclic parent links, expansion and excess roots fail without changing authority.
 
 Ordinary children inherit these grants. Crossing to a new session through the
-kernel scoped constructor starts with no filesystem access; the future factory
-must assign approved roots before publication. Search of granted roots and their
+kernel scoped constructor starts with no filesystem access. The kernel-only
+`spawn_process_in_scope_with_grants` adapter can instead install explicit initial
+roots together with `InitialGrants` endpoint bindings before publication; empty
+roots explicitly deny access even for a same-session service. The future Ring 3
+factory must use this path. Search of granted roots and their
 ancestors permits traversal, while listing/data access needs the appropriate
 subtree right. Cwd metadata alone confers no access. Reads, both listing formats,
 open/create/truncate, whole-file writes, descriptor reads/writes/seeks and recursive
@@ -763,4 +766,9 @@ userspace directory deletion, rename or remount API that recycles them. Adding
 those operations requires grant lifetime/generation handling first. Grant setup
 and restricted-context assertions currently use kernel harnesses; the Ring 3
 scope/session factory, home/tmp policy, cancellation and cleanup barriers remain
-unfinished. See [current M5 evidence](initator-m5-progress.md).
+unfinished. Initial kernel grants resolve under FS using the creator's rights,
+then revalidate creator identity/principal/authority and target scope under
+SCHEDULER before reservations and publication. Target mechanism rights bound the
+delegated read/write rights. Failed resolution or construction neither appoints
+a leader nor moves endpoint ownership; ordinary unscoped spawning cannot attach
+an initial-grant ticket. See [current M5 evidence](initator-m5-progress.md).

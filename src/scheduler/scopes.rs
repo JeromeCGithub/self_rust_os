@@ -92,9 +92,108 @@ pub fn spawn_process_in_scope_with_bindings(
 ) -> Result<super::Pid, &'static str> {
     rustos_process_abi::startup_size(argv, envp).map_err(|_| "invalid startup vectors")?;
     x86_64::instructions::interrupts::without_interrupts(|| {
-        super::spawn_process_inner(binary, readonly, argv, envp, bindings, Some((scope, caps)))
+        super::spawn_process_inner(
+            binary,
+            readonly,
+            argv,
+            envp,
+            bindings,
+            Some((scope, caps)),
+            None,
+        )
     })
 }
+/// Explicit initial endpoint moves and directory rights. Empty filesystem grants
+/// mean no file access, including for a same-session service. References must
+/// remain kernel-owned through this synchronous launch.
+pub struct InitialGrants<'a> {
+    /// Existing v2 bootstrap endpoint bindings, moved only upon publication.
+    pub bindings: &'a [rustos_ipc_abi::Binding],
+    /// Up to eight existing absolute directory roots and target rights.
+    pub filesystem: &'a [(&'a str, crate::fs::FileRights)],
+}
+/// Publish a scoped leader with explicit filesystem bounds and endpoint moves.
+/// This kernel adapter is not a Ring 3 factory or a service policy selector.
+pub fn spawn_process_in_scope_with_grants(
+    binary: &[u8],
+    readonly: usize,
+    argv: &[&str],
+    envp: &[&str],
+    scope: u64,
+    caps: Capabilities,
+    grants: InitialGrants<'_>,
+) -> Result<super::Pid, &'static str> {
+    rustos_process_abi::startup_size(argv, envp).map_err(|_| "invalid startup vectors")?;
+    let (owner, source_principal, source_filesystem, target) = {
+        let s = SCHEDULER.lock();
+        let target = launch_principal(&s, scope, caps)?;
+        let owner = caller(&s).map_err(|_| "scope caller unavailable")?;
+        let source = s.processes[owner.pid as usize]
+            .as_ref()
+            .ok_or("scope caller exited")?;
+        (owner, source.principal, source.filesystem_authority, target)
+    };
+    for &(_, rights) in grants.filesystem {
+        if (rights.contains(crate::fs::FileRights::READ) && !caps.contains(Capabilities::FILE_READ))
+            || (rights.contains(crate::fs::FileRights::WRITE)
+                && !caps.contains(Capabilities::FILE_WRITE))
+        {
+            return Err("filesystem grant exceeds target mechanism rights");
+        }
+    }
+    // Resolve immutable mount identities without holding SCHEDULER. Neither
+    // caller strings nor references to process/scope records escape this phase.
+    let delegated = crate::fs::with_fs(|fs| source_filesystem.narrow(fs, grants.filesystem))
+        .ok_or("filesystem unavailable")?
+        .map_err(|_| "initial filesystem grant denied")?;
+    let prepared = InitialFilesystem {
+        owner,
+        source_principal,
+        source_filesystem,
+        target,
+        delegated,
+    };
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        super::spawn_process_inner(
+            binary,
+            readonly,
+            argv,
+            envp,
+            grants.bindings,
+            Some((scope, caps)),
+            Some(&prepared),
+        )
+    })
+}
+
+/// Owned scalar snapshots only: no user/FS/process borrows cross the two locks.
+pub(super) struct InitialFilesystem {
+    owner: ProcessKey,
+    source_principal: Principal,
+    source_filesystem: crate::fs::access::Authority,
+    target: Principal,
+    delegated: crate::fs::access::Authority,
+}
+/// Revalidate before reservations, endpoint moves, leader appointment or publish.
+pub(super) fn filesystem_for_launch(
+    s: &Scheduler,
+    target: &Principal,
+    prepared: &InitialFilesystem,
+) -> Result<crate::fs::access::Authority, &'static str> {
+    let owner = caller(s).map_err(|_| "filesystem grant owner unavailable")?;
+    let source = s.processes[owner.pid as usize]
+        .as_ref()
+        .ok_or("filesystem grant owner exited")?;
+    if owner != prepared.owner
+        || source.principal != prepared.source_principal
+        || source.filesystem_authority != prepared.source_filesystem
+        || *target != prepared.target
+    {
+        return Err("filesystem grant authority changed before publication");
+    }
+    Ok(prepared.delegated)
+}
+
 pub(super) fn launch_principal(
     s: &Scheduler,
     scope: u64,

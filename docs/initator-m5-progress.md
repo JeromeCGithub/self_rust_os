@@ -1072,6 +1072,74 @@ properties; screenshots demonstrate desktop compatibility only. Manual host GUI
 and physical hardware remain unverified. The known debug heap-stress timeout
 was not rerun or claimed as passing.
 
+## Atomic initial filesystem and endpoint delegation
+
+The new kernel-only [`InitialGrants`](../src/scheduler/scopes.rs) batch combines
+bootstrap endpoint bindings with up to eight explicit directory roots.
+`spawn_process_in_scope_with_grants` validates owned startup data and scoped
+launch authority, snapshots the creator/target principal and current filesystem
+bounds, checks requested directory rights against target mechanism capabilities,
+and resolves a subset under FS without holding SCHEDULER. A private prepared
+value contains scalar snapshots and sealed identities only; it borrows no process,
+filesystem or user data.
+
+The [common constructor](../src/scheduler.rs) revalidates the current native
+creator, its exact principal/filesystem authority and the fresh target principal
+under SCHEDULER before resource reservations or endpoint moves. Existing scoped
+owner/open/leader checks run again. The final PCB contains the delegated policy
+before process/thread publication; endpoint ownership and leader appointment use
+the same existing transaction. The ordinary launch adapters pass no prepared
+value and retain their existing inheritance/default-deny behavior. An explicit
+empty initial filesystem set means no access even within the system session.
+This chooses no home/tmp policy and introduces no userspace syscall or SDK API.
+
+`fs-initial-grants-red.log` records the observable missing behavior: the first
+operation in a newly created user-session context could not read its approved
+directory (general error instead of three bytes). The completed
+[scoped-files test](../tests/scoped_files.rs) verifies approved first access,
+outside denial, a session manager delegating a read-only service subset, denied
+foreign delegation, target-capability mismatch and empty-grant override.
+
+Combined failure tests repeatedly reject a nonexistent root and a valid root
+with zero frame quota. They assert zero target usage/no leader, unchanged real
+frame counts and aggregate usage, and continued creator ownership of the exact
+endpoint. The same endpoint then moves successfully to the new session and is
+available through its bootstrap tag while the creator loses ownership. Closing
+the session/service hierarchy and peer restores exact initial resource usage.
+These are kernel-context assertions, not execution of a restricted Ring 3 session
+manager. The source revalidation across the FS/SCHEDULER boundary still needs the
+public factory's SMP cancellation/race matrix before M5 acceptance.
+
+The public scope/session factory, I/O cancellation/quiescence, socket/audio
+accounting, scope-aware Initator stop/restart and Nest remain unfinished. No M5 PR
+is claimed by this kernel adapter. Its public factory must snapshot complete
+userspace records into owned storage before invoking this synchronous interface.
+
+Validation for the initial-delegation checkpoint:
+
+- Default and GRUB debug builds; both complete release disk builders:
+  `target/init-m5-fs-initial.img` and `target/init-m5-fs-initial-desktop.img`.
+- 108 kernel unit cases, the expanded `scoped_files` executable, and nine other
+  integration executables (`display_mapping`, `fat32`, `ipc`, `keyboard_timer`,
+  `native_supervision`, `process_supervision`, `scopes`, `stdio`, `threads`).
+  Writable fixture checks ran serially; the FAT wrapper's test ran directly.
+- 81 real Ring 3 runs: all 22 native init cases, native `init_file_io.py`, unit
+  `vectors`, default `file_io.py`, and capability `names`/`files`, each at 1/8/32
+  CPUs. These verify integration compatibility, not public initial-grant calls.
+- Full default desktop at eight CPUs; six isolated 8 MiB/s normal/cancellation
+  loader checks at 1/8/32 CPUs, all with zero watchdog delay ticks.
+- Documentation/link checks and `git diff --check`. Unchanged host core/tooling
+  suites were not rerun. No timeout or latency budget was increased.
+
+Evidence is retained as `fs-initial-*.log` under `target/initator-m5-evidence/`;
+tested desktop screenshots are in `fs-initial-screenshots/`. Tracked generated
+screenshots and the disposable FAT fixture are restored. Runtime assertions and
+resource counters establish delegation/rollback properties; screenshots show
+desktop compatibility. Source edits after the release builds are documentation
+only. Manual host GUI, physical hardware and the public factory's restricted
+Ring 3 matrix remain unverified. The existing debug heap-stress baseline was not
+rerun or claimed as passing. This remains a local M5 checkpoint, not its PR.
+
 ## Scope integration invariants for the next implementation
 
 - Keep the initial hierarchy bounded: system/session roots and service scopes;
