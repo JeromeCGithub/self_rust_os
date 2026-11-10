@@ -34,6 +34,9 @@ pub enum Message<'a> {
     Heartbeat {
         run: u64,
     },
+    Stop {
+        run: u64,
+    },
     Log {
         run: u64,
         level: Level,
@@ -57,6 +60,7 @@ impl<'a> Message<'a> {
             }
             Self::Ready { run } => (run, 2, 0, 0),
             Self::Heartbeat { run } => (run, 3, 0, 0),
+            Self::Stop { run } => (run, 5, 0, 0),
             Self::Log { run, level, text } => {
                 if text.len() > MAX_TEXT {
                     return Err(Error::Limit);
@@ -124,6 +128,7 @@ impl<'a> Message<'a> {
             }
             2 if length == 0 && detail == 0 => Ok(Self::Ready { run }),
             3 if length == 0 && detail == 0 => Ok(Self::Heartbeat { run }),
+            5 if length == 0 && detail == 0 => Ok(Self::Stop { run }),
             4 => {
                 let level = match detail {
                     1 => Level::Debug,
@@ -169,6 +174,7 @@ pub struct ClientState {
     notify: bool,
     watchdog: Option<u64>,
     ready: bool,
+    stopping: bool,
 }
 impl Default for ClientState {
     fn default() -> Self {
@@ -183,6 +189,7 @@ impl ClientState {
             notify: false,
             watchdog: None,
             ready: false,
+            stopping: false,
         }
     }
     /// The transport supplies its authenticated peer identity, never a payload claim.
@@ -215,6 +222,21 @@ impl ClientState {
         self.watchdog = watchdog;
         Ok(())
     }
+    /// Accept stop only from the Init-authenticated manager for this exact run.
+    /// Repetition is idempotent; cleanup logging remains available afterward.
+    pub fn accept_stop(&mut self, sender: PeerKey, message: Message<'_>) -> Result<(), Error> {
+        let Message::Stop { run } = message else {
+            return Err(Error::Invalid);
+        };
+        if self.manager != Some(sender) || self.run != Some(run) {
+            return Err(Error::Invalid);
+        }
+        self.stopping = true;
+        Ok(())
+    }
+    pub fn stop_requested(&self) -> bool {
+        self.stopping
+    }
     pub fn run(&self) -> Option<u64> {
         self.run
     }
@@ -227,7 +249,7 @@ impl ClientState {
     /// Prepare without changing state; failed sends must remain retryable.
     pub fn ready_frame(&self) -> Result<Option<Message<'static>>, Error> {
         let run = self.run.ok_or(Error::Invalid)?;
-        if self.ready {
+        if self.ready || self.stopping {
             return Err(Error::Invalid);
         }
         Ok(if self.notify {
@@ -243,7 +265,7 @@ impl ClientState {
     }
     pub fn heartbeat_frame(&self) -> Result<Message<'static>, Error> {
         let run = self.run.ok_or(Error::Invalid)?;
-        if !self.ready || self.watchdog.is_none() {
+        if !self.ready || self.watchdog.is_none() || self.stopping {
             return Err(Error::Invalid);
         }
         Ok(Message::Heartbeat { run })

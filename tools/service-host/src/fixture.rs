@@ -54,6 +54,20 @@ fn main() {
         send(&mut io::stdout(), ready);
     }
     client.ready_sent().unwrap();
+    if mode == "cooperative" {
+        let stop = read();
+        client
+            .accept_stop(
+                PeerKey {
+                    pid: 1,
+                    generation: 1,
+                },
+                Message::decode(&stop).unwrap(),
+            )
+            .unwrap();
+        assert!(client.stop_requested());
+        return;
+    }
     if mode == "exit" {
         let mut byte = [0];
         assert_eq!(io::stdin().read(&mut byte).unwrap(), 0);

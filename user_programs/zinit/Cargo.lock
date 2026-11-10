@@ -98,6 +98,7 @@ name = "zinit"
 version = "0.1.0"
 dependencies = [
  "initator",
+ "rustos-platform-abi",
  "rustos-service-core",
  "rustos-thread-abi",
  "userlib",

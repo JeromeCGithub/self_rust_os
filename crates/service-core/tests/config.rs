@@ -83,7 +83,7 @@ fn unsupported_future_mechanisms_are_not_silently_accepted() {
         5,
     );
     failure(
-        &format!("{SERVICE}StopTimeoutTicks=90\n"),
+        &format!("{SERVICE}StopTimeoutMilliseconds=90\n"),
         ErrorKind::UnknownKey,
         5,
     );
@@ -284,4 +284,33 @@ fn control_grants_are_explicit_service_only_and_fail_closed() {
         parse(format!("{SERVICE}ControlAccess=status\nControlAccess=manage\n").as_bytes()).is_err()
     );
     assert!(parse(b"Version=1\nName=boot\nControlAccess=manage\nKind=target\n").is_err());
+}
+
+#[test]
+fn cooperative_stop_timeout_is_bounded_singleton_and_service_only() {
+    assert_eq!(parse(SERVICE.as_bytes()).unwrap().stop_timeout, 90);
+    assert_eq!(
+        parse(format!("{SERVICE}StopTimeoutTicks=7\n").as_bytes())
+            .unwrap()
+            .stop_timeout,
+        7
+    );
+    for value in ["0", "-1", "9223372036854775808", "no"] {
+        failure(
+            &format!("{SERVICE}StopTimeoutTicks={value}\n"),
+            ErrorKind::InvalidValue,
+            5,
+        );
+    }
+    failure(
+        &format!("{SERVICE}StopTimeoutTicks=7\nStopTimeoutTicks=8\n"),
+        ErrorKind::Duplicate,
+        6,
+    );
+    for target in [
+        "Version=1\nKind=target\nName=boot\nStopTimeoutTicks=7\n",
+        "Version=1\nStopTimeoutTicks=7\nKind=target\nName=boot\n",
+    ] {
+        assert!(parse(target.as_bytes()).is_err());
+    }
 }

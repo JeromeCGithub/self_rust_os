@@ -6,7 +6,9 @@ fn main(argc: usize, argv: &[&str]) {
     if argc > 1
         && matches!(
             argv[1],
-            "--notify"
+            "--stop-close"
+                | "--cooperative"
+                | "--notify"
                 | "--never-ready"
                 | "--watchdog"
                 | "--wrong-ready"

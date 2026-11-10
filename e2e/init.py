@@ -19,7 +19,7 @@ from qemu_test import copy_disk, disk_image, console_text, connect
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--case', choices=['two-services', 'fatal-exit', 'fatal-fault', 'fatal-thread', 'abi', 'lifecycle', 'orphans', 'exhaustion', 'missing-init', 'bad-init', 'fault-service', 'steady', 'ipc', 'ipc-lifecycle'], default='two-services')
+    parser.add_argument('--case', choices=['two-services', 'fatal-exit', 'fatal-fault', 'fatal-thread', 'abi', 'lifecycle', 'orphans', 'exhaustion', 'missing-init', 'bad-init', 'fault-service', 'steady', 'ipc', 'ipc-lifecycle', 'stop-protocol', 'halt-abi', 'halt', 'halt-audio', 'halt-no-devices'], default='two-services')
     case = parser.parse_args().case
     evidence = ROOT / 'target/init'
     evidence.mkdir(parents=True, exist_ok=True)
@@ -56,9 +56,13 @@ def main():
             subprocess.run(['mcopy', '-o', '-i', f'{disk}@@1048576', str(malformed), '::/BIN/BAD.SVC'], check=True)
         log = evidence / (case + '-' + str(os.environ.get('RUSTOS_CPUS', '1')) + '.log')
         log.write_text('')
+        hardware=[]
+        if case=='halt-audio':
+            hardware=['-audiodev',f'wav,id=halt,path={private / "halt.wav"},out.frequency=48000,out.channels=2,out.format=s16','-device','AC97,audiodev=halt']
+        if case=='halt-no-devices': hardware=['-net','none']
         process = subprocess.Popen(['qemu-system-x86_64', '-drive', f'format=raw,file={disk}',
             '-vga', 'std', '-serial', f'file:{log}', '-display', 'none', '-no-reboot',
-            '-monitor', 'none', '-qmp', f'unix:{private / "qmp"},server=on,wait=off'] + arguments(cpus=int(os.environ.get('RUSTOS_CPUS', '1'))))
+            '-monitor', 'none', '-qmp', f'unix:{private / "qmp"},server=on,wait=off'] + hardware + arguments(cpus=int(os.environ.get('RUSTOS_CPUS', '1'))))
         try:
             deadline = time.monotonic() + 60
             connection = connect(private / 'qmp', deadline, process)
@@ -100,6 +104,36 @@ def main():
                     assert '[initator] PID 1 entered Ring 3' in output
                     assert '[flicker] started' in output
                     print('PASS: ordinary native boot keeps both foreground services live:', log)
+                    return
+                if case in ('halt','halt-audio','halt-no-devices') and '[system-halt] action=Halt parked=true dma_disabled=true' in raw:
+                    registers=command('human-monitor-command',{'command-line':'info registers -a'})
+                    halted=re.findall(r'HLT=(\d)',registers)
+                    count=int(os.environ.get('RUSTOS_CPUS','1'))
+                    if len(halted)==count and all(value=='1' for value in halted):
+                        devices=[]
+                        for bus in command('query-pci'):
+                            for device in bus['devices']:
+                                if device['id']['vendor']==0x8086 and device['id']['device'] in (0x100e,0x2415):
+                                    address=0x80000004|(bus['bus']<<16)|(device['slot']<<11)|(device['function']<<8)
+                                    command('human-monitor-command',{'command-line':f'o /w 0xcf8 {address:#x}'})
+                                    value=command('human-monitor-command',{'command-line':'i /h 0xcfc'})
+                                    match=re.search(r'=\s*0x([0-9a-fA-F]+)',value)
+                                    assert match and int(match[1],16)&4==0,('DMA bus mastering remained enabled',value)
+                                    devices.append(device['id']['device'])
+                        if case=='halt-no-devices': assert devices==[]
+                        else: assert 0x100e in devices,devices
+                        if case=='halt-audio':
+                            assert 0x2415 in devices,devices
+                            assert '[init-probe] active audio queued=' in output
+                        (evidence/f'{case}-{count}-registers.txt').write_text(registers)
+                        (evidence/f'{case}-{count}-pci.json').write_text(json.dumps(devices))
+                        print('PASS: graceful kernel halt, all CPUs parked and supported DMA bus mastering disabled:',log)
+                        return
+                if case == 'halt-abi' and '[init-probe] halt ABI PASS' in output:
+                    print('PASS: native system-action authority, canonical arguments, unsupported actions and busy refusal:', log)
+                    return
+                if case == 'stop-protocol' and '[init-probe] stop protocol PASS' in output:
+                    print('PASS: native SDK accepts authenticated cooperative stop and child exits cleanly:', log)
                     return
                 if case == 'ipc-lifecycle' and '[init-probe] IPC lifecycle PASS cycles=64 frames=' in output:
                     print('PASS: Ring 3 bound-channel spawn/exit/reap cycles and exact frame recovery:', log)

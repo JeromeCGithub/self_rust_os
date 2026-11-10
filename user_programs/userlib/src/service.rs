@@ -49,7 +49,11 @@ impl Client {
                 let sender = event.sender.ok_or(Error::Invalid)?;
                 let message =
                     abi::Message::decode(event.payload.get(..event.length).ok_or(Error::Invalid)?)?;
-                self.state.accept_init(sender, message)?;
+                match message {
+                    abi::Message::Init { .. } => self.state.accept_init(sender, message)?,
+                    abi::Message::Stop { .. } => self.state.accept_stop(sender, message)?,
+                    _ => return Err(Error::Invalid),
+                }
                 Ok(true)
             }
             ipc::Kind::PeerClosed => Err(Error::Closed),
@@ -62,6 +66,11 @@ impl Client {
     }
     pub fn run(&self) -> Option<u64> {
         self.state.run()
+    }
+    /// Begin application cleanup when true, then exit normally. Only an exact
+    /// authenticated manager/run Stop can set this flag; no signal handler runs.
+    pub fn stop_requested(&self) -> bool {
+        self.state.stop_requested()
     }
     pub fn watchdog(&self) -> Option<u64> {
         self.state.watchdog()

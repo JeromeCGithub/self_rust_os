@@ -9,7 +9,15 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     Start(Start),
-    Terminate { unit: usize, process: ProcessKey },
+    Terminate {
+        unit: usize,
+        process: ProcessKey,
+    },
+    NotifyStop {
+        unit: usize,
+        process: ProcessKey,
+        run: u64,
+    },
 }
 /// Run-scoped messages, authorized by endpoint ownership and complete identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +39,8 @@ pub enum Failure {
     ExitedBeforeReady,
     Spawn,
     Clock,
+    StopTimeout,
+    StopDelivery,
 }
 /// Last/current run status, independent of the historical target job outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,7 +51,15 @@ pub struct RunStatus {
     pub failure: Option<Failure>,
     pub start_deadline: Option<u64>,
     pub watchdog_deadline: Option<u64>,
+    pub stop_deadline: Option<u64>,
     pub completion: Option<Completion>,
+}
+struct Shutdown {
+    job: u64,
+    timeout: u64,
+    started: bool,
+    deadline: Option<u64>,
+    forced: bool,
 }
 /// Bounded native/host adapter. All syscalls, clocks and waits belong to callers.
 pub struct Manager {
@@ -49,7 +67,9 @@ pub struct Manager {
     supervisor: Supervisor<64>,
     jobs: [Option<u64>; 64],
     termination_sent: u64,
+    stop_sent: u64,
     runs: [Option<RunStatus>; 64],
+    shutdown: Option<Shutdown>,
 }
 impl Manager {
     pub fn new(catalog: Catalog) -> Result<Self, Invalid> {
@@ -69,7 +89,9 @@ impl Manager {
             supervisor: Supervisor::new_stopped(policies)?,
             jobs: [None; 64],
             termination_sent: 0,
+            stop_sent: 0,
             runs: [None; 64],
+            shutdown: None,
         })
     }
     pub fn catalog(&self) -> &Catalog {
@@ -85,20 +107,147 @@ impl Manager {
                         .run_status(start.unit)
                         .is_some_and(|run| run.run == start.run && run.failure.is_some()))
     }
+    /// A failed transport send may force an exact pending stop without waiting.
+    /// Stale callbacks cannot accelerate a later run or duplicate escalation.
+    pub fn stop_delivery_failed(
+        &mut self,
+        unit: usize,
+        run: u64,
+        key: ProcessKey,
+    ) -> Result<(), Invalid> {
+        let mask = 1u64
+            .checked_shl(u32::try_from(unit).map_err(|_| Invalid)?)
+            .ok_or(Invalid)?;
+        if self.supervisor.state(unit) != Some(State::Stopping(key))
+            || self.stop_sent & mask == 0
+            || self.termination_sent & mask != 0
+        {
+            return Err(Invalid);
+        }
+        let status = self
+            .runs
+            .get_mut(unit)
+            .and_then(Option::as_mut)
+            .ok_or(Invalid)?;
+        if status.run != run || status.process != Some(key) || status.failure.is_some() {
+            return Err(Invalid);
+        }
+        status.failure = Some(Failure::StopDelivery);
+        status.stop_deadline = None;
+        Ok(())
+    }
     pub fn run_status(&self, unit: usize) -> Option<RunStatus> {
         self.runs.get(unit).copied().flatten()
     }
+    /// Terminal system job: cancel activation/restart admission, then stop owned
+    /// resources in reverse order. The global clock starts at the next actor step.
+    pub fn shutdown(&mut self, timeout: u64) -> Result<u64, Error> {
+        if timeout == 0 || timeout > i64::MAX as u64 {
+            return Err(Error::Limit);
+        }
+        if let Some(shutdown) = &self.shutdown {
+            return Ok(shutdown.job);
+        }
+        let job = self.engine.begin_shutdown()?;
+        self.jobs.fill(None);
+        for unit in 0..self.catalog().len() {
+            self.disarm(unit);
+            self.supervisor
+                .suppress_restart(unit)
+                .map_err(|_| Error::InvalidResult)?;
+        }
+        self.shutdown = Some(Shutdown {
+            job,
+            timeout,
+            started: false,
+            deadline: None,
+            forced: false,
+        });
+        Ok(job)
+    }
+    /// Terminal job identity and global deadline for adapter diagnostics.
+    pub fn shutdown_job(&self) -> Option<u64> {
+        self.shutdown.as_ref().map(|shutdown| shutdown.job)
+    }
+    pub fn shutdown_deadline(&self) -> Option<u64> {
+        self.shutdown
+            .as_ref()
+            .and_then(|shutdown| shutdown.deadline)
+    }
+    /// Core-owned foreground lifetimes are drained. The native kernel still
+    /// verifies that no other process remains before committing terminal halt.
+    pub fn shutdown_ready(&self) -> bool {
+        self.shutdown.is_some()
+            && self.outcome() == Outcome::Succeeded
+            && (0..self.catalog().len()).all(|unit| {
+                !matches!(
+                    self.state(unit),
+                    Some(
+                        State::Spawning(_)
+                            | State::Starting(_)
+                            | State::Running(_)
+                            | State::Stopping(_)
+                    )
+                )
+            })
+    }
+    fn advance_shutdown(&mut self, now: u64) -> Result<(), Invalid> {
+        let Some(shutdown) = self.shutdown.as_mut() else {
+            return Ok(());
+        };
+        if !shutdown.started {
+            shutdown.started = true;
+            shutdown.deadline = now.checked_add(shutdown.timeout);
+        }
+        if shutdown.forced || shutdown.deadline.is_some_and(|deadline| now < deadline) {
+            return Ok(());
+        }
+        let failure = if shutdown.deadline.is_none() {
+            Failure::Clock
+        } else {
+            Failure::StopTimeout
+        };
+        shutdown.forced = true;
+        shutdown.deadline = None;
+        for unit in 0..self.catalog().len() {
+            if matches!(
+                self.supervisor.state(unit),
+                Some(
+                    State::Spawning(_)
+                        | State::Starting(_)
+                        | State::Running(_)
+                        | State::Stopping(_)
+                )
+            ) {
+                self.supervisor.stop(unit)?;
+                if let Some(run) = self.runs[unit].as_mut() {
+                    run.failure = run.failure.or(Some(failure));
+                    run.stop_deadline = None;
+                }
+            }
+        }
+        Ok(())
+    }
     pub fn start(&mut self, name: &str) -> Result<u64, Error> {
+        if self.shutdown.is_some() {
+            return Err(Error::Busy);
+        }
         self.engine.begin_start(name)
     }
     /// Preserve owners/dependents while one job covers stop, reap and readiness.
     pub fn restart(&mut self, name: &str) -> Result<u64, Error> {
+        if self.shutdown.is_some() {
+            return Err(Error::Busy);
+        }
         let job = self.engine.begin_restart(name)?;
         let unit = self.catalog().lookup(name).ok_or(Error::Unknown)?;
         self.disarm(unit);
         Ok(job)
     }
     pub fn stop(&mut self, name: &str) -> Result<u64, Error> {
+        if self.shutdown.is_some() {
+            return Err(Error::Busy);
+        }
         let job = self.engine.begin_stop(name)?;
         let root = self.catalog().lookup(name).ok_or(Error::Unknown)?;
         if !self.engine.wanted(root) && self.supervisor.state(root) == Some(State::Failed) {
@@ -109,6 +258,9 @@ impl Manager {
         for unit in 0..self.catalog().len() {
             if !self.engine.wanted(unit) && self.jobs[unit].is_none() {
                 self.disarm(unit);
+                self.supervisor
+                    .suppress_restart(unit)
+                    .map_err(|_| Error::InvalidResult)?;
             }
         }
         Ok(job)
@@ -139,6 +291,9 @@ impl Manager {
         message: Notification,
         now: u64,
     ) -> Result<(), NotifyError> {
+        if self.shutdown.is_some() {
+            return Err(NotifyError::Unexpected);
+        }
         let status = self
             .run_status(unit)
             .filter(|s| s.run == run && s.process == Some(key))
@@ -226,6 +381,7 @@ impl Manager {
     }
     /// Drain after events/results or a deadline; no periodic service polling.
     pub fn next_action(&mut self, now: u64) -> Result<Option<Action>, Invalid> {
+        self.advance_shutdown(now)?;
         self.expire(now)?;
         loop {
             while let Some(command) = self.engine.next_command() {
@@ -247,9 +403,10 @@ impl Manager {
                 }
             }
             for unit in 0..self.catalog().len() {
-                let orphaned = !self.engine.wanted(unit)
+                let orphaned = self.shutdown.is_none()
+                    && !self.engine.wanted(unit)
                     && self.jobs[unit].is_none()
-                    && (self.outcome() != Outcome::Running || !self.engine.active(unit));
+                    && (self.outcome() != Outcome::Running || !self.engine.owns_resource(unit));
                 if orphaned {
                     self.disarm(unit);
                     if !self.supervisor.is_settled_failure(unit) {
@@ -257,10 +414,33 @@ impl Manager {
                     }
                 }
                 if let Some(State::Stopping(process)) = self.supervisor.state(unit) {
-                    if self.termination_sent & (1u64 << unit) == 0 {
-                        self.termination_sent |= 1u64 << unit;
-                        return Ok(Some(Action::Terminate { unit, process }));
+                    let mask = 1u64 << unit;
+                    if self.termination_sent & mask != 0 {
+                        continue;
                     }
+                    let timeout = self.catalog().unit(unit).ok_or(Invalid)?.stop_timeout;
+                    let status = self.runs[unit].as_mut().ok_or(Invalid)?;
+                    if status.failure.is_none() {
+                        if self.stop_sent & mask == 0 {
+                            if let Some(deadline) = now.checked_add(timeout) {
+                                self.stop_sent |= mask;
+                                status.stop_deadline = Some(deadline);
+                                return Ok(Some(Action::NotifyStop {
+                                    unit,
+                                    process,
+                                    run: status.run,
+                                }));
+                            }
+                            status.failure = Some(Failure::Clock);
+                        } else if status.stop_deadline.is_some_and(|deadline| now < deadline) {
+                            continue;
+                        } else {
+                            status.failure = Some(Failure::StopTimeout);
+                        }
+                    }
+                    status.stop_deadline = None;
+                    self.termination_sent |= mask;
+                    return Ok(Some(Action::Terminate { unit, process }));
                 }
             }
             if let Some(start) = self.supervisor.next_start(now) {
@@ -282,6 +462,7 @@ impl Manager {
                     },
                     start_deadline: deadline,
                     watchdog_deadline: None,
+                    stop_deadline: None,
                     completion: None,
                 });
                 if deadline.is_some() {
@@ -384,6 +565,7 @@ impl Manager {
             return None;
         }
         self.termination_sent &= !(1u64 << unit);
+        self.stop_sent &= !(1u64 << unit);
         if let Some(status) = self.runs[unit].as_mut() {
             if !status.ready && status.failure.is_none() {
                 status.failure = Some(Failure::ExitedBeforeReady);
@@ -392,6 +574,7 @@ impl Manager {
             status.process = None;
             status.start_deadline = None;
             status.watchdog_deadline = None;
+            status.stop_deadline = None;
             status.completion = Some(cause);
         }
         if matches!(self.supervisor.state(unit), Some(State::Backoff(_))) {
@@ -411,9 +594,15 @@ impl Manager {
         self.runs
             .iter()
             .flatten()
-            .flat_map(|r| [r.start_deadline, r.watchdog_deadline])
+            .flat_map(|r| [r.start_deadline, r.watchdog_deadline, r.stop_deadline])
             .flatten()
             .chain(self.supervisor.next_deadline())
+            .chain(
+                self.shutdown
+                    .as_ref()
+                    .filter(|_| !self.shutdown_ready())
+                    .and_then(|s| s.deadline),
+            )
             .min()
     }
     pub fn job_id(&self) -> Option<u64> {

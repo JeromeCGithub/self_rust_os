@@ -1,4 +1,4 @@
-//! Kernel ownership and validated copies for randomness and UTC platform syscalls.
+//! Validated randomness/UTC platform services and authority-checked terminal halt.
 use rustos_platform_abi::{self as abi, Error};
 /// Dispatch validated platform requests from the existing syscall register ABI.
 pub fn syscall(number: u64, first: u64, second: u64, third: u64) -> u64 {
@@ -8,6 +8,12 @@ pub fn syscall(number: u64, first: u64, second: u64, third: u64) -> u64 {
     }
 }
 fn dispatch(number: u64, first: u64, second: u64, third: u64) -> Result<u64, Error> {
+    if number == abi::SYS_SYSTEM_ACTION {
+        crate::scheduler::system_action_gate(false)?;
+        abi::validate_system_action(first, second, third)?;
+        crate::scheduler::system_action_gate(true)?;
+        halt_terminal();
+    }
     crate::scheduler::current_pid().ok_or(Error::Invalid)?;
     if third != 0 {
         return Err(Error::Invalid);
@@ -46,8 +52,41 @@ fn dispatch(number: u64, first: u64, second: u64, third: u64) -> Result<u64, Err
         _ => Err(Error::Invalid),
     }
 }
+/// Irreversible commit begins with remote CPU parking. Never return or reclaim
+/// memory afterward, including on an acknowledgement/device readback failure.
+/// Entry remains owned forever, preventing new syscalls/resource publication.
+fn halt_terminal() -> ! {
+    use core::fmt::Write;
+    let parked = crate::arch::x86_64::smp::park_others_terminal();
+    let network = crate::net::disable_dma_terminal();
+    let audio = crate::audio::disable_dma_terminal();
+    if let Some(mut serial) = crate::drivers::tty::serial::SERIAL1.try_lock() {
+        let _ = writeln!(
+            serial,
+            "[system-halt] action=Halt parked={} dma_disabled={} net={} audio={} retained=true",
+            parked,
+            network && audio,
+            network,
+            audio
+        );
+    }
+    x86_64::instructions::interrupts::disable();
+    loop {
+        x86_64::instructions::hlt();
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test_case]
+    fn final_action_without_native_init_authority_is_denied_before_parsing() {
+        for (action, flags, reserved) in [(1, 0, 0), (2, 1, 0), (u64::MAX, u64::MAX, u64::MAX)] {
+            assert_eq!(
+                super::syscall(super::abi::SYS_SYSTEM_ACTION, action, flags, reserved),
+                super::abi::Error::Denied.encode()
+            );
+        }
+    }
     #[test_case]
     fn rejects_requests_without_a_user_process() {
         for n in [super::abi::SYS_RANDOM, super::abi::SYS_UNIX_TIME] {

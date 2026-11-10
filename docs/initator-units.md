@@ -63,6 +63,7 @@ Wants=chime
 | `Ready` | `spawned` (default) or `notify`; notify waits for the exact run's authenticated Ready message |
 | `StartTimeoutTicks` | Positive deadline from launch reservation, default 90; includes queued/chunked loading, publication and notify initialization |
 | `ControlAccess` | Optional `status` or `manage` per-run nondelegable Spark grant; absent by default |
+| `StopTimeoutTicks` | Positive cooperative-stop grace, default 90; exit is required, then forced termination on expiry (M4) |
 | `WatchdogTicks` | Optional positive interval; requires `Ready=notify`, starts at Ready and refreshes only on valid work-path Heartbeat |
 | `WorkingDirectory` | Only `/`, the default, is supported until atomic per-launch cwd exists |
 | `Restart` | `never` (default), `on-failure`, or `always` |
@@ -79,7 +80,7 @@ environment names are rejected. `Requires=a` together with `After=a` is valid.
 Values follow the first `=`. Outer ASCII whitespace is trimmed, interior spaces
 are literal; UTF-8 is supported in arguments/values/paths. CRLF, blank lines and
 full-line `#` comments work. Control characters, unknown keys, malformed numbers,
-unsupported readiness modes, stop timeouts and other cwd values are rejected.
+unsupported readiness modes and other cwd values are rejected.
 Timing fields must fit `1..=i64::MAX`; deadline arithmetic is checked.
 There is no shell quoting, expansion, interpolation, inline-comment language or
 command substitution. For example `Arg=$(literal)*` is one unchanged argument.
@@ -131,7 +132,9 @@ the service remains Starting until an authenticated Ready for its current run.
 An exit immediately after an observation is always possible.
 
 Optional failures yield Degraded; required failures yield Failed. Cleanup stops
-only exclusively acquired services, in reverse actual activation order, and waits
+only exclusively acquired services. On M4 it reverses the selected Requires/After
+graph, preserving paths through targets even after prerequisite restart; independent
+services use reverse activation order as a tie-breaker. Cleanup waits
 for exact child completions before finishing the job. Failed optional groups do
 not retain their exclusively started prerequisites. Post-activation `Requires`
 is not a liveness binding: an already-running dependent does not stop merely
@@ -151,14 +154,15 @@ mode with PID 1 alive and no services launched. Recovery has no reload channel y
 activation reports Failed/Degraded and keeps supervising retained services.
 
 Spark receives authority only through an explicit `ControlAccess` launch grant;
-ordinary application launch has no control access. Reload, cooperative stop,
-shutdown/poweroff, durable logs, user identities and Nest remain future work.
+ordinary application launch has no control access. M4 adds cooperative stop and
+shutdown-to-halt. Reload, reboot/poweroff, durable logs, user identities and Nest
+remain future work.
 M3 adds the documented native channel/image syscalls; M2 added none.
 FAT configuration is trusted image input until access enforcement exists; limits
 bound PID 1's own allocations but do not redesign kernel filesystem enumeration.
 
 
-## Explicit readiness and watchdogs (M3 work in progress)
+## Explicit readiness and watchdogs (M3)
 
 A notifying service uses `userlib::service::Client::bootstrap()` to take its
 nondelegable notify and optional log grants. It dispatches native port events to
@@ -197,7 +201,14 @@ for `status`, `logs`, and `job ID`; `manage` additionally allows `start UNIT`,
 `stop UNIT`, and `restart UNIT`. These commands use literal arguments and return
 bounded protocol responses. A job reply means admission; query its exact ID for
 completion. Only the current/latest job is retained; older IDs return Stale.
-Shutdown remains Unsupported until the complete M4 stop/halt contract exists.
+On the M4 branch, `shutdown` admits one terminal job for a management grant;
+read-only callers are denied. Repeated requests coalesce. The global control budget
+is 180 manager ticks (about 9.9 seconds on the native PIT, 1.8 seconds on the host
+backend's development clock). Per-service grace cannot extend this global budget.
+Pending starts and restart backoff are cancelled immediately; all live services
+are collected before the kernel's separate process/device/CPU checks permit Halt.
+New start/stop/restart requests remain Busy after shutdown admission. The command
+requests Halt, not reboot or poweroff.
 A log overwrite yields Gap with the oldest available sequence. Fragment offsets
 refer to that exact record and respect UTF-8 boundaries. Queries are snapshots,
 with a finite page limit, rather than an unbounded follow loop.
@@ -205,7 +216,8 @@ with a finite page limit, rather than an unbounded follow loop.
 One restart job preserves existing owners and spans old-child completion plus new
 readiness. It does not bypass attempt limits; exhausted restarts retain Failed
 until explicit stop. Stop suppresses automatic restart and waits for completion.
-The existing M3 stop mechanism is forced termination; cooperative stop is M4.
+M3 used forced termination. The M4 branch adds cooperative Stop and bounded grace;
+see [current M4 implementation and outstanding gates](initator-m4-progress.md).
 
 The actor admits starts independently of a single worker's bounded filesystem
 reads. Start deadlines include queued time. It cancels unwanted reservations

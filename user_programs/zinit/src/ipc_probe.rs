@@ -665,3 +665,89 @@ fn early_publication() {
     }
     recordln!("[init-probe] early publication PASS cycles=4");
 }
+
+pub fn stop_peer() {
+    let mut client = userlib::service::Client::bootstrap().unwrap();
+    let mut ready = false;
+    let deadline = sys::ticks() + 90;
+    loop {
+        while let Some(event) = ipc::next().unwrap() {
+            client
+                .on_event(&event)
+                .expect("authenticated manager Stop must reach SDK client");
+        }
+        if client.run().is_some() && !ready {
+            client.ready().unwrap();
+            ready = true;
+        }
+        if client.stop_requested() {
+            return;
+        }
+        assert!(sys::ticks() < deadline, "SDK stop delivery deadline");
+        sys::wait_events(sys::Events::PORT, 1).unwrap();
+    }
+}
+pub fn stop_protocol() -> ! {
+    use userlib::service::abi::{self, Message};
+    let [parent, mut child] = ipc::Endpoint::pair().unwrap();
+    let pid = ipc::spawn(
+        "/BIN/ZINIT.SVC",
+        &["--stop-peer"],
+        &[],
+        &mut [ipc::Binding {
+            endpoint: &mut child,
+            tag: abi::NOTIFY_TAG,
+            rights: ipc::Rights::from_bits(3).unwrap(),
+        }],
+    )
+    .unwrap();
+    let mut bytes = [0; abi::MAX_FRAME];
+    let n = Message::Init {
+        run: 7,
+        notify: true,
+        watchdog: None,
+    }
+    .encode(&mut bytes)
+    .unwrap();
+    parent.send(&bytes[..n]).unwrap();
+    let deadline = sys::ticks() + 90;
+    let mut sent = false;
+    loop {
+        while let Some(event) = ipc::next().unwrap() {
+            if event.kind == ipc::Kind::Message {
+                assert_eq!(event.sender, Some(ipc::ProcessKey { pid, generation: 1 }));
+                assert_eq!(
+                    Message::decode(&event.payload[..event.length]),
+                    Ok(Message::Ready { run: 7 })
+                );
+                assert!(!sent);
+                let n = Message::Stop { run: 7 }.encode(&mut bytes).unwrap();
+                parent.send(&bytes[..n]).unwrap();
+                sent = true;
+            }
+        }
+        if let Some(supervision::ChildEvent::Completed {
+            process,
+            cause,
+            status,
+        }) = supervision::next_child().unwrap()
+        {
+            assert!(sent);
+            assert_eq!(process.pid, pid);
+            assert_eq!(cause, supervision::Cause::Exited);
+            assert_eq!(status, 0, "service must exit cleanly after Stop");
+            break;
+        }
+        assert!(
+            sys::ticks() < deadline,
+            "cooperative stop completion deadline"
+        );
+        sys::wait_events(sys::Events::PORT | sys::Events::CHILD, 1).unwrap();
+    }
+    drop(parent);
+    while ipc::next().unwrap().is_some() {}
+    recordln!("[init-probe] stop protocol PASS");
+    loop {
+        sys::wait_events(sys::Events::CHILD, 0).unwrap();
+    }
+}

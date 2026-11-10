@@ -525,9 +525,68 @@ fn probe_restart(controller: &mut Controller) -> Result<()> {
     );
     Ok(())
 }
+fn shutdown(controller: &mut Controller, mode: &str) -> Result<()> {
+    let mut bytes = [0; abi::MAX_FRAME];
+    if mode == "--probe-shutdown-restarted" {
+        let Body::Job { job, .. } = controller
+            .rpc(Operation::Restart("beacon"), &mut bytes)?
+            .body
+        else {
+            return Err("shutdown prerequisite restart rejected");
+        };
+        wait_job(controller, job, &mut bytes)?;
+    }
+    if mode == "--probe-shutdown-pending" {
+        if !matches!(
+            controller.rpc(Operation::Start("bulk"), &mut bytes)?.body,
+            Body::Job { .. }
+        ) {
+            return Err("pending launch rejected");
+        }
+    }
+    if matches!(
+        mode,
+        "--probe-shutdown-pending" | "--probe-shutdown-backoff"
+    ) {
+        let wanted = if mode == "--probe-shutdown-pending" {
+            ("bulk", Phase::Spawning)
+        } else {
+            ("ember", Phase::Backoff)
+        };
+        let until = deadline()?;
+        loop {
+            let mut found = false;
+            for index in 0..64 {
+                match controller
+                    .rpc(Operation::Status { index }, &mut bytes)?
+                    .body
+                {
+                    Body::Status { name, phase, .. } if name == wanted.0 => {
+                        found = phase == wanted.1;
+                        break;
+                    }
+                    Body::End => return Err("shutdown probe unit missing"),
+                    _ => {}
+                }
+            }
+            if found {
+                break;
+            }
+            if sys::ticks() >= until {
+                return Err("shutdown probe phase timeout");
+            }
+            sys::sleep_ticks(1).map_err(|_| "shutdown probe wait")?;
+        }
+    }
+    let Body::Job { job, phase } = controller.rpc(Operation::Shutdown, &mut bytes)?.body else {
+        return Err("shutdown rejected");
+    };
+    recordln!("[spark] shutdown accepted job={} phase={:?}", job, phase);
+    Ok(())
+}
 fn run(argv: &[&str]) -> Result<()> {
     let Some(command) = argv.get(1).copied() else {
-        return Err("usage: spark status|logs|start UNIT|stop UNIT|job ID");
+        return Err("usage: spark status|logs|start UNIT|stop UNIT|restart UNIT|job ID|shutdown");
     };
     let mut controller = Controller::bootstrap()?;
     if command == "--probe-status" {
@@ -541,6 +600,12 @@ fn run(argv: &[&str]) -> Result<()> {
     }
     if command == "--probe-restart" {
         return probe_restart(&mut controller);
+    }
+    if matches!(
+        command,
+        "shutdown" | "--probe-shutdown-pending" | "--probe-shutdown-backoff" | "--probe-shutdown-restarted"
+    ) {
+        return shutdown(&mut controller, command);
     }
     let mut bytes = [0; abi::MAX_FRAME];
     match command {

@@ -38,6 +38,17 @@ pub fn cleanup(pid: u32) {
         audio.owner = None;
     }
 }
+/// Terminal halt only, under kernel entry after parking remote CPUs. A failure
+/// is diagnostic; boot-owned device storage remains retained forever regardless.
+pub(crate) fn disable_dma_terminal() -> bool {
+    let Some(mut service) = AUDIO.try_lock() else {
+        return false;
+    };
+    service
+        .device
+        .as_mut()
+        .map_or(true, Device::disable_dma_terminal)
+}
 /// Validate ABI/user buffers and dispatch without retaining any user reference.
 pub fn syscall(number: u64, first: u64, second: u64, third: u64) -> u64 {
     dispatch(number, first, second, third).unwrap_or_else(Error::encode)

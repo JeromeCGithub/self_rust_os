@@ -44,6 +44,17 @@ pub fn cleanup(pid: u32) {
     }
 }
 
+/// Terminal halt only: kernel entry owns serialization and remote CPUs are parked.
+/// Keep the complete network and all DMA storage alive; no allocator is involved.
+pub(crate) fn disable_dma_terminal() -> bool {
+    let Some(mut network) = NETWORK.try_lock() else {
+        return false;
+    };
+    network
+        .as_mut()
+        .map_or(true, |network| network.device_mut().disable_dma_terminal())
+}
+
 fn millis() -> i64 {
     // PIT frequency is 1193182/65536 Hz. Integer conversion preserves monotonic
     // time and avoids floating point; clamp before converting to smoltcp's i64.

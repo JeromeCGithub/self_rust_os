@@ -38,6 +38,7 @@ pub struct Unit {
     pub policy: Policy,
     pub readiness: Readiness,
     pub start_timeout: u64,
+    pub stop_timeout: u64,
     pub watchdog: Option<u64>,
     pub control: Option<rustos_service_abi::control::Access>,
 }
@@ -84,6 +85,7 @@ pub fn parse(bytes: &[u8]) -> Result<Unit, Error> {
         after: Vec::new(),
         readiness: Readiness::Spawned,
         start_timeout: 90,
+        stop_timeout: 90,
         watchdog: None,
         control: None,
         policy: Policy {
@@ -98,7 +100,7 @@ pub fn parse(bytes: &[u8]) -> Result<Unit, Error> {
     let mut seen = 0u32;
     let mut policy_line = 1;
     let mut watchdog_line = 1;
-    const KEYS: [&str; 20] = [
+    const KEYS: [&str; 21] = [
         "Version",
         "Kind",
         "Name",
@@ -119,6 +121,7 @@ pub fn parse(bytes: &[u8]) -> Result<Unit, Error> {
         "StartTimeoutTicks",
         "WatchdogTicks",
         "ControlAccess",
+        "StopTimeoutTicks",
     ];
     let mut launch_bytes = 0usize;
     for (index, raw) in text.split('\n').enumerate() {
@@ -251,7 +254,7 @@ pub fn parse(bytes: &[u8]) -> Result<Unit, Error> {
                     _ => return Err(error(line, ErrorKind::InvalidValue)),
                 });
             }
-            17 | 18 => {
+            17 | 18 | 20 => {
                 let ticks = value
                     .parse::<u64>()
                     .ok()
@@ -259,6 +262,8 @@ pub fn parse(bytes: &[u8]) -> Result<Unit, Error> {
                     .ok_or(error(line, ErrorKind::InvalidValue))?;
                 if id == 17 {
                     unit.start_timeout = ticks;
+                } else if id == 20 {
+                    unit.stop_timeout = ticks;
                 } else {
                     unit.watchdog = Some(ticks);
                     watchdog_line = line;
@@ -271,7 +276,7 @@ pub fn parse(bytes: &[u8]) -> Result<Unit, Error> {
         return Err(error(1, ErrorKind::MissingField));
     }
     // Target definitions have no executable, launch vectors or runtime policy.
-    let service_fields = (1 << 19) | (((1u32 << 14) - 1) & !7) | (3u32 << 17);
+    let service_fields = (1 << 20) | (1 << 19) | (((1u32 << 14) - 1) & !7) | (3u32 << 17);
     if unit.kind == Kind::Target && seen & service_fields != 0 {
         return Err(error(1, ErrorKind::InvalidValue));
     }
