@@ -351,45 +351,113 @@ fn seek(fd: u64, offset: i64, whence: u64) -> u64 {
 
 /// Versioned long-name directory records. A zero capacity queries required bytes;
 /// nonzero calls copy a complete listing or return an error without partial output.
-pub(crate) fn readdir(path_pointer: u64, output: u64, capacity: u64) -> u64 {
+pub fn readdir(path_pointer: u64, output: u64, capacity: u64) -> u64 {
     let Some(path) = path(path_pointer, PathKind::Listing) else {
         return ERROR;
     };
-    let Some(Ok(entries)) = super::with_fs(|fs| fs.list_dir(Some(&path))) else {
+    let size = super::with_fs(|fs| {
+        let mut size = 0usize;
+        fs.visit_dir(&path, |_, name, _, _| {
+            size = size
+                .checked_add((16 + name.len() + 1 + 7) & !7)
+                .ok_or(crate::fat32::FatError::BufferTooSmall)?;
+            Ok(())
+        })?;
+        Ok::<_, crate::fat32::FatError>(size)
+    });
+    let Some(Ok(size)) = size else {
         return ERROR;
     };
-    let mut size = 0usize;
-    for entry in &entries {
-        let name = entry.file_name();
-        let Some(next) = size.checked_add((16 + name.len() + 1 + 7) & !7) else {
-            return ERROR;
-        };
-        size = next;
-    }
     if capacity == 0 {
         return size as u64;
     }
     if capacity < size as u64 || !crate::userspace::usercopy::validate(output, capacity, true) {
         return ERROR;
     }
-    let mut bytes = alloc::vec::Vec::new();
-    if bytes.try_reserve_exact(size).is_err() {
+    let Ok(mut bytes) = crate::scheduler::ResourceBuffer::zeroed(size) else {
+        return ERROR;
+    };
+    let filled = super::with_fs(|fs| {
+        let mut position = 0usize;
+        fs.visit_dir(&path, |_, name, attr, file_size| {
+            let length = (16 + name.len() + 1 + 7) & !7;
+            let end = position
+                .checked_add(length)
+                .filter(|&end| end <= bytes.len())
+                .ok_or(crate::fat32::FatError::BufferTooSmall)?;
+            let record = &mut bytes[position..end];
+            record[..2].copy_from_slice(&(length as u16).to_le_bytes());
+            record[2..4].copy_from_slice(&(name.len() as u16).to_le_bytes());
+            record[4] = attr;
+            record[8..16].copy_from_slice(&(file_size as u64).to_le_bytes());
+            record[16..16 + name.len()].copy_from_slice(name.as_bytes());
+            position = end;
+            Ok(())
+        })?;
+        if position != size {
+            return Err(crate::fat32::FatError::BufferTooSmall);
+        }
+        Ok(())
+    });
+    if matches!(filled, Some(Ok(()))) && crate::userspace::usercopy::to_user(output, &bytes) {
+        size as u64
+    } else {
+        ERROR
+    }
+}
+
+/// Copy up to `maximum` legacy short-name records, with admitted staging storage.
+/// Both passes are bounded by the directory geometry. A changed record count
+/// fails before usercopy; equal-sized changes yield a coherent second-pass listing.
+pub fn list_short(path_pointer: u64, output: u64, maximum: u64) -> u64 {
+    let Some(capacity) = maximum.checked_mul(12) else {
+        return ERROR;
+    };
+    if !crate::userspace::usercopy::validate(output, capacity, true) {
         return ERROR;
     }
-    bytes.resize(size, 0);
-    let mut position = 0;
-    for entry in entries {
-        let name = entry.file_name();
-        let length = (16 + name.len() + 1 + 7) & !7;
-        bytes[position..position + 2].copy_from_slice(&(length as u16).to_le_bytes());
-        bytes[position + 2..position + 4].copy_from_slice(&(name.len() as u16).to_le_bytes());
-        bytes[position + 4] = entry.attr;
-        bytes[position + 8..position + 16].copy_from_slice(&(entry.size as u64).to_le_bytes());
-        bytes[position + 16..position + 16 + name.len()].copy_from_slice(name.as_bytes());
-        position += length;
-    }
-    if crate::userspace::usercopy::to_user(output, &bytes) {
-        size as u64
+    let Some(path) = path(path_pointer, PathKind::Listing) else {
+        return ERROR;
+    };
+    let count = super::with_fs(|fs| {
+        let mut count = 0u64;
+        fs.visit_dir(&path, |_, _, _, _| {
+            count = count.saturating_add(1).min(maximum);
+            Ok(())
+        })?;
+        Ok::<_, crate::fat32::FatError>(count)
+    });
+    let Some(Ok(count)) = count else {
+        return ERROR;
+    };
+    let Some(size) = count.checked_mul(12).and_then(|n| usize::try_from(n).ok()) else {
+        return ERROR;
+    };
+    let Ok(mut bytes) = crate::scheduler::ResourceBuffer::zeroed(size) else {
+        return ERROR;
+    };
+    let filled = super::with_fs(|fs| {
+        let mut position = 0u64;
+        fs.visit_dir(&path, |alias, _, attr, _| {
+            if position == maximum {
+                return Ok(());
+            }
+            if position >= count {
+                return Err(crate::fat32::FatError::BufferTooSmall);
+            }
+            let record = &mut bytes[position as usize * 12..][..12];
+            record[..11].copy_from_slice(alias);
+            record[11] = attr;
+            position += 1;
+            Ok(())
+        })?;
+        if position != count {
+            return Err(crate::fat32::FatError::BufferTooSmall);
+        }
+        Ok(())
+    });
+    if matches!(filled, Some(Ok(()))) && crate::userspace::usercopy::to_user(output, &bytes) {
+        count
     } else {
         ERROR
     }

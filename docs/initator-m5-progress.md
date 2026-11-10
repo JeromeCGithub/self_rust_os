@@ -739,10 +739,84 @@ and `scopes-path-{build-default,build-grub,no-run,native-build,desktop-build}.lo
 Tested screenshots are retained in `scopes-path-screenshots/`; the generic tracked
 images and disposable FAT fixture are restored after testing. Quota/cwd lifetime
 proof comes from the executable counter, allocation and data assertions rather
-than a screenshot. Listings/internal FAT allocations, grants, I/O
-cancellation/quiescence, socket/audio budgets and the Ring 3 scope/session factory
-remain unfinished. Normal services still share the trusted system root; Nest does
+than a screenshot. At that checkpoint, listings/internal FAT allocations, grants,
+I/O cancellation/quiescence, socket/audio budgets and the Ring 3 scope/session
+factory remained unfinished; the next section closes the listing allocation gap. Normal services still share the trusted system root; Nest does
 not run yet, and this is not a completed filesystem sandbox or M5 milestone.
+
+## Directory enumeration and output admission
+
+Native directory syscalls 5 (short aliases) and 33 (full names) now use
+[`Fat32::visit_dir`](../src/fat32.rs) rather than collecting all entries. The
+scanner keeps at most twenty VFAT slot locations, 260 UTF-16 units, 765 UTF-8
+bytes and one sector in bounded stack scratch. Names are borrowed only for the
+callback. Directory path traversal and short-name matching no longer allocate
+component/name strings. Each visited directory sector is read once per scan.
+The collecting `list_dir` helper remains for trusted kernel callers/tests; it
+is no longer used by either directory syscall.
+
+The [kernel filesystem adapter](../src/fs/handles.rs) first counts required
+output, releases the filesystem lock, admits a fallible `ResourceBuffer`, then
+fills that buffer in a second locked pass. It never takes SCHEDULER while holding
+FS. The buffer and charge survive through usercopy. A changed required size or
+an I/O/callback error fails before copying any listing prefix. Equal-sized
+changes produce the second pass's coherent listing; there is no durable snapshot
+or cursor ABI. Zero-capacity full-name queries use no listing-sized allocation.
+The existing short-name record and aligned UTF-8 record formats remain unchanged.
+The public Rust helpers exported from `fs` are kernel harness interfaces; the
+syscall dispatcher still applies capability filtering for Ring 3 callers.
+
+Observed red checks, recorded under `target/initator-m5-evidence/`:
+
+- `directory-budget-red-small.log`: the caller had only 8 KiB spare, but a 9,920-byte
+  listing succeeded instead of returning the existing error sentinel.
+- `directory-scratch-red.log`: the scanner retained 120 extra heap bytes during
+  its callback rather than using bounded scratch.
+- `directory-sector-red.log`: a single-sector listing performed five reads rather
+  than one. The revised scanner caches that sector until its slots are consumed.
+
+The first test fixture (`directory-budget-red.log`) timed out during creation of
+many colliding aliases, before reaching the quota assertion. It is not a red
+behavior proof. The replacement uses forty unique-prefix, long Unicode names;
+it still spans multiple directory clusters and exceeds the same 8 KiB spare
+budget. The timeout and production limits were not increased.
+
+[The scoped-files test](../tests/scoped_files.rs) checks repeated quota denial
+without modified output, a successful size query under that pressure, exact
+long-name record bytes/padding, short listing caps including zero, invalid and
+cross-page/read-only/overflow buffers, missing/non-directory paths, and exact
+scope cleanup after reaping. The RAM-backed kernel test asserts no heap growth
+while visiting decoded names or resolving a long directory path, callback error
+propagation, short-name fallback and sector read counts. Host VFAT tests cover
+maximum 255-unit names, the full 765-byte UTF-8 bound, surrogate pairs, padding,
+checksum/order errors and repeated decoder completion.
+
+Validation run for this checkpoint:
+
+- Default and GRUB debug builds; both complete release disk builders (native
+  `target/init-m5-directory.img` and default `target/init-m5-directory-desktop.img`).
+- 99 kernel unit cases and ten integration executables: `display_mapping`,
+  `fat32`, `ipc`, `keyboard_timer`, `native_supervision`, `process_supervision`,
+  `scoped_files`, `scopes`, `stdio`, `threads`. The FAT wrapper's underlying
+  `cargo test --test fat32` was included directly in this serialized run.
+- 78 Ring 3 runs: all 22 `e2e/init.py` cases, native `init_file_io.py`, unit
+  `vectors`, and default `capabilities.py` `names`/`files`, each at 1/8/32 CPUs.
+- Full default desktop at eight CPUs; six isolated 8 MiB/s loader/watchdog
+  normal/cancellation checks at 1/8/32 CPUs. Every watchdog delay was zero ticks.
+- Three host VFAT cases, 85 Python tooling cases, documentation/link checks and
+  whitespace checks. No timeout or watchdog budget was increased.
+
+Transcripts are `directory-*.log` in `target/initator-m5-evidence/`. Desktop
+screenshots from the tested build are archived in `directory-screenshots/` and
+the generic tracked images are restored. The quota proof is the executable
+allocation, record-byte and cleanup assertions; a screenshot cannot establish
+those invariants. Final import/format cleanup changes no executable behavior.
+Manual host GUI and physical-device checks remain unverified. The known debug
+heap-stress timeout is unrelated and was not rerun or claimed as passing.
+
+This closes the listing allocation gap. Internal FAT file read/write, path
+resolution and mutation scratch allocations still require work. It does not
+provide filesystem grants, cancellation or complete hostile-service isolation.
 
 ## Scope integration invariants for the next implementation
 

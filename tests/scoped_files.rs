@@ -165,6 +165,7 @@ fn native_file_quota_precedes_create_and_truncate() {
     scheduler::reap_retired();
     scheduler::scope_ack_closed(scope).unwrap();
     assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial);
+    directory_output_requires_budget(&mut context, initial);
     path_storage_requires_budget(&mut context, initial);
     file_success_failure_and_io_budgets(&mut context, initial);
     retained_resource_blocks_scope_cleanup(&mut context, initial);
@@ -704,4 +705,124 @@ fn activate(pid: u32, context: &mut u64) {
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     self_rust_os::test_panic_handler(info)
+}
+
+fn directory_output_requires_budget(context: &mut u64, initial: Usage) {
+    use self_rust_os::fs::read_directory;
+    self_rust_os::fs::with_fs(|fs| {
+        fs.create_dir("/LISTING").unwrap();
+        for index in 0..40 {
+            let name = alloc::format!("/LISTING/{index:03} café 文書 {}.txt", "x".repeat(210));
+            fs.create_file(&name).unwrap();
+        }
+    })
+    .unwrap();
+    let limit = limits(0);
+    let scope = scheduler::scope_create_service(SYSTEM, limit).unwrap();
+    let child =
+        scheduler::spawn_process_in_scope(&[0xc3], 4096, &[], &[], scope, Capabilities::FILE_READ)
+            .unwrap();
+    let base = scheduler::scope_status(scope).unwrap().used;
+    activate(child, context);
+    let output = self_rust_os::userspace::USER_STACK_TOP - 128 * 1024;
+    let size = read_directory(input(b"/LISTING\0"), 0, 0);
+    assert!(size > 8192 && size < 64 * 1024);
+    let pressure = scheduler::reserve_resource(Usage {
+        kernel_bytes: limit.kernel_bytes - base.kernel_bytes - 8192,
+        ..Usage::ZERO
+    })
+    .unwrap();
+    for _ in 0..3 {
+        assert_eq!(read_directory(input(b"/LISTING\0"), 0, 0), size);
+        assert!(self_rust_os::userspace::usercopy::to_user(
+            output,
+            &[0xa5; 32]
+        ));
+        assert_eq!(
+            read_directory(input(b"/LISTING\0"), output, size),
+            u64::MAX - 1,
+            "directory output must be admitted before allocating or copying records"
+        );
+        let mut unchanged = [0; 32];
+        assert!(self_rust_os::userspace::usercopy::from_user(
+            output,
+            &mut unchanged
+        ));
+        assert_eq!(unchanged, [0xa5; 32]);
+    }
+    drop(pressure);
+    scheduler::reap_retired();
+    assert_eq!(
+        read_directory(input(b"/LISTING\0"), output, size - 1),
+        u64::MAX - 1
+    );
+    for pointer in [
+        0,
+        0x400000,
+        u64::MAX - 8,
+        self_rust_os::userspace::USER_STACK_TOP - 1,
+    ] {
+        assert_eq!(
+            read_directory(input(b"/LISTING\0"), pointer, size),
+            u64::MAX - 1
+        );
+    }
+    assert_eq!(read_directory(input(b"/LISTING\0"), output, size), size);
+    let mut bytes = alloc::vec![0; size as usize];
+    assert!(self_rust_os::userspace::usercopy::from_user(
+        output, &mut bytes
+    ));
+    let mut position = 0;
+    for index in 0..40 {
+        let record = &bytes[position..];
+        let length = u16::from_le_bytes(record[..2].try_into().unwrap()) as usize;
+        let name_len = u16::from_le_bytes(record[2..4].try_into().unwrap()) as usize;
+        let name = alloc::format!("{index:03} café 文書 {}.txt", "x".repeat(210));
+        assert_eq!(&record[16..16 + name_len], name.as_bytes());
+        assert!(record[16 + name_len..length].iter().all(|&b| b == 0));
+        position += length;
+    }
+    assert_eq!(position, size as usize);
+    for maximum in [0, 1, 7, 40, 41] {
+        let count = maximum.min(40);
+        assert_eq!(
+            self_rust_os::fs::list_directory(input(b"/LISTING\0"), output, maximum),
+            count
+        );
+        let mut short = alloc::vec![0; count as usize * 12];
+        assert!(self_rust_os::userspace::usercopy::from_user(
+            output, &mut short
+        ));
+        for index in 0..count as usize {
+            assert_eq!(short[index * 12 + 11], 0x20);
+            assert_eq!(
+                &short[index * 12..index * 12 + 3],
+                alloc::format!("{index:03}").as_bytes()
+            );
+        }
+    }
+    assert_eq!(
+        self_rust_os::fs::list_directory(input(b"/LISTING\0"), output, u64::MAX),
+        u64::MAX - 1
+    );
+    assert_eq!(
+        self_rust_os::fs::list_directory(input(b"/LISTING\0"), 0, 1),
+        u64::MAX - 1
+    );
+    assert_eq!(
+        read_directory(input(b"/LIMIT.TXT\0"), output, size),
+        u64::MAX - 1
+    );
+    assert_eq!(
+        read_directory(input(b"/MISSING\0"), output, size),
+        u64::MAX - 1
+    );
+    activate(1, context);
+    scheduler::reap_retired();
+    assert_eq!(scheduler::scope_status(scope).unwrap().used, base);
+    scheduler::scope_close(scope).unwrap();
+    assert_eq!(scheduler::waitpid(child), 9);
+    scheduler::reap_retired();
+    scheduler::scope_ack_closed(scope).unwrap();
+    assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial);
 }

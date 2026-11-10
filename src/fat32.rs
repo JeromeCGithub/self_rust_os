@@ -655,8 +655,12 @@ impl<B: BlockDevice> Fat32<B> {
         if path.is_empty() || path == "/" {
             return Ok(self.root_cluster);
         }
+        let components = path.split('/').filter(|component| !component.is_empty());
+        if components.clone().next().is_none() || !components.clone().all(lfn::valid) {
+            return Err(FatError::InvalidName);
+        }
         let mut directory = self.root_cluster;
-        for component in split_path(path)? {
+        for component in components {
             let (cluster, index) = self
                 .find_entry_in(directory, &component)?
                 .ok_or(FatError::FileNotFound)?;
@@ -845,7 +849,7 @@ impl<B: BlockDevice> Fat32<B> {
             if name != *b".          " && name != *b"..         " {
                 entries.push(DirEntry {
                     name,
-                    long_name: long,
+                    long_name: long.map(String::from),
                     attr: entry[11],
                     size: u32::from_le_bytes(entry[28..32].try_into().expect("directory size")),
                 });
@@ -853,6 +857,34 @@ impl<B: BlockDevice> Fat32<B> {
             None::<()>
         })?;
         Ok(entries)
+    }
+
+    /// Visit a complete directory with bounded stack scratch and borrowed names.
+    /// The callback runs under the caller's filesystem lock and must not acquire
+    /// scheduler locks or retain names. A callback error stops the scan.
+    pub fn visit_dir(
+        &mut self,
+        path: &str,
+        mut visit: impl FnMut(&[u8; 11], &str, u8, u32) -> Result<(), FatError>,
+    ) -> Result<(), FatError> {
+        let directory = self.directory_cluster(path)?;
+        self.scan_directory(directory, |_, _, entry, long, _| {
+            let mut alias = [0; 11];
+            alias.copy_from_slice(&entry[..11]);
+            if alias == *b".          " || alias == *b"..         " {
+                return None;
+            }
+            let mut buffer = [0; 23];
+            let name = long.unwrap_or_else(|| short_name_into(&alias, &mut buffer));
+            visit(
+                &alias,
+                name,
+                entry[11],
+                u32::from_le_bytes(entry[28..32].try_into().expect("directory size")),
+            )
+            .err()
+        })?
+        .map_or(Ok(()), Err)
     }
 
     /// Returns an error if the directory entry is a directory.
@@ -1107,51 +1139,56 @@ impl<B: BlockDevice> Fat32<B> {
     fn scan_directory<R>(
         &mut self,
         directory: u32,
-        mut visit: impl FnMut(
-            u32,
-            usize,
-            &[u8; 32],
-            Option<alloc::string::String>,
-            &[(u32, usize)],
-        ) -> Option<R>,
+        mut visit: impl FnMut(u32, usize, &[u8; 32], Option<&str>, &[(u32, usize)]) -> Option<R>,
     ) -> Result<Option<R>, FatError> {
         let mut cluster = directory;
         let mut decoder = lfn::Decoder::new();
-        let mut positions = Vec::new();
+        let mut positions = [(0u32, 0usize); 20];
+        let mut position_count = 0;
+        let mut name_buffer = [0u8; 765];
         let limit =
             (self.total_sectors - self.first_data_sector) / u32::from(self.sectors_per_cluster);
         for _ in 0..limit {
             if cluster < 2 || cluster >= limit + 2 {
                 return Err(FatError::DeviceError);
             }
+            let mut sector = [0; SECTOR_SIZE];
+            let slots_per_sector = SECTOR_SIZE / DIR_ENTRY_SIZE;
             for index in 0..self.entries_per_cluster() {
-                let mut entry = [0; 32];
-                self.read_dir_entry(cluster, index, &mut entry)?;
+                if index % slots_per_sector == 0 {
+                    self.read_sector_raw(self.dir_entry_lba(cluster, index), &mut sector)?;
+                }
+                let offset = (index % slots_per_sector) * DIR_ENTRY_SIZE;
+                let mut entry = [0; DIR_ENTRY_SIZE];
+                entry.copy_from_slice(&sector[offset..offset + DIR_ENTRY_SIZE]);
                 if entry[0] == ENTRY_END {
                     return Ok(None);
                 }
                 if entry[0] == ENTRY_FREE {
                     decoder.reset();
-                    positions.clear();
+                    position_count = 0;
                     continue;
                 }
                 if entry[11] == 15 {
                     if entry[0] & 0x40 != 0 {
-                        positions.clear();
+                        position_count = 0;
                     }
+                    // A valid VFAT sequence has at most twenty linked slots;
+                    // feed rejects extra/out-of-order slots before indexing.
                     if decoder.feed(&entry) {
-                        positions.push((cluster, index));
+                        positions[position_count] = (cluster, index);
+                        position_count += 1;
                     } else {
-                        positions.clear();
+                        position_count = 0;
                     }
                     continue;
                 }
                 let mut alias = [0; 11];
                 alias.copy_from_slice(&entry[..11]);
-                let long = decoder.finish(&alias);
+                let long = decoder.finish_into(&alias, &mut name_buffer);
                 if entry[11] & ATTR_VOLUME_LABEL == 0 {
                     let linked = if long.is_some() {
-                        positions.as_slice()
+                        &positions[..position_count]
                     } else {
                         &[]
                     };
@@ -1159,7 +1196,7 @@ impl<B: BlockDevice> Fat32<B> {
                         return Ok(Some(result));
                     }
                 }
-                positions.clear();
+                position_count = 0;
             }
             let next = self.read_fat_entry(cluster)?;
             if next >= FAT_EOC_MIN {
@@ -1177,9 +1214,9 @@ impl<B: BlockDevice> Fat32<B> {
         self.scan_directory(directory, |cluster, index, entry, long, _| {
             let mut alias = [0; 11];
             alias.copy_from_slice(&entry[..11]);
-            let short = short_name(&alias);
-            if name_equal(name, &short) || long.as_ref().is_some_and(|long| name_equal(name, long))
-            {
+            let mut buffer = [0; 23];
+            let short = short_name_into(&alias, &mut buffer);
+            if name_equal(name, short) || long.is_some_and(|long| name_equal(name, long)) {
                 Some((cluster, index))
             } else {
                 None
@@ -1525,6 +1562,54 @@ mod tests {
 
     // Small enough to fit in the 1 MiB kernel heap with room to spare.
     const TEST_SECTORS: u32 = 512;
+
+    #[test_case]
+    fn directory_scanning_uses_bounded_scratch_without_heap_growth() {
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        fs.create_file("/A long café 文書 filename.txt").unwrap();
+        let allocated = crate::allocator::allocated_bytes();
+        let reads: usize = fs.device.reads.iter().sum();
+        let mut visited = false;
+        fs.scan_directory(fs.root_cluster, |_, _, _, long, _| {
+            assert_eq!(
+                crate::allocator::allocated_bytes(),
+                allocated,
+                "directory scan scratch and decoded names must not allocate"
+            );
+            assert_eq!(long, Some("A long café 文書 filename.txt"));
+            visited = true;
+            None::<()>
+        })
+        .unwrap();
+        assert!(visited);
+        assert_eq!(
+            fs.device.reads.iter().sum::<usize>() - reads,
+            1,
+            "a scan reads each directory sector once, not once per slot"
+        );
+        fs.create_dir("/A long café folder").unwrap();
+        fs.create_file("/A long café folder/PLAIN.TXT").unwrap();
+        let allocated = crate::allocator::allocated_bytes();
+        let mut visited = false;
+        fs.visit_dir("/A long café folder", |alias, name, attr, size| {
+            assert_eq!(crate::allocator::allocated_bytes(), allocated);
+            assert_eq!(alias, b"PLAIN   TXT");
+            assert_eq!(name, "PLAIN.TXT");
+            assert_eq!(attr, 0x20);
+            assert_eq!(size, 0);
+            visited = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(visited);
+        assert_eq!(
+            fs.visit_dir("/A long café folder", |_, _, _, _| Err(
+                FatError::AccessDenied
+            )),
+            Err(FatError::AccessDenied)
+        );
+    }
 
     #[test_case]
     fn root_entry_protection_resolves_aliases_and_reserves_missing_names() {
@@ -2143,20 +2228,27 @@ mod tests {
 }
 
 fn short_name(alias: &[u8; 11]) -> String {
+    String::from(short_name_into(alias, &mut [0; 23]))
+}
+
+// At most eleven Latin-1 bytes encoded as two UTF-8 bytes each, plus a dot.
+fn short_name_into<'a>(alias: &[u8; 11], buffer: &'a mut [u8; 23]) -> &'a str {
     let base = alias[..8].iter().position(|&b| b == b' ').unwrap_or(8);
     let ext = alias[8..].iter().position(|&b| b == b' ').unwrap_or(3);
-    let mut name = String::new();
+    let mut length = 0;
     for &byte in &alias[..base] {
-        name.push(char::from(byte));
+        length += char::from(byte).encode_utf8(&mut buffer[length..]).len();
     }
     if ext != 0 {
-        name.push('.');
+        buffer[length] = b'.';
+        length += 1;
         for &byte in &alias[8..8 + ext] {
-            name.push(char::from(byte));
+            length += char::from(byte).encode_utf8(&mut buffer[length..]).len();
         }
     }
-    name
+    core::str::from_utf8(&buffer[..length]).expect("encoded characters")
 }
+
 fn name_equal(a: &str, b: &str) -> bool {
     a.chars()
         .flat_map(char::to_uppercase)

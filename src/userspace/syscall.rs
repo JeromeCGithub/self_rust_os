@@ -489,30 +489,7 @@ fn validate_user_buffer(ptr: u64, len: u64) -> bool {
 /// (`0x10` = directory, `0x20` = file).
 /// Returns the number of entries, or SYSCALL_ERROR.
 fn sys_ls(path_ptr: u64, buf_ptr: u64, max_entries: u64) -> u64 {
-    let max_entries = max_entries as usize;
-    let buf_len = (max_entries as u64).saturating_mul(12);
-    if !validate_user_buffer(buf_ptr, buf_len) {
-        return SYSCALL_ERROR;
-    }
-
-    let result = crate::fs::handles::path(path_ptr, crate::fs::handles::PathKind::Listing)
-        .map(|path| crate::fs::with_fs(|fs| fs.list_dir(Some(&path))));
-    let entries = match result {
-        Some(Some(Ok(entries))) => entries,
-        _ => return SYSCALL_ERROR,
-    };
-
-    let count = entries.len().min(max_entries);
-    for (i, entry) in entries.iter().take(count).enumerate() {
-        let mut record = [0u8; 12];
-        record[..11].copy_from_slice(&entry.name);
-        record[11] = entry.attr;
-        if !userspace::usercopy::to_user(buf_ptr + i as u64 * 12, &record) {
-            return SYSCALL_ERROR;
-        }
-    }
-
-    count as u64
+    crate::fs::handles::list_short(path_ptr, buf_ptr, max_entries)
 }
 
 /// Creates a directory (with missing parents, like `mkdir -p`).

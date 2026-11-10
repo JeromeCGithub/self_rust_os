@@ -1,6 +1,8 @@
 //! VFAT UTF-16 entry encoding and strict sequence/checksum decoding.
 extern crate alloc;
-use alloc::{string::String, vec::Vec};
+#[cfg(all(test, not(target_os = "none")))]
+use alloc::string::String;
+use alloc::vec::Vec;
 const POSITIONS: [usize; 13] = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
 pub(crate) fn valid(name: &str) -> bool {
     !name.is_empty()
@@ -100,7 +102,12 @@ impl Decoder {
         self.remaining -= 1;
         true
     }
-    pub(crate) fn finish(&mut self, alias: &[u8; 11]) -> Option<String> {
+    /// Decode into caller-owned bounded UTF-8 storage; no heap allocation.
+    pub(crate) fn finish_into<'a>(
+        &mut self,
+        alias: &[u8; 11],
+        output: &'a mut [u8; 765],
+    ) -> Option<&'a str> {
         let complete = self.active && self.remaining == 0 && self.sum == checksum(alias);
         self.active = false;
         if !complete {
@@ -114,12 +121,21 @@ impl Decoder {
         {
             return None;
         }
-        let name = String::from_utf16(&units[..end]).ok()?;
-        if valid(&name) {
+        let mut length = 0;
+        for character in char::decode_utf16(units[..end].iter().copied()) {
+            let character = character.ok()?;
+            length += character.encode_utf8(&mut output[length..]).len();
+        }
+        let name = core::str::from_utf8(&output[..length]).ok()?;
+        if valid(name) {
             Some(name)
         } else {
             None
         }
+    }
+    #[cfg(all(test, not(target_os = "none")))]
+    pub(crate) fn finish(&mut self, alias: &[u8; 11]) -> Option<String> {
+        self.finish_into(alias, &mut [0; 765]).map(String::from)
     }
 }
 #[cfg(all(test, not(target_os = "none")))]
@@ -149,6 +165,31 @@ mod tests {
             decoder.feed(entry);
         }
         assert_eq!(decoder.finish(&alias), None);
+    }
+    #[test]
+    fn maximum_names_fill_bounded_utf8_storage_and_reject_bad_padding() {
+        let alias = *b"LONGNA~1TXT";
+        for name in ["文".repeat(255), alloc::format!("{}é", "🦀".repeat(127))] {
+            let entries = encode(&name, &alias).unwrap();
+            assert_eq!(entries.len(), 20);
+            let mut decoder = Decoder::new();
+            for entry in &entries {
+                assert!(decoder.feed(entry));
+            }
+            let mut output = [0; 765];
+            assert_eq!(
+                decoder.finish_into(&alias, &mut output),
+                Some(name.as_str())
+            );
+            assert_eq!(decoder.finish_into(&alias, &mut output), None);
+        }
+        let mut entry = encode("name", &alias).unwrap()[0];
+        // The name's terminator is at slot four. All later UTF-16 units must
+        // be padding, even when the altered bytes form valid Unicode.
+        entry[POSITIONS[5]..POSITIONS[5] + 2].copy_from_slice(&65u16.to_le_bytes());
+        let mut decoder = Decoder::new();
+        assert!(decoder.feed(&entry));
+        assert_eq!(decoder.finish_into(&alias, &mut [0; 765]), None);
     }
     #[test]
     fn boundaries_and_malformed_utf16_are_bounded() {

@@ -276,8 +276,10 @@ provide browser video, mixing, microphone input or verified host-speaker sound.
 `RUSTOS_BOOT_PROFILE=native-init` selects a separate headless GRUB profile. The
 kernel reserves PID 0 and starts `/BIN/INITATOR.SVC` as the first userspace process,
 PID 1. It receives private RAM drawing pages and no physical display mapping.
-Initator supervises two compiled foreground services, Glow and Flicker; graph
-configuration, user/session managers and graphical cutover follow the
+Initator loads foreground service units from `/ETC/INIT/SYSTEM`, including Glow
+and Flicker, resolves their dependency graph, and supervises readiness, watchdogs,
+restarts and graceful shutdown through native IPC. Spark supplies authenticated
+control/status requests. User/session managers and graphical cutover follow the
 [roadmap](init-system-plan.md). The ordinary desktop profile above remains default.
 
 Native parent identity is recorded before publication. Owned child readiness and
@@ -285,8 +287,11 @@ consumption retain terminal status until successful copy/reap, and init receives
 live-orphan adoption events or already-dead orphan completion. PID-control calls
 check parent authority in this profile; new typed control always checks ownership.
 PID values never wrap/reuse; the wire key also contains a checked generation.
-These mechanisms do not yet provide general credentials, protected filesystem
-configuration, or hostile-service isolation.
+M5 work adds native process principals, capability attenuation, protected system
+root writes and selected resource accounting. The scope/session factory remains
+kernel-only while filesystem grants and other isolation gates are unfinished;
+normal services still share the trusted system scope. These mechanisms do not
+establish hostile-service isolation. See [M5 progress](initator-m5-progress.md).
 
 If native PID 1 exits, faults or loses its last thread, the kernel parks other
 CPUs with a lock-independent NMI path, attempts a serial diagnostic through
