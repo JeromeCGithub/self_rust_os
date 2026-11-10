@@ -649,3 +649,26 @@ PCI command registers through monitor I/O reads, active queued AC97 DMA and abse
 hardware. The [shutdown runner](../e2e/init_shutdown.py) additionally checks exact
 service completions, ordered stop, global escalation, pending-load and backoff
 cancellation, and a restarted prerequisite before terminal halt.
+
+
+## Principal descriptions (M5 work in progress)
+
+| Number | Operation | Arguments | Result |
+| --- | --- | --- | --- |
+| 129 | current principal | output pointer, exact size 40, reserved=0 | 0 after full canonical copy; general syscall error on invalid/unavailable request |
+
+[The version-1 principal codec](../crates/process-abi/src/principal.rs) is explicit
+little endian: version u32 at 0, flags u32 at 4 (Init=1, Legacy=2), native user u32
+at 8, zero reserved u32 at 12, session u64 at 16, scope u64 at 24 and known mechanism
+capability bits u64 at 32. Invalid combinations, reserved identities and unknown
+bits fail decoding. The syscall derives its data from the live current process;
+there is no foreign-process selector or credential-setting operation. The SDK
+`userlib::principal::current()` validates its returned snapshot.
+
+Kernel boot selects native-init identity. Ordinary spawn preserves user/session/
+scope and drops the Init flag, protected-system-write and scope-factory bits;
+threads share process metadata. The existing restricted-worker allowlist remains
+stricter and denies this newly added syscall. All source records currently describe
+system contexts; user/session factories, scoped resources, capability enforcement
+and alias-safe filesystem grants remain incomplete in M5. These bytes describe
+metadata and never confer authority. See [M5 progress](initator-m5-progress.md).

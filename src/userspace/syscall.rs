@@ -107,6 +107,7 @@ pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: 
         return thread_dispatch(num, arg1, arg2, arg3);
     }
     match num {
+        rustos_process_abi::principal::SYS_PRINCIPAL => crate::scheduler::principal_user(arg1, arg2, arg3),
         120..=125 => crate::scheduler::ipc_syscall(num, arg1, arg2, arg3),
         rustos_ipc_abi::SYS_SPAWN_BOUND => {
             if arg3 != rustos_ipc_abi::SPAWN_SIZE as u64 {

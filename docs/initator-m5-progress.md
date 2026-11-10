@@ -6,11 +6,12 @@ is in [the M4 record](initator-m4-progress.md). M5 starts from that commit on
 `feat/initator-m5`; no M5 PR exists yet.
 
 **M5 is incomplete.** The first addition is a host-tested principal description and
-attenuation policy in [process-abi](../crates/process-abi/src/principal.rs). It does
-not yet attach credentials to kernel processes, enforce these capability bits,
-create scopes or run Nest. The syscall constant reserves 129; its dispatcher, SDK,
-native callers and authority/resource enforcement remain to be implemented in this
-same milestone before delivery. Do not interpret a decoded description as a grant.
+attenuation policy in [process-abi](../crates/process-abi/src/principal.rs). The
+kernel now attaches descriptive principals to processes, but does not yet enforce
+these capability bits, create resource scopes or run Nest. Syscall 129 and its SDK
+query are wired; the remaining authority/resource enforcement must be implemented
+in this same milestone before delivery. Do not interpret a decoded description as
+a grant.
 
 ## Initial interface
 
@@ -32,14 +33,15 @@ Existing irreversible worker restrictions must remain a stricter intersection.
 
 ## Source findings guiding the next changes
 
-- [Process metadata](../src/process/mod.rs) has no credentials/scope/capability
-  fields. It contains parent/adoption ownership, private frame/surface ledgers,
+- [Process metadata](../src/process/mod.rs) originally lacked principal fields;
+  M5 now stores an immutable principal there. It also contains parent/adoption
+  ownership, private frame/surface ledgers,
   descriptors and an optional restricted-worker heap ceiling. Threads share their
   process resources. The process table has 128 reusable storage slots but externally
   monotonic, unreused PIDs; scope membership must not use a PID as a bit index.
 - [Common construction](../src/scheduler.rs) is the single Process initializer;
-  every old/new spawn path must inherit or explicitly attenuate its principal
-  there before grant/frame publication. Current construction initializes the
+  all five existing spawn paths now inherit an ordinary-child principal there
+  before grant/frame publication. Explicit scoped grants remain future work. Current construction initializes the
   worker ceiling to None; the existing worker syscall allowlist prohibits spawn.
 - [Worker permission filtering](../crates/process-abi/src/isolation.rs) is a bounded
   allowlist, not general user identity or delegation. The dispatcher applies it
@@ -69,9 +71,66 @@ bytes, short/trailing data, inconsistent system/user/legacy contexts, invalid ID
 ordinary-child identity/scope preservation, non-inheritable authority and attempted
 rights expansion. These are host policy/codec results, not native enforcement.
 
+## Kernel query and ordinary inheritance
+
+[The principal syscall](../src/scheduler/principal.rs) validates exact 40-byte output,
+zero reserved argument and every writable page, snapshots a live caller under the
+scheduler lock, then copies initialized canonical bytes without retaining a process
+or user reference. It has no PID selector and accepts no input identity. Kernel
+boot gives native PID 1 the Init flag; other kernel-origin system contexts and the
+legacy desktop profile are explicitly distinguished. Every ordinary spawn derives
+its immutable description from the live parent in the common constructor. Threads
+read the same process description. Restricted workers keep their earlier allowlist;
+the new query does not bypass it.
+
+[The SDK](../user_programs/userlib/src/principal.rs) queries into an initialized
+40-byte buffer and validates the returned codec. `principal-native-red.log` first
+failed because PID 1 had no available query. After wiring, `principal-native-green.log`
+passes on 1/8/32 CPUs with all five existing spawn interfaces (8/29/30/126/127),
+children/grandchildren, per-process thread identity, environment spoofing, readonly/
+unmapped/noncanonical/wrapping buffers, exact sizes/reserved words, crossing two
+writable pages, preserved guard bytes and overwriting fake input metadata.
+
+These identities currently describe the system context: user 0/session 0/reserved
+system scope 1. Actual user/session creation, scope objects/accounting, reduced
+capability enforcement and protected filesystem grants are not implemented yet.
+A capability description is not proof that all enforcement paths already exist.
+
+Initial integration checks also pass: 92 kernel unit cases, the four directly
+affected integration executables (`native_supervision`, `process_supervision`,
+`ipc`, `threads`), both default/GRUB builds, a fresh native release image and all
+rebuilt user programs. The fresh default-profile eight-CPU desktop suite passed
+with the new metadata/query SDK. This is compatibility evidence, not enforcement
+of user isolation. All transcripts are `principal-*.log` in the M5 evidence folder;
+these are intermediate checks, not the final M5 milestone matrix.
+
+## Scope integration invariants for the next implementation
+
+- Keep the initial hierarchy bounded: system/session roots and service scopes;
+  arbitrary recursive scope creation is not needed. User identity/session selection
+  requires kernel-derived authority; ordinary spawn inherits its scope and cannot
+  mint identities or enlarge grants. Session managers need explicit factory rights,
+  not inherited ambient scope creation.
+- Track resources through real reclamation, including unpublished reservations,
+  per-process frame ledgers, private surfaces, thread stacks/TLS, IPC factories,
+  files, sockets and audio ownership. Zombie status, stopped execution and physically
+  released resources are different facts. Scope observation must not consume a
+  child completion. Fixed bounds must leave PID 1 recovery capacity.
+- Foreground completion must withdraw readiness immediately, but must not finish
+  a service stop/restart while scoped descendants/resources remain. Add a tested
+  cleanup acknowledgement to the core/native adapter before enabling scope-wide
+  supervision; do not merely hide delayed teardown behind a longer grace timer.
+- Owner death must close owned scopes and reject new work without allocation in
+  the kill path. Existing live parent ownership wins first, then a live owning
+  manager, then PID 1. Filesystem operations that release kernel entry need explicit
+  reservation/cancellation and quiescence handling before old resources are reused.
+- Keep configured user services separate from transient application launches.
+  M6's compositor/session failure policy must close affected application scopes;
+  ordinary apps must not acquire restart policies or become persistent units.
+
 ## Remaining milestone acceptance
 
-Implement/test kernel-owned credentials and query, atomic scoped/delegated spawn,
+Finish authorized user/session credential creation and atomic scoped/delegated spawn,
 bounded scopes and all selected resource accounting, owner-death/descendant cleanup,
 alias-safe filesystem grants, old-syscall bypass denial and least-authority IPC.
 Only then launch Nest as an explicitly unauthenticated fixed developer session

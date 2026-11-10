@@ -49,6 +49,8 @@ pub enum BlockReason {
 pub struct Process {
     /// Resource/privilege identity.
     pub pid: Pid,
+    /// Kernel-owned immutable native principal; userspace snapshots confer no rights.
+    pub(crate) principal: rustos_process_abi::principal::Principal,
     /// Completion owner assigned before publishing the process.
     pub(crate) parent: Option<Pid>,
     pub(crate) adoption_pending: bool,

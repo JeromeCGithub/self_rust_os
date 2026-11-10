@@ -60,3 +60,6 @@ pub mod sync;
 /// Native OS threads (enable the threads feature).
 #[cfg(feature = "threads")]
 pub mod thread;
+
+/// Native process-principal descriptions, not transferable authority grants.
+pub mod principal;
