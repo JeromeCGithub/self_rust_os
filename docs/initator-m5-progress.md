@@ -231,6 +231,56 @@ criterion is claimed until the kernel/resource/syscall adapters are implemented
 and tested in QEMU. Previously recorded native principal/file checks remain
 separate from these host model results.
 
+## Reservation guards and frame-budget prerequisite
+
+The scope model now reports per-resource remaining allocator room across all
+ancestors, including the system recovery reserve. `scopes-room-red.log` first
+failed on the missing room calculation; its green suite covers parent pressure,
+recovery consumption and closed/stale scopes. A later mixed-resource regression
+(`scopes-mixed-pressure-red.log`) caught thread recovery pressure incorrectly
+blocking page-only allocation. The fix checks only resource components that grow,
+while preserving all overflow, ancestor and atomicity checks. The final
+`scopes-mixed-pressure-green.log` passes 16 runtime cases and both compile-fail
+checks.
+
+[Reservation/growth guards](../crates/scope-core/src/transaction.rs) hold an
+exclusive registry borrow across fallible construction. Dropping a new reservation
+returns its counts and restores an unpublished leader binding; committing transfers
+the unique charge to its resource owner. Growth rollback releases only its new
+delta, preserving the owner's earlier charge. The native adapter must destroy
+actual allocations before dropping these guards. `scopes-transaction-red.log`
+first failed all three transaction cases; green output includes 128 repeated
+publication failures, leader-binding failures, quota failures, growth rollback,
+and successful charge/appointment retention. Native-target compilation passes,
+which is not a native runtime containment result.
+
+[Frame transactions](../src/memory/owned.rs) now accept an explicit maximum frame
+count. Every allocation through the transaction counts, including page-table
+parents. Ceiling zero rejects before pool/ledger allocation; partial failure drops
+all owned frames; commit preserves ownership for later teardown. The existing
+constructor keeps its previous unlimited behavior. The QEMU kernel red test
+(`frame-ceiling-red.log`) reproduced allocation past a two-frame ceiling. The green
+suite passes 95 kernel unit cases, including zero/exact/over-pool ceilings, repeated
+rollback, commit/recycle ownership and the default constructor.
+
+The frame increment's four kernel integration executables (`threads`,
+`native_supervision`, `process_supervision`, `display_mapping`) pass. Fresh native
+images pass exhaustion, 64-cycle process lifecycle, 64-cycle IPC lifecycle and
+two-service supervision on each of 1/8/32 CPUs (12 cases). A fresh default-profile
+eight-CPU desktop passes. Default/GRUB builds, native GRUB release and kernel test
+compilation pass. Transcripts and screenshots are retained in
+`target/initator-m5-evidence/frame-ceiling-*`.
+
+**Integration is still pending:** the new registry is not linked into the kernel,
+and existing spawn/heap/thread paths still use the default frame transaction.
+These results establish bookkeeping and bounded-allocation prerequisites, not
+already enforced native scope budgets. Next wire the scheduler's registry and
+resource ownership through constructor rollback, heap growth, thread creation and
+post-quiescence reclamation; then add the native scope ABI/events and other resource
+charges. Do not expose untrusted sessions before those paths and filesystem/IPC
+scope boundaries are tested. Service stop/restart jobs must wait for the durable
+scope cleanup acknowledgement, rather than treating foreground exit as full cleanup.
+
 ## Scope integration invariants for the next implementation
 
 - Keep the initial hierarchy bounded: system/session roots and service scopes;

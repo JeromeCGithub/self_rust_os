@@ -375,3 +375,84 @@ fn bootstrap_and_failed_creation_leave_the_previous_registry_intact() {
         Err(Error::Closed)
     );
 }
+
+#[test]
+fn allocator_room_accounts_for_ancestor_pressure_and_recovery_consumption() {
+    let mut r = kernel();
+    assert_eq!(r.available(SYSTEM), Ok(budget(100)));
+    let root = session(&mut r);
+    let a = r.create_service(key(2), root, budget(60)).unwrap();
+    let b = r.create_service(key(2), root, budget(60)).unwrap();
+    let first = r.reserve(a, budget(40)).unwrap();
+    let second = r.reserve(b, budget(40)).unwrap();
+    assert_eq!(
+        r.available(a),
+        Ok(Usage::ZERO),
+        "parent pressure bounds a leaf allocator"
+    );
+    assert_eq!(r.available(SYSTEM), Ok(budget(20)));
+    r.release(second).unwrap();
+    assert_eq!(r.available(a), Ok(budget(20)));
+    let trusted = r.reserve(SYSTEM, budget(60)).unwrap();
+    assert_eq!(
+        r.available(a),
+        Ok(Usage::ZERO),
+        "recovery allocations temporarily consume user headroom"
+    );
+    r.release(trusted).unwrap();
+    r.release(first).unwrap();
+    assert_eq!(r.available(a), Ok(budget(60)));
+    r.close(key(2), a).unwrap();
+    assert_eq!(r.available(a), Err(Error::Closed));
+    r.ack_closed(key(2), a).unwrap();
+    assert_eq!(r.available(a), Err(Error::Missing));
+}
+
+#[test]
+fn recovery_use_in_one_resource_does_not_block_unrelated_allocations() {
+    let mut r = kernel();
+    let root = session(&mut r);
+    let scope = r.create_service(key(2), root, budget(60)).unwrap();
+    let trusted = r
+        .reserve(
+            SYSTEM,
+            Usage {
+                threads: 100,
+                ..Usage::ZERO
+            },
+        )
+        .unwrap();
+    let room = r.available(scope).unwrap();
+    assert_eq!(room.pages, 60);
+    assert_eq!(room.threads, 0);
+    let mut pages = r
+        .reserve(
+            scope,
+            Usage {
+                pages: 60,
+                ..Usage::ZERO
+            },
+        )
+        .expect("thread recovery pressure must not deny a page-only reservation");
+    assert_eq!(
+        r.grow(
+            &mut pages,
+            Usage {
+                threads: 1,
+                ..Usage::ZERO
+            }
+        ),
+        Err(Error::Limit)
+    );
+    assert_eq!(
+        r.status(key(1), SYSTEM).unwrap().used,
+        Usage {
+            pages: 60,
+            threads: 100,
+            ..Usage::ZERO
+        }
+    );
+    r.release(pages).unwrap();
+    r.release(trusted).unwrap();
+    assert_eq!(r.status(key(1), SYSTEM).unwrap().used, Usage::ZERO);
+}

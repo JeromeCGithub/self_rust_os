@@ -70,6 +70,11 @@ macro_rules! resources {
     ($($field:ident),+) => {
         impl Usage {
             fn fits(self, ceiling:Self)->bool {$(self.$field<=ceiling.$field)&&+}
+            fn permits_growth(self, delta:Self, ceiling:Self)->bool {
+                $((delta.$field==0 || self.$field<=ceiling.$field))&&+
+            }
+            fn room(self, used:Self)->Self {Self{$($field:self.$field.saturating_sub(used.$field)),+}}
+            fn minimum(self, other:Self)->Self {Self{$($field:self.$field.min(other.$field)),+}}
             fn add(self, rhs:Self)->Result<Self,Error> {
                 Ok(Self{$($field:self.$field.checked_add(rhs.$field).ok_or(Error::Limit)?),+})
             }
@@ -367,7 +372,9 @@ impl Registry {
             } else {
                 node.limit
             };
-            if !node.used.add(used)?.fits(ceiling) {
+            // Init can deliberately consume its recovery floor in one domain.
+            // A zero delta in that domain must not block unrelated resources.
+            if !node.used.add(used)?.permits_growth(used, ceiling) {
                 return Err(Error::Limit);
             }
         }
@@ -376,6 +383,25 @@ impl Registry {
             node.used = node.used.add(used)?;
         }
         Ok(())
+    }
+    /// Kernel-side remaining room after every ancestor/recovery constraint.
+    /// Choose the scope from kernel ownership metadata, not unvalidated input.
+    pub fn available(&self, scope: u64) -> Result<Usage, Error> {
+        let (chain, count) = self.lineage(scope)?;
+        let mut result = self.view(scope)?.limit;
+        for &index in &chain[..count] {
+            let node = self.slots[index].ok_or(Error::Missing)?;
+            if node.state != State::Open {
+                return Err(Error::Closed);
+            }
+            let ceiling = if node.kind == Kind::System && scope != SYSTEM {
+                node.limit.subtract(self.recovery)?
+            } else {
+                node.limit
+            };
+            result = result.minimum(ceiling.room(node.used));
+        }
+        Ok(result)
     }
     /// Reserve before allocation/publication; a failed constructor returns the
     /// opaque charge after rollback. Native callers choose scope from kernel data.
@@ -554,3 +580,6 @@ mod tests {
         assert!(registry.next_closed(init).is_none());
     }
 }
+
+mod transaction;
+pub use transaction::{Growth, Reservation};
