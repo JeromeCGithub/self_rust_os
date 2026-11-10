@@ -323,6 +323,11 @@ launchers by the same FAT order as DE, so new user applications remain testable.
 quota failure ordering, cleanup and retained resource leases. Run it serially
 with the ATA/FAT32 fixture tests. It uses kernel contexts, not Ring 3 scope grants.
 
+The RAM-backed FAT unit cases also instrument live heap usage during disk reads
+and writes, check subrange sector counts and buffer guards, and inject extension
+publication/read failures to verify staged-cluster recovery. They supplement the
+native quota tests; they do not establish filesystem grants or I/O cancellation.
+
 After a fresh native-init image build, run the existing real Ring 3 filesystem
 probe under Initator, including eight concurrent shared-cursor workers:
 

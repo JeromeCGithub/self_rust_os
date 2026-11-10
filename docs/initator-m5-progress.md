@@ -818,6 +818,84 @@ This closes the listing allocation gap. Internal FAT file read/write, path
 resolution and mutation scratch allocations still require work. It does not
 provide filesystem grants, cancellation or complete hostile-service isolation.
 
+## Bounded FAT file I/O and borrowed path traversal
+
+[`fat32.rs`](../src/fat32.rs) no longer allocates copied path-component vectors
+or a final filename string during lookup. Parent resolution borrows the caller's
+owned path and validates all components before disk lookup, preserving invalid-name
+error ordering. Recursive directory creation also walks borrowed components;
+creating names still has separate metadata allocations described below.
+
+Whole-file and offset reads fill the already admitted caller buffer directly.
+The checked cluster-subrange helper uses only partial-sector scratch and retains
+bulk device reads for aligned middle sectors. Range arithmetic and the complete
+requested disk extent are checked before I/O. Zero-length cluster subranges
+perform no sector transfers; path APIs still validate file metadata. Small reads
+no longer fetch all sectors of a cluster.
+
+Whole-file replacement writes from the admitted source slice without constructing
+a second cluster buffer. Cluster allocation clears sectors with a fixed zero
+buffer. Offset writes validate the existing chain using its length/tail rather
+than collecting every cluster in a vector, build any growth as a separate chain,
+and patch affected sectors with fixed scratch. Growth is linked only after data
+writes, then the directory size is published. Failure paths free staged growth
+and restore the old tail link as before. This preserves the existing error model:
+in-place overwrites are not transactional, persistent device errors can defeat
+rollback, and this adds no crash consistency, fsync or durability guarantee.
+
+Observed red checks under `target/initator-m5-evidence/`:
+
+- `fat-read-metadata-red.log`: copied path metadata raised live heap usage during
+  mock disk I/O above the pre-operation baseline.
+- `fat-read-buffer-red.log`: after borrowing paths, offset-read cluster scratch
+  still raised usage above that baseline.
+- `fat-read-mkdir-red.log`: walking an existing directory for recursive mkdir
+  still copied its components.
+- `fat-write-buffer-red.log`: replacement/cluster-zero scratch still allocated.
+- `fat-range-buffer-red.log`: the per-file cluster vector still allocated during
+  an offset write. Each preceding stage was removed before the next red run.
+
+The RAM device checks heap usage on reads and writes; operation data/output are
+allocated before enabling that check. Tests cover aligned and unaligned ranges,
+sector/cluster boundaries, EOF, empty requests, caller-buffer guards, long Unicode
+paths, complete path validation, gap zeros, cross-sector patching, replacement
+and truncation. Cluster-subrange tests assert exact sector counts and reject
+out-of-range/overflow requests without I/O. Repeated injected publication and
+gap-read failures assert old contents/size, tail termination and exact free-cluster
+recovery. Existing disk-full/replacement and unrelated-cluster write assertions
+remain in the suite.
+
+Validation run for this checkpoint:
+
+- Default and GRUB debug builds and both complete release disk builders:
+  `target/init-m5-fat-io.img` (native) and `target/init-m5-fat-io-desktop.img`.
+- 102 kernel unit cases; ten integration executables (`display_mapping`, `fat32`,
+  `ipc`, `keyboard_timer`, `native_supervision`, `process_supervision`,
+  `scoped_files`, `scopes`, `stdio`, `threads`). FAT fixture checks ran serially;
+  the wrapper's underlying `cargo test --test fat32` was included directly.
+- 81 real Ring 3 runs: the 22 native init cases, native `init_file_io.py`, unit
+  `vectors`, default `file_io.py`, and capability `names`/`files`, each at 1/8/32
+  CPUs. These include shared-cursor workers, large files and host-mtools name
+  interoperability, not just kernel-context calls.
+- Full default desktop at eight CPUs; six isolated 8 MiB/s loader/watchdog checks
+  (normal and cancellation at 1/8/32 CPUs), all with zero watchdog delay ticks.
+- Documentation/link checks and `git diff --check`. Unchanged host core/tooling
+  suites were not rerun. No timeout or latency budget was increased.
+
+Logs are `fat-*-red.log` and `fat-io-*.log` under
+`target/initator-m5-evidence/`; tested screenshots are in `fat-io-screenshots/`.
+The generated tracked screenshots and disposable FAT image are restored. The
+allocation/rollback proof comes from executable assertions and counters rather
+than a screenshot. Final source edits after the release builds are comments only.
+Manual host GUI and physical hardware remain unverified; the existing debug heap
+stress timeout was not rerun or claimed as passing.
+
+This removes path-copy, read, replacement and offset-write heap scratch from the
+native syscall paths. Creation/alias/VFAT slot metadata still allocates and is the
+next filesystem accounting gap. Filesystem grants, I/O cancellation/quiescence,
+socket/audio budgets, the Ring 3 scope factory, scope-aware Initator cleanup and
+Nest remain unfinished; this is not a completed M5 or hostile-service sandbox.
+
 ## Scope integration invariants for the next implementation
 
 - Keep the initial hierarchy bounded: system/session roots and service scopes;
