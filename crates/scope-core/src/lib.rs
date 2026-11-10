@@ -22,8 +22,9 @@
 //! scope controls pass to init. These events never consume process completion.
 //! This crate is not a userspace ABI. The native scheduler adapter currently
 //! accounts process/thread reservations, private frames and selected persistent
-//! allocations and IPC handles/inboxes; filesystem, socket and audio accounting
-//! remain separate work. Host tests alone do not prove kernel containment.
+//! allocations, IPC handles/inboxes and descriptor/buffer leases; filesystem
+//! grants/remaining allocation paths, socket and audio accounting remain separate
+//! work. Host tests alone do not prove kernel containment.
 #![no_std]
 pub use rustos_process_abi::supervision::ProcessKey;
 /// Fixed scope table, including the reserved system root.

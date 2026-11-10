@@ -2,6 +2,7 @@
 //! Lock order: filesystem service -> open file. Never hold the scheduler lock
 //! during disk I/O or while taking either service lock.
 use alloc::{string::String, sync::Arc};
+use rustos_scope_core::Usage;
 use spin::Mutex;
 
 pub(crate) const OPEN: u64 = 23;
@@ -21,6 +22,9 @@ pub(crate) struct OpenFile {
     offset: usize,
     access: u64,
     ready: bool,
+    // Field order releases the path allocation before publishing quota release.
+    // Shared Arc owners retain this lease through concurrent/blocked file I/O.
+    _lease: crate::scheduler::ResourceLease,
 }
 pub(crate) struct Files {
     pub(crate) cwd: String,
@@ -101,7 +105,10 @@ pub(crate) fn path(pointer: u64, kind: PathKind) -> Option<String> {
     })?
 }
 
-pub(crate) fn syscall(number: u64, first: u64, second: u64, third: u64) -> u64 {
+/// Kernel facade for descriptor/cwd operations in the current process's address
+/// space. The syscall dispatcher applies capability filtering before this helper;
+/// each operation independently validates buffers, ownership and native quotas.
+pub fn syscall(number: u64, first: u64, second: u64, third: u64) -> u64 {
     match number {
         OPEN if third == 0 => open(first, second),
         CLOSE if second == 0 && third == 0 => crate::scheduler::with_files(|files| {
@@ -155,12 +162,22 @@ fn open(pointer: u64, flags: u64) -> u64 {
     };
     // Reserve the slot before any create/truncate side effects. This also makes
     // concurrent opens in sibling threads observe the process descriptor quota.
-    let file = Arc::new(Mutex::new(OpenFile {
-        path: path.clone(),
+    let Ok(lease) = crate::scheduler::reserve_resource(Usage {
+        descriptors: 1,
+        kernel_bytes: path.capacity() as u64,
+        ..Usage::ZERO
+    }) else {
+        return ERROR;
+    };
+    let Ok(file) = Arc::try_new(Mutex::new(OpenFile {
+        path,
         offset: 0,
         access: flags & 3,
         ready: false,
-    }));
+        _lease: lease,
+    })) else {
+        return ERROR;
+    };
     let Some(Some(fd)) = crate::scheduler::with_files(|files| {
         let index = if let Some(index) = files.slots.iter().position(Option::is_none) {
             index
@@ -178,20 +195,23 @@ fn open(pointer: u64, flags: u64) -> u64 {
     };
     let system = crate::scheduler::system_write_authority();
     let result = super::with_fs(|fs| {
+        // The service lock precedes the open-file lock. No scheduler acquisition
+        // occurs here; path and reservation remain owned through the whole I/O.
+        let mut open_file = file.lock();
         if flags & 3 != 0 || flags & (CREAT | TRUNC) != 0 {
-            super::authorize_write(fs, &path, system)?;
+            super::authorize_write(fs, &open_file.path, system)?;
         }
-        match fs.file_size(&path) {
+        match fs.file_size(&open_file.path) {
             Ok(_) => (),
             Err(crate::fat32::FatError::FileNotFound) if flags & CREAT != 0 => {
-                fs.create_file(&path)?
+                fs.create_file(&open_file.path)?
             }
             Err(error) => return Err(error),
         }
         if flags & TRUNC != 0 {
-            fs.write_file(&path, &[])?;
+            fs.write_file(&open_file.path, &[])?;
         }
-        file.lock().ready = true;
+        open_file.ready = true;
         Ok(())
     });
     if matches!(result, Some(Ok(()))) {
@@ -212,7 +232,7 @@ fn descriptor(fd: u64) -> Option<Arc<Mutex<OpenFile>>> {
 }
 
 /// Descriptor read used by the existing read syscall for fd >= 3.
-pub(crate) fn read(fd: u64, pointer: u64, length: u64) -> u64 {
+pub fn read(fd: u64, pointer: u64, length: u64) -> u64 {
     let Some(file) = descriptor(fd) else {
         return ERROR;
     };
@@ -220,8 +240,27 @@ pub(crate) fn read(fd: u64, pointer: u64, length: u64) -> u64 {
     if !crate::userspace::usercopy::validate(pointer, length, true) {
         return ERROR;
     }
+    // Declare the lease before the buffer: every return drops buffer storage
+    // before the lock-free release is published, including I/O/copy failure.
+    let Ok(lease) = crate::scheduler::reserve_resource(Usage {
+        kernel_bytes: count as u64,
+        ..Usage::ZERO
+    }) else {
+        return ERROR;
+    };
     let mut bytes = alloc::vec::Vec::new();
     if bytes.try_reserve_exact(count).is_err() {
+        return ERROR;
+    }
+    if crate::scheduler::grow_resource(
+        &lease,
+        Usage {
+            kernel_bytes: (bytes.capacity() - count) as u64,
+            ..Usage::ZERO
+        },
+    )
+    .is_err()
+    {
         return ERROR;
     }
     bytes.resize(count, 0);
@@ -249,8 +288,27 @@ fn write(fd: u64, pointer: u64, length: u64) -> u64 {
         return ERROR;
     }
     let count = length.min(MAX_IO as u64) as usize;
+    // Declare the lease before the buffer: every return drops buffer storage
+    // before the lock-free release is published, including I/O/copy failure.
+    let Ok(lease) = crate::scheduler::reserve_resource(Usage {
+        kernel_bytes: count as u64,
+        ..Usage::ZERO
+    }) else {
+        return ERROR;
+    };
     let mut bytes = alloc::vec::Vec::new();
     if bytes.try_reserve_exact(count).is_err() {
+        return ERROR;
+    }
+    if crate::scheduler::grow_resource(
+        &lease,
+        Usage {
+            kernel_bytes: (bytes.capacity() - count) as u64,
+            ..Usage::ZERO
+        },
+    )
+    .is_err()
+    {
         return ERROR;
     }
     bytes.resize(count, 0);

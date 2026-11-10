@@ -11,8 +11,10 @@ kernel now attaches native principals, enforces mechanism capability domains and
 supports one-way process rights reduction and protects system-file mutations.
 Kernel-only scoped construction, page/thread accounting and descendant cleanup
 are now wired. The Ring 3 scope grant/event ABI, session home/tmp grants and
-filesystem/socket/audio accounting remain incomplete; Nest does not yet run.
-IPC endpoint/inbox budgets and atomic grant accounting are now wired below.
+filesystem grants/remaining allocation paths and socket/audio accounting remain
+incomplete; Nest does not yet run.
+IPC endpoint/inbox budgets, atomic grant accounting and descriptor/buffer leases
+are now wired below.
 Syscalls 129–130 and their SDK wrappers are wired. The remaining authority/resource
 enforcement must be implemented in this same milestone before delivery. Do not interpret a decoded description as a
 grant.
@@ -45,7 +47,7 @@ Existing irreversible worker restrictions must remain a stricter intersection.
   monotonic, unreused PIDs; scope membership must not use a PID as a bit index.
 - [Common construction](../src/scheduler.rs) is the single Process initializer;
   all five existing spawn paths now inherit an ordinary-child principal there
-  before grant/frame publication. Explicit scoped grants remain future work. Current construction initializes the
+  before grant/frame publication. Explicit scoped grants now exist as a kernel-only interface. Current construction initializes the
   worker ceiling to None; the existing worker syscall allowlist prohibits spawn.
 - [Worker permission filtering](../crates/process-abi/src/isolation.rs) is a bounded
   allowlist, not general user identity or delegation. The dispatcher applies it
@@ -58,8 +60,8 @@ Existing irreversible worker restrictions must remain a stricter intersection.
   create/truncate effects, across descriptor and old path syscalls.
 - [Frame transactions](../src/memory/owned.rs) own all unpublished allocations and
   roll back on failure. [Heap growth](../src/scheduler/heap.rs) presently enforces
-  only a restricted worker's heap ceiling; initial image, stack, surface, page
-  tables and thread resources require scope accounting too. Charges and physical
+  the restricted worker's heap ceiling and native scope limits; initial image,
+  stack, surface, page tables and threads also retain native resource charges. Charges and physical
   reclamation have distinct lifetimes.
 - The default desktop is still the trusted legacy profile. Native M5 session
   enforcement must not be described as protection already supplied to that path.
@@ -501,6 +503,99 @@ serial transcripts are the primary evidence. Manual host GUI/physical hardware
 checks remain unverified. Normal Initator launches still use the trusted system
 root; this checkpoint does not complete M5 or justify opening its milestone PR.
 
+## Descriptor and I/O resource leases
+
+[Resource leases](../src/scheduler/resources.rs) now retain independent charges
+through work outside the kernel entry gate. SCHEDULER owns a fixed boot-allocated
+8192-record pool and release queue, with 64 records reserved for the system root.
+Records use nonwrapping serial identities and cannot be reused while their release
+is queued. A destructor publishes exactly one key without allocating or acquiring
+SCHEDULER; a capacity-sized queue therefore accommodates every outstanding lease.
+Scheduler entry/idle reclamation and subsequent resource admission collect releases
+under SCHEDULER. Collection has a fixed record-count bound because producers cannot
+create replacement leases while that lock is held. Leases can outlive their PCB.
+The shared table/free lists/queue are bounded boot infrastructure, allocated before
+native userspace publication; their final queue/Arc allocation is a fatal boot
+heap prerequisite. No hard IRQ creates or destroys these leases.
+
+[Descriptor construction](../src/fs/handles.rs) reserves a descriptor and its path
+allocation before constructing/publishing an OpenFile or performing disk effects.
+The normalized path is moved into the object, replacing an extra clone. The open
+file's lease is its last field, so path storage is released before its release key
+is published. Shared Arc references retain that lease through concurrent close or
+blocked I/O. Object allocation now uses fallible Arc::try_new; the existing pinned
+nightly needs the explicit allocator_api feature for it. No compiler, dependency,
+target or linker configuration was updated.
+
+Native boot caps descriptors at 4096 and leaves 32 for the system root. The existing
+1024-number per-process bound is preserved. Slot reservation still precedes
+create/truncate; failed opens restore only their own slot and retain temporary
+charges until collection. Read/write reserve the bounded owned buffer before
+allocation, then charge any larger actual capacity before I/O. Locals drop buffer
+storage before the lease, including allocation/copy/I/O failure. Filesystem/open-file
+locks never call back into SCHEDULER. The dispatcher and kernel integration harness
+use the same validated Rust descriptor facades; syscall numbers, record layouts,
+generic errors and existing SDK wrappers are unchanged. Legacy boot returns
+explicitly unscoped leases.
+
+The new [scoped file integration](../tests/scoped_files.rs) first returned descriptor
+3 for a zero-descriptor scope's truncating open (`scopes-fd-quota-red.log`). It now
+checks repeated create/truncate denial without disk effects; 16 failed/successful
+open/read/close/reuse cycles; invalid buffers preserving cursor position; I/O-byte
+exhaustion preserving cursor and file contents; zero-length progress without
+allocating a buffer; and close/exit cleanup. A shared leased object retained beyond
+process/frame/stack reclamation keeps its scope Closing until its final reference
+drops and collection runs. Global counters then return exactly to baseline.
+The native 4064/32 recovery admission check uses unpublished aggregate reservations,
+not a claim that 4064 real files were opened. Three kernel unit cases test queue
+saturation/reuse, release while SCHEDULER is already locked without heap allocation,
+reserved record availability, stale identities, failed growth, serial exhaustion
+with cleanup and zero-sized reservations. Their initial missing-pool interface
+failure is `scopes-resource-pool-red.log`.
+
+The new integration explicitly formats only the disposable 16 MiB secondary-master
+fixture `tests/fixtures/disk-fat32.img`; serialize it with ATA/FAT32 fixture tests.
+It runs kernel-side contexts on one CPU. The retained-object test models the Arc
+lifetime used by blocked I/O; it does not execute a killed scoped Ring 3 I/O thread.
+Full scoped Ring 3/SMP I/O cancellation/quiescence tests still require the grant ABI.
+Descriptor Arc/slot-vector headers remain bounded infrastructure rather than
+selected-byte charges. Cwd/path-copy metadata, old path APIs, image/argument buffers,
+directory listing and internal FAT allocations still require budget/cancellation
+work, as do stable home/tmp grants. This is not complete filesystem isolation.
+
+Validation passes: 98 kernel unit cases, nine integration executables (including
+scoped_files), both boot-path builds, test compilation, FAT32's two real-disk
+integration cases and fresh native/default GRUB release images with all apps rebuilt.
+The native image passes all 66 existing boot/supervision/principal/capability/system-
+file cases on 1/8/32 CPUs. The default image passes the descriptor probe on all
+three CPU profiles and the complete eight-CPU desktop interaction suite. All
+15 shutdown cases pass, including pending-loader cancellation; the six isolated
+loader/watchdog profiles report zero watchdog-delay ticks at unchanged budgets.
+
+[The native file runner](../e2e/init_file_io.py) additionally installs the existing
+zfileio probe as a finite Restart=never service beside Glow. All three CPU profiles
+pass actual native resource-leased opens, process exit/kill cleanup, 1024-descriptor
+limits and eight shared-cursor workers delivering every record exactly once.
+The runner requires PID 1 bring-up, distinct service identities, the full probe
+marker, that exact service's successful completion and surviving sibling progress.
+Six host regressions first failed on the missing runner-evidence interface, then
+pass for fixture shape, incomplete records, foreign completions, failure status,
+duplicate/reused identities and sibling termination. The complete Python suite
+passes (85 cases). This native test uses the trusted system scope; it does not
+replace future scoped user-session Ring 3 acceptance.
+
+Evidence is retained under `target/initator-m5-evidence/`:
+`scopes-fd-{unit,integration,fat32,native,file-io,desktop,shutdown,latency}.log`,
+`scopes-fd-supervised-file-io.log`, `scopes-fd-native-harness-{red,green}.log` and
+`scopes-fd-final-tooling.log`. Builds use `scopes-fd-{build-default,build-grub,no-run}.log`
+and `scopes-fd-final-{native-build,desktop-build}.log`. Tested desktop screenshots
+are archived in `scopes-fd-screenshots/`; generic tracked images are restored.
+Quota ownership/lifetime evidence is the executable allocator/state assertions
+and serial logs; screenshots cannot demonstrate it. Manual host GUI and physical
+hardware checks remain unverified. The earlier missing-doc warning on the new
+integration entry was corrected; only the pre-existing bootloader rustc-abi warning
+remains. M5 is still incomplete and no milestone PR is opened.
+
 ## Scope integration invariants for the next implementation
 
 - Keep the initial hierarchy bounded: system/session roots and service scopes;
@@ -528,11 +623,12 @@ root; this checkpoint does not complete M5 or justify opening its milestone PR.
 ## Remaining milestone acceptance
 
 Finish the Ring 3 authenticated scope/session factory, scoped spawn/status/events,
-and filesystem/socket/audio accounting and permissions. Add
-temporary-I/O reservations/cancellation and quiescence
+and remaining filesystem allocation/grant, socket and audio accounting/permissions.
+Finish temporary-I/O reservations/cancellation and quiescence
 checks, home/tmp grants, old-syscall bypass denial and least-authority IPC.
 Bind Initator's launches to service scopes and wait for scope cleanup in stop/restart
-jobs. Kernel-only identity, frame/thread and IPC budget tests do not complete these gates.
+jobs. Kernel-only identity, frame/thread, IPC and descriptor tests do not complete
+these gates.
 Only then launch Nest as an explicitly unauthenticated fixed developer session
 under a distinct kernel user/session identity, with two supervised user services.
 Test independent sessions, failures, cleanup and resource pressure in QEMU at

@@ -140,7 +140,7 @@ pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: 
         SYS_WRITE => sys_write(arg1, arg2),
         SYS_READ => sys_read(arg1, arg2, arg3),
         25 if arg1 == 1 || arg1 == 2 => sys_write(arg2, arg3),
-        23..=28 => crate::fs::handles::syscall(num, arg1, arg2, arg3),
+        23..=28 => crate::fs::file_syscall(num, arg1, arg2, arg3),
         32 => crate::scheduler::thread_pointer(arg1, arg2, arg3),
         33 => crate::fs::handles::readdir(arg1, arg2, arg3),
         31 if arg2 == 0 && arg3 == 0 => crate::scheduler::program_break(arg1),
@@ -365,7 +365,7 @@ fn sys_write(buf_ptr: u64, len: u64) -> u64 {
 /// * `len` - Maximum bytes to read.
 fn sys_read(fd: u64, buf_ptr: u64, len: u64) -> u64 {
     if fd >= 3 {
-        return crate::fs::handles::read(fd, buf_ptr, len);
+        return crate::fs::file_read(fd, buf_ptr, len);
     }
     if fd != 0 {
         return SYSCALL_ERROR;

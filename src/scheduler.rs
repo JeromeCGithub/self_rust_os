@@ -37,6 +37,7 @@ struct Scheduler {
     processes: ProcessTable,
     ipc: rustos_ipc_core::Registry,
     scopes: rustos_scope_core::Registry,
+    resources: resources::Pool,
     draining_scopes: bool,
     threads: Vec<Option<Thread>>,
     retired: Vec<Process>,
@@ -54,6 +55,7 @@ impl Scheduler {
             processes: ProcessTable::new(),
             ipc: rustos_ipc_core::Registry::new(),
             scopes: rustos_scope_core::Registry::new(),
+            resources: resources::Pool::new(),
             draining_scopes: false,
             threads: Vec::new(),
             retired: Vec::new(),
@@ -108,6 +110,8 @@ impl Scheduler {
 }
 static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 
+mod resources;
+pub use resources::{grow_resource, reserve_resource, ResourceLease};
 mod scopes;
 pub use scopes::{
     scope_ack_closed, scope_close, scope_create_service, scope_create_session,

@@ -9,6 +9,10 @@ use x86_64::{
 /// Called on syscall entry or a CPU-owned idle stack, never in a hard IRQ.
 pub fn reap_retired() {
     let mut s = SCHEDULER.lock();
+    let Scheduler {
+        resources, scopes, ..
+    } = &mut *s;
+    resources.collect(scopes);
     loop {
         let dead = s
             .threads
