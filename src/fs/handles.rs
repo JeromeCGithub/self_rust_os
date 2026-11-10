@@ -176,7 +176,11 @@ fn open(pointer: u64, flags: u64) -> u64 {
     }) else {
         return ERROR;
     };
+    let system = crate::scheduler::system_write_authority();
     let result = super::with_fs(|fs| {
+        if flags & 3 != 0 || flags & (CREAT | TRUNC) != 0 {
+            super::authorize_write(fs, &path, system)?;
+        }
         match fs.file_size(&path) {
             Ok(_) => (),
             Err(crate::fat32::FatError::FileNotFound) if flags & CREAT != 0 => {
@@ -253,8 +257,12 @@ fn write(fd: u64, pointer: u64, length: u64) -> u64 {
     if !crate::userspace::usercopy::from_user(pointer, &mut bytes) {
         return ERROR;
     }
+    let system = crate::scheduler::system_write_authority();
     super::with_fs(|fs| {
         let mut file = file.lock();
+        if super::authorize_write(fs, &file.path, system).is_err() {
+            return ERROR;
+        }
         if !file.ready || file.access == 0 {
             return ERROR;
         }

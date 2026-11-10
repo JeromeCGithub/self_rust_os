@@ -8,8 +8,9 @@ is in [the M4 record](initator-m4-progress.md). M5 starts from that commit on
 **M5 is incomplete.** The first addition is a host-tested principal description and
 attenuation policy in [process-abi](../crates/process-abi/src/principal.rs). The
 kernel now attaches native principals, enforces mechanism capability domains and
-supports one-way process rights reduction. It does not yet create resource scopes,
-enforce filesystem root grants or run Nest. Syscalls 129–130 and their SDK wrappers
+supports one-way process rights reduction and protects system-file mutations.
+It does not yet create resource scopes, enforce session home/tmp grants or run
+Nest. Syscalls 129–130 and their SDK wrappers
 are wired; the remaining authority/resource enforcement must be implemented in
 this same milestone before delivery. Do not interpret a decoded description as a
 grant.
@@ -93,7 +94,8 @@ unmapped/noncanonical/wrapping buffers, exact sizes/reserved words, crossing two
 writable pages, preserved guard bytes and overwriting fake input metadata.
 
 These identities currently describe the system context: user 0/session 0/reserved
-system scope 1. Actual user/session creation, scope objects/accounting and protected filesystem
+system scope 1. Actual user/session creation, scope objects/accounting and
+per-session filesystem
 grants are not implemented yet. Mechanism-domain filtering is now implemented,
 but a capability description is not proof that the remaining resource/path
 boundaries exist.
@@ -146,6 +148,41 @@ Spark cooperative-stop and whole-system cooperative-shutdown cases also pass.
 The fresh default-profile eight-CPU desktop suite and 75 Python tooling tests
 also pass. These are checks for this increment, not the final M5 acceptance matrix.
 
+## Protected system-file mutations
+
+Native ordinary writers cannot modify `/BIN`, `/ETC` or `/kernel.elf` without the
+non-inheritable SYSTEM_WRITE right. PID 1 retains recovery/configuration writes.
+[Filesystem authorization](../src/fs.rs) runs under the same filesystem lock as
+create/truncate/write, with [FAT entry resolution](../src/fat32.rs) comparing the
+actual root entry for long/short aliases. Missing root labels remain reserved.
+Canonical path handling supplies cwd, case and `.`/`..` semantics before this
+check. Both old path writes/mkdir and descriptor open/write are guarded. Metadata
+is snapshotted before taking FS locks, preserving scheduler/FS/open-file lock order.
+The legacy profile is explicitly trusted, including inherited legacy flags; this
+is not a claim of new isolation for the default desktop.
+
+The new kernel test first failed on an unprotected reserved name. The native probe
+first reproduced an ordinary child overwriting `/ETC/SYSLOCK.TXT`. After wiring,
+93 kernel unit cases and 1/8/32-CPU native system-file cases pass: old path writes,
+writable/open/create/truncate modes, relative/cwd/parent/case/alias paths, protected
+executables and boot kernel, no failed-create/mkdir side effects, intact fixture
+bytes, and 32 denied opens without leaking a descriptor reservation. Unprotected
+sibling prefixes remain writable; PID 1 can truncate/write the protected fixture.
+Known-right expansion cannot mint SYSTEM_WRITE. The RAM-backed FAT test covers
+protected long-name root directories/files through their 8.3 aliases, aliases as
+labels, malformed/non-normalized paths and missing reserved entries.
+
+Evidence is in `target/initator-m5-evidence/system-files-*.log`: red kernel/native
+failures, green kernel/native results, fresh images and all rebuilt applications.
+The twelve 1/8/32-CPU cases also recheck reduction, query/inheritance and two-service
+supervision. Default/GRUB builds, native GRUB release, test compilation and the
+FAT32 fixture integration pass. The existing real Ring 3 file-descriptor suite
+also passes on 1/8/32 CPUs, and the fresh default-profile eight-CPU desktop suite
+passes, preserving its explicit legacy exception. Generic desktop screenshots
+from this exact build are retained under the M5 evidence directory. Per-session
+read/write roots, object delegation, disk quotas and scope quiescence are still
+missing. No untrusted user session is launched by this increment.
+
 ## Scope integration invariants for the next implementation
 
 - Keep the initial hierarchy bounded: system/session roots and service scopes;
@@ -174,7 +211,8 @@ also pass. These are checks for this increment, not the final M5 acceptance matr
 
 Finish authorized user/session credential creation and atomic scoped/delegated spawn,
 bounded scopes and all selected resource accounting, owner-death/descendant cleanup,
-alias-safe filesystem grants, old-syscall bypass denial and least-authority IPC.
+per-session filesystem grants beyond the protected system roots, remaining
+old-syscall/session-boundary bypass denial and least-authority IPC.
 Only then launch Nest as an explicitly unauthenticated fixed developer session
 under a distinct kernel user/session identity, with two supervised user services.
 Test independent sessions, failures, cleanup and resource pressure in QEMU at

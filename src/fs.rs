@@ -74,3 +74,23 @@ where
 
 /// Process filesystem resources and regular-file syscall mechanisms.
 pub(crate) mod handles;
+
+/// Authorize a mutation while holding the same filesystem lock as its effects.
+/// These boot-system root labels cannot be created or changed by an ordinary
+/// native writer. FAT entry identity covers both VFAT and short aliases. This
+/// is system-root protection, not per-session home/tmp access control.
+pub(crate) fn authorize_write<B: crate::fat32::BlockDevice>(
+    fs: &mut Fat32<B>,
+    path: &str,
+    system: bool,
+) -> Result<(), crate::fat32::FatError> {
+    if system {
+        return Ok(());
+    }
+    for root in ["BIN", "ETC", "kernel.elf"] {
+        if fs.in_root_entry(path, root)? {
+            return Err(crate::fat32::FatError::AccessDenied);
+        }
+    }
+    Ok(())
+}

@@ -73,3 +73,22 @@ pub fn attenuate_principal(bits: u64, flags: u64, reserved: u64) -> u64 {
     process.principal.capabilities = reduced;
     0
 }
+
+/// Snapshot write authority before acquiring the filesystem service lock. The
+/// legacy desktop remains explicitly trusted until its M6 lease migration.
+/// Native ordinary children cannot inherit protected-system-write authority.
+pub(crate) fn system_write_authority() -> bool {
+    let scheduler = SCHEDULER.lock();
+    scheduler
+        .current_pid()
+        .and_then(|pid| scheduler.processes.get(pid as usize))
+        .and_then(Option::as_ref)
+        .filter(|process| process.state == ProcessState::Live)
+        .is_some_and(|process| {
+            process.principal.flags & abi::LEGACY != 0
+                || process
+                    .principal
+                    .capabilities
+                    .contains(abi::Capabilities::SYSTEM_WRITE)
+        })
+}

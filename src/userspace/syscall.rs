@@ -527,8 +527,12 @@ fn sys_ls(path_ptr: u64, buf_ptr: u64, max_entries: u64) -> u64 {
 /// Takes a null-terminated path in `path_ptr`. Returns 0 on success,
 /// or SYSCALL_ERROR.
 fn sys_mkdir(path_ptr: u64) -> u64 {
+    let system = crate::scheduler::system_write_authority();
     let result = crate::fs::handles::path(path_ptr, crate::fs::handles::PathKind::RecursiveCreate)
-        .map(|path| crate::fs::with_fs(|fs| fs.create_dir(&path)));
+        .map(|path| crate::fs::with_fs(|fs| {
+            crate::fs::authorize_write(fs, &path, system)?;
+            fs.create_dir(&path)
+        }));
     match result {
         Some(Some(Ok(()))) => 0,
         _ => {
@@ -585,8 +589,10 @@ fn sys_write_file(path_ptr: u64, buf_ptr: u64, len: u64) -> u64 {
     let Ok(bytes) = user_slice(buf_ptr, len) else {
         return SYSCALL_ERROR;
     };
+    let system = crate::scheduler::system_write_authority();
     match with_user_path(path_ptr, |path| {
         crate::fs::with_fs(|fs| {
+            crate::fs::authorize_write(fs, path, system)?;
             let _ = fs.create_file(path);
             fs.write_file(path, &bytes)
         })

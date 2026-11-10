@@ -692,6 +692,19 @@ owned IPC operations, child control, private waits, descriptor/socket/audio clos
 and progress retain their existing validation without requiring factory rights.
 System action 128 still reaches its independent init gate and returns typed Denied
 for ordinary callers. Unknown syscall numbers fail closed. Display operations keep
-their current legacy ownership gates pending M6; `SYSTEM_WRITE`/`SCOPE_CREATE`
-remain reserved for upcoming path and scope enforcement. The trusted legacy desktop
-retains its inherited mechanism rights and its earlier ownership exceptions.
+their current legacy ownership gates pending M6; `SCOPE_CREATE` remains reserved
+for upcoming scope enforcement. The trusted legacy desktop retains its inherited
+mechanism rights and its earlier ownership exceptions.
+
+Native mutation of `/BIN`, `/ETC` and `/kernel.elf` requires `SYSTEM_WRITE` in
+addition to the appropriate file mechanism right. Ordinary spawn does not inherit
+this bit. The legacy principal flag explicitly exempts the trusted desktop from
+this new root policy. Path write (7), recursive mkdir (12), writable/create/truncate
+open (23), and each descriptor write (25) authorize under the same filesystem lock
+as their effects. Root labels also reserve missing entries against ordinary
+creation. FAT root-entry identity resolves long/short aliases; normalized paths
+cover cwd, case, `.` and `..`. Read-only opens without create stay available with
+FILE_READ. Denial precedes create/truncate/write; failed opens roll back reserved
+descriptors. Internal `FatError::AccessDenied` maps to the existing general syscall
+error without adding a Linux errno ABI. Per-session read/write grants for home/tmp,
+storage quotas and generic filesystem object delegation remain separate M5 work.

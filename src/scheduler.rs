@@ -106,6 +106,7 @@ static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 
 mod principal;
 pub use principal::{attenuate_principal, principal_user};
+pub(crate) use principal::system_write_authority;
 mod supervision;
 pub(crate) use supervision::system_action_gate;
 pub use supervision::{child_next_user, terminate_child, configure_native_init, fault_current};

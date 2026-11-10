@@ -4,8 +4,13 @@ mod abi;
 mod ipc_probe;
 mod principal_probe;
 mod capabilities_probe;
+mod system_files_probe;
 use userlib::{recordln, supervision, sys};
 fn main(argc: usize, argv: &[&str]) {
+    if argc > 2 && argv[1] == "--system-files-child" {
+        system_files_probe::child(argv[2]);
+        return;
+    }
     if argc > 1 && argv[1].starts_with("--cap-") {
         capabilities_probe::child(argv[1]);
         return;
@@ -67,6 +72,7 @@ fn main(argc: usize, argv: &[&str]) {
     if &mode[..n] == b"principal" { principal_probe::run(identity.pid); }
     assert_eq!(identity.pid, 1);
     if &mode[..n] == b"capabilities" { capabilities_probe::run(); }
+    if &mode[..n] == b"system-files" { system_files_probe::run(); }
     if matches!(&mode[..n], b"halt" | b"halt-audio" | b"halt-no-devices") {
         abi::halt(&mode[..n] == b"halt-audio");
     }
