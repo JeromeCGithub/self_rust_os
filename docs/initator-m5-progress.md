@@ -1177,7 +1177,21 @@ publication and clean up staged chains on cancellation. Long-name and directory
 creation check while their entries are staged; existing rollback paths remain able
 to use raw metadata I/O after cancellation. An already-admitted publication write
 may complete, and closure waits for its pin. Existing in-place writes are not
-transactional. A stale token fails closed after slot reuse.
+transactional. A stale token fails closed after slot reuse. A subsequent
+regression found that a newly cancellable directory scan could interrupt deletion
+after its chain had already been freed. Deletion now resolves the directory slots
+and checks cancellation before freeing the chain; once freeing begins, it finishes
+the admitted deletion without another cancellation check. RAM-backed QEMU tests
+cover cancellation on both sides of this commit point and retry after deletion.
+This closes a kernel FAT integrity issue; no userspace deletion syscall exists.
+The scoped kernel-context QEMU test also stops the owner inside a real `with_fs`
+callback, verifies that a subsequent filesystem read sees cancellation, then
+verifies the next owner's read succeeds. It does not reproduce concurrent Ring 3
+I/O. Both boot builds, 119 kernel tests, FAT/scoped QEMU integrations, the native
+file probe at 1/8/32 CPUs and the 8-CPU existing desktop suite passed for this
+checkpoint. Desktop screenshots are archived under
+`target/initator-m5-evidence/fat-delete-screenshots/`; host GUI and physical
+hardware were not checked.
 
 RAM-backed QEMU fault injection confirmed red-to-green cancellation during a
 directory search, a multi-cluster read, replacement, extension, long-name creation,

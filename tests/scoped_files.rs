@@ -212,7 +212,7 @@ fn actual_filesystem_work_retains_scope(context: &mut u64, initial: Usage) {
         &[0xc3], 4096, &[], &[], scope, Capabilities::FILE_READ,
     ).unwrap();
     activate(child, context);
-    self_rust_os::fs::with_fs(|_| {
+    self_rust_os::fs::with_fs(|fs| {
         activate(1, context);
         scheduler::scope_close(scope).unwrap();
         assert_eq!(scheduler::waitpid(child), 9);
@@ -220,6 +220,13 @@ fn actual_filesystem_work_retains_scope(context: &mut u64, initial: Usage) {
         assert_ne!(scheduler::scope_status(scope).unwrap().used, Usage::ZERO,
             "filesystem callback must retain the issuing process");
         assert!(scheduler::scope_ack_closed(scope).is_err());
+        let mut bytes = [0; 9];
+        assert_eq!(fs.read_file("/LIMIT.TXT", &mut bytes), Err(self_rust_os::fat32::FatError::Cancelled));
+    }).unwrap();
+    self_rust_os::fs::with_fs(|fs| {
+        let mut bytes = [0; 9];
+        assert_eq!(fs.read_file("/LIMIT.TXT", &mut bytes), Ok(9));
+        assert_eq!(&bytes, b"untouched");
     }).unwrap();
     scheduler::reap_retired();
     scheduler::scope_ack_closed(scope).unwrap();

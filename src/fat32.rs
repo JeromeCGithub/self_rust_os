@@ -651,10 +651,6 @@ impl<B: BlockDevice> Fat32<B> {
         self.ensure_not_dir(entry_cluster, dir_index)?;
 
         let start = self.dir_entry_cluster(entry_cluster, dir_index)?;
-        if start != 0 {
-            self.free_chain(start)?;
-        }
-
         let mut linked = [(0u32, 0usize); 20];
         let linked_count = self
             .scan_directory(dir_cluster, |cluster, index, _, _, slots| {
@@ -666,6 +662,13 @@ impl<B: BlockDevice> Fat32<B> {
                 }
             })?
             .unwrap_or_default();
+        // Resolve every cancellable lookup before the first destructive FAT
+        // update. Once chain release begins, complete the directory updates
+        // even if the owner stops; the operation pin keeps its scope alive.
+        self.check_cancelled()?;
+        if start != 0 {
+            self.free_chain(start)?;
+        }
         for (cluster, index) in linked[..linked_count]
             .iter()
             .copied()
@@ -2314,6 +2317,64 @@ mod tests {
             fs.device.reads[second_fat as usize], reads_before_write,
             "cancelled write validation must stop before another FAT sector"
         );
+    }
+
+    #[test_case]
+    fn deletion_cancelled_before_commit_keeps_file_and_storage() {
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        let name = "/Before commit.txt";
+        fs.create_file(name).unwrap();
+        fs.write_file(name, b"kept intact").unwrap();
+        let limit = (fs.total_sectors - fs.first_data_sector) / u32::from(fs.sectors_per_cluster);
+        let free_before = (2..limit + 2)
+            .filter(|&c| fs.read_fat_entry(c) == Ok(super::FAT_FREE))
+            .count();
+        let owner = crate::process::io::Owner::new().unwrap();
+        let operation = owner.begin().unwrap();
+        let token = operation.cancellation();
+        fs.device.cancel_read_lba = Some((fs.cluster_to_lba(fs.root_cluster), token));
+        fs.set_cancellation(Some(token));
+        assert_eq!(fs.delete_file(name), Err(FatError::Cancelled));
+        fs.device.cancel_read_lba = None;
+        fs.set_cancellation(None);
+        let mut data = [0; 11];
+        assert_eq!(fs.read_file(name, &mut data), Ok(data.len()));
+        assert_eq!(&data, b"kept intact");
+        assert_eq!(
+            (2..limit + 2)
+                .filter(|&c| fs.read_fat_entry(c) == Ok(super::FAT_FREE))
+                .count(),
+            free_before
+        );
+    }
+
+    #[test_case]
+    fn deletion_finishes_if_cancelled_after_chain_release_begins() {
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        let name = "/Deletion with a long name.txt";
+        fs.create_file(name).unwrap();
+        fs.write_file(name, &[0x42; 4096]).unwrap();
+        let owner = crate::process::io::Owner::new().unwrap();
+        let operation = owner.begin().unwrap();
+        let token = operation.cancellation();
+        fs.device.cancel_write_lba = Some((u32::from(fs.reserved_sectors), token));
+        fs.set_cancellation(Some(token));
+        assert_eq!(
+            fs.delete_file(name),
+            Ok(()),
+            "an admitted deletion must finish once chain release starts"
+        );
+        assert!(token.cancelled());
+        fs.device.cancel_write_lba = None;
+        fs.set_cancellation(None);
+        assert_eq!(fs.file_size(name), Err(FatError::FileNotFound));
+        fs.create_file(name).unwrap();
+        fs.write_file(name, b"reused").unwrap();
+        let mut bytes = [0; 6];
+        assert_eq!(fs.read_file(name, &mut bytes), Ok(6));
+        assert_eq!(&bytes, b"reused");
     }
 
     #[test_case]
