@@ -1,5 +1,7 @@
 //! PID-owned resources and native thread ownership, independent of run queues.
 use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
+/// Process-owned filesystem operation lifetime pins.
+pub mod io;
 use x86_64::structures::paging::PhysFrame;
 /// PID identifies shared process resources and privileges.
 pub type Pid = u32;
@@ -55,6 +57,7 @@ pub struct Process {
     pub(crate) filesystem_authority: crate::fs::access::Authority,
     /// Native resource reservation, retained through off-CPU physical reclamation.
     pub(crate) scope_charge: Option<rustos_scope_core::Charge>,
+    pub(crate) filesystem_io: io::Owner,
     /// Completion owner assigned before publishing the process.
     pub(crate) parent: Option<Pid>,
     pub(crate) adoption_pending: bool,

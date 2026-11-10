@@ -1140,6 +1140,54 @@ only. Manual host GUI, physical hardware and the public factory's restricted
 Ring 3 matrix remain unverified. The existing debug heap-stress baseline was not
 rerun or claimed as passing. This remains a local M5 checkpoint, not its PR.
 
+## Filesystem stop and reclamation: implementation boundary
+
+The current [entry gate](../src/arch/x86_64/entry.rs) releases serialization
+around filesystem work while CPU ownership retains the calling kernel stack.
+[Reclamation](../src/scheduler/reclaim.rs) waits for a retired process's threads
+to leave CPUs, and resource leases retain staged buffers and descriptors.
+
+A bounded per-process operation pin is now acquired by `with_fs` before releasing
+the entry gate. Process stop cancels its pins while holding SCHEDULER, and the
+filesystem lock wait checks for cancellation. Reclamation retains the process and
+its scope charge until all pins drain; pin destruction takes neither SCHEDULER nor
+FS. Fixed slot metadata is boot-resident and slots are generation-tagged. PID 1's
+fatal-stop behavior remains separate. A native kernel-context QEMU regression held
+multiple pins through stop and confirmed that scope acknowledgement fails until the
+last pin is dropped; another exercised the real `with_fs` callback. Both failed on
+the preceding implementations and passed after the relevant changes. These tests
+do not yet demonstrate a contended lock waiter or concurrent Ring 3 I/O. The
+regression also checks physical-frame recovery. A kernel unit case checks slot
+retention, cancellation and generation change on reuse.
+
+Validation of this checkpoint: both boot-path builds, 109 kernel cases and the
+`scoped_files`, `fat32`, `scopes`, `threads`, `stdio`, `ipc`, `display_mapping`,
+`keyboard_timer`, `native_supervision` and `process_supervision` QEMU integration
+executables passed. Native two-service supervision and the shared-cursor file probe
+passed at 1, 8 and 32 CPUs. The 8-CPU desktop QEMU suite passed; screenshots from
+that run are archived under `target/initator-m5-evidence/io-pins-screenshots/`.
+Host GUI and physical hardware were not checked. The red scoped tests specifically
+observed premature scope reclamation, once with a held pin and once from the real
+filesystem callback, before their respective fixes.
+
+Do not place cancellation checks indiscriminately in raw block writes: FAT error
+paths need uncancelled metadata I/O to release staged cluster chains and undo
+unpublished names. Add checks at bounded operation/sector boundaries, with
+rollback allowed to finish. Define the publication checkpoint explicitly: an
+already-admitted metadata write may finish, and closure must wait for it. Existing
+in-place writes are not transactional. Queued FS-lock waiters must observe stop
+without waiting indefinitely for an unrelated operation.
+
+Still required: add executable red cases for a cancelled queued waiter and
+cancellation during read, replacement, extension and directory publication. Verify unchanged user output
+and cursor on cancelled reads, recovery of unpublished clusters, exact scope/frame
+accounting after the final lease, repeated slot reuse and stale-token rejection.
+Exercise the real native path at 1/8/32 CPUs, including manager progress during
+throttled I/O. Fault injection must distinguish cancellation from device errors;
+no timeout increase or weakened shutdown assertion is acceptable. Until those
+checks pass, the Ring 3 scope factory remains closed and filesystem cancellation
+is not claimed.
+
 ## Scope integration invariants for the next implementation
 
 - Keep the initial hierarchy bounded: system/session roots and service scopes;

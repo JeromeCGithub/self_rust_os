@@ -340,6 +340,7 @@ fn spawn_process_inner(
     {
         return Err("process quota exhausted");
     }
+    let filesystem_io = crate::process::io::Owner::new().ok_or("filesystem I/O slots exhausted")?;
     let pid = sched.next_pid;
     let parent = sched.current_pid();
     let principal = if let Some((scope,caps)) = grant {
@@ -609,6 +610,7 @@ fn spawn_process_inner(
         pid,
         principal,
         filesystem_authority,
+        filesystem_io,
         scope_charge,
         parent,
         adoption_pending: false,
@@ -853,6 +855,7 @@ fn stop_process_with_cause_locked(s: &mut Scheduler, pid: Pid, code: u64, cause:
         return;
     };
     if p.state == ProcessState::Zombie { return; }
+    p.filesystem_io.cancel();
     p.state = ProcessState::Zombie;
     p.files.clear();
     p.exit_code = code;
@@ -1501,4 +1504,24 @@ pub fn spawn_process_with_bindings(
     x86_64::instructions::interrupts::without_interrupts(|| {
         spawn_process_inner(binary, readonly_size, argv, envp, bindings, None, None)
     })
+}
+
+/// Admit a filesystem operation for the current live process.
+pub fn begin_filesystem_operation() -> Option<crate::process::io::FilesystemOperation> {
+    filesystem_operation_for_current().ok().flatten()
+}
+
+// No current process is the trusted boot/idle context. A stopped process is
+// rejected even if its CPU has not finished leaving the old kernel stack.
+pub(crate) fn filesystem_operation_for_current(
+) -> Result<Option<crate::process::io::FilesystemOperation>, ()> {
+    let scheduler = SCHEDULER.lock();
+    let Some(pid) = scheduler.current_pid() else {
+        return Ok(None);
+    };
+    let process = scheduler.processes.get(pid as usize).and_then(Option::as_ref).ok_or(())?;
+    if process.state != ProcessState::Live {
+        return Err(());
+    }
+    process.filesystem_io.begin().map(Some).ok_or(())
 }
