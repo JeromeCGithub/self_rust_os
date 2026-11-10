@@ -183,6 +183,54 @@ from this exact build are retained under the M5 evidence directory. Per-session
 read/write roots, object delegation, disk quotas and scope quiescence are still
 missing. No untrusted user session is launched by this increment.
 
+## Scope ledger (host-tested, not yet native enforcement)
+
+[scope-core](../crates/scope-core/src/lib.rs) follows the existing IPC-core split:
+an allocation-free `no_std` object registry shared with host tests, with all
+kernel context, locking, syscall usercopy and actual destruction left to adapters.
+It is not linked into the kernel yet and exposes no syscall. Its 64 fixed records
+include system root 1, session roots and service leaves. Fresh nonwrapping IDs
+never alias a released slot. Four slots and a configurable vector of resource
+reserves remain available to system recovery. The system root cannot be closed.
+
+Only the kernel-selected init key creates sessions. User 0 and reserved identities
+are refused for session creation; same-user sessions still get distinct IDs.
+A once-appointed leader can create service scopes under its own session, but
+cannot close the session grant owned by init, create arbitrary recursive scopes,
+or become the factory for a second independent session. Native construction must
+bind the actual newly created process and check capabilities; no caller-provided
+key or decoded principal may substitute for kernel context.
+
+Linear opaque charges account processes, threads, private physical pages, selected
+kernel heap bytes, descriptors, IPC handles, sockets and audio streams. Every delta
+checks all components and ancestors before any change. Failure/overflow preserves
+all counts. Closing prevents new reservations/growth. Release is permitted during
+closure and must occur only after real resource release, including frame/TLB,
+thread-stack and filesystem-call quiescence. The ledger does not perform those
+operations or assert that the currently unwired counters already contain them.
+
+Leader exit closes its scope and descendants; dead controller ownership passes
+to init. Scope closure waits for all charges and child records. Notifications are
+peeked durably, then acknowledged explicitly, without consuming a process status.
+Children are acknowledged before the parent becomes closed. The native adapter
+must expose readiness for these events, kill closing members, and keep service
+stop/restart jobs pending until scope cleanup is acknowledged.
+
+`scopes-host-red.log` records seven missing-feature failures. The first seven
+scenarios then passed. `scopes-factory-red.log` caught duplicate session factory
+appointment; after rejecting duplicate leader keys, `scopes-factory-green.log`
+passes 11 runtime tests and two compile-fail tests for opaque/non-cloneable charges.
+Coverage includes ancestor pressure, all eight resource bounds/overflow, atomic
+rollback, init recovery reserves, cross-session denial, pending cleanup owner death,
+leader exit, stale identities, 128 create/close/ack cycles, sequence exhaustion,
+bootstrap failure and durable child-before-parent closure.
+
+The bare-metal target also compiles this crate (`scopes-native-check.log`); that
+is compilation evidence only. No new native scope or user-session acceptance
+criterion is claimed until the kernel/resource/syscall adapters are implemented
+and tested in QEMU. Previously recorded native principal/file checks remain
+separate from these host model results.
+
 ## Scope integration invariants for the next implementation
 
 - Keep the initial hierarchy bounded: system/session roots and service scopes;
