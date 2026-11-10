@@ -19,7 +19,7 @@ from qemu_test import copy_disk, disk_image, console_text, connect
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--case', choices=['two-services', 'fatal-exit', 'fatal-fault', 'fatal-thread', 'abi', 'lifecycle', 'orphans', 'exhaustion', 'missing-init', 'bad-init', 'fault-service', 'steady', 'ipc', 'ipc-lifecycle', 'stop-protocol', 'halt-abi', 'halt', 'halt-audio', 'halt-no-devices', 'principal'], default='two-services')
+    parser.add_argument('--case', choices=['two-services', 'fatal-exit', 'fatal-fault', 'fatal-thread', 'abi', 'lifecycle', 'orphans', 'exhaustion', 'missing-init', 'bad-init', 'fault-service', 'steady', 'ipc', 'ipc-lifecycle', 'stop-protocol', 'halt-abi', 'halt', 'halt-audio', 'halt-no-devices', 'principal', 'capabilities'], default='two-services')
     case = parser.parse_args().case
     evidence = ROOT / 'target/init'
     evidence.mkdir(parents=True, exist_ok=True)
@@ -129,6 +129,9 @@ def main():
                         (evidence/f'{case}-{count}-pci.json').write_text(json.dumps(devices))
                         print('PASS: graceful kernel halt, all CPUs parked and supported DMA bus mastering disabled:',log)
                         return
+                if case == 'capabilities' and '[init-probe] capabilities PASS denied=true inherited=true cleanup=true' in output:
+                    print('PASS: native capability reduction, denied side effects, inherited rights and owned cleanup:',log)
+                    return
                 if case == 'principal' and '[init-probe] principal PASS spawn_paths=5 threads=true canonical=true' in output:
                     print('PASS: kernel principal, five spawn paths, thread identity and complete query usercopy:',log)
                     return

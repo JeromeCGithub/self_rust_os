@@ -7,11 +7,12 @@ is in [the M4 record](initator-m4-progress.md). M5 starts from that commit on
 
 **M5 is incomplete.** The first addition is a host-tested principal description and
 attenuation policy in [process-abi](../crates/process-abi/src/principal.rs). The
-kernel now attaches descriptive principals to processes, but does not yet enforce
-these capability bits, create resource scopes or run Nest. Syscall 129 and its SDK
-query are wired; the remaining authority/resource enforcement must be implemented
-in this same milestone before delivery. Do not interpret a decoded description as
-a grant.
+kernel now attaches native principals, enforces mechanism capability domains and
+supports one-way process rights reduction. It does not yet create resource scopes,
+enforce filesystem root grants or run Nest. Syscalls 129–130 and their SDK wrappers
+are wired; the remaining authority/resource enforcement must be implemented in
+this same milestone before delivery. Do not interpret a decoded description as a
+grant.
 
 ## Initial interface
 
@@ -34,7 +35,7 @@ Existing irreversible worker restrictions must remain a stricter intersection.
 ## Source findings guiding the next changes
 
 - [Process metadata](../src/process/mod.rs) originally lacked principal fields;
-  M5 now stores an immutable principal there. It also contains parent/adoption
+  M5 now stores native identity and mechanism rights there. It also contains parent/adoption
   ownership, private frame/surface ledgers,
   descriptors and an optional restricted-worker heap ceiling. Threads share their
   process resources. The process table has 128 reusable storage slots but externally
@@ -79,7 +80,7 @@ scheduler lock, then copies initialized canonical bytes without retaining a proc
 or user reference. It has no PID selector and accepts no input identity. Kernel
 boot gives native PID 1 the Init flag; other kernel-origin system contexts and the
 legacy desktop profile are explicitly distinguished. Every ordinary spawn derives
-its immutable description from the live parent in the common constructor. Threads
+its native identity and initial mechanism rights from the live parent in the common constructor. Threads
 read the same process description. Restricted workers keep their earlier allowlist;
 the new query does not bypass it.
 
@@ -92,9 +93,10 @@ unmapped/noncanonical/wrapping buffers, exact sizes/reserved words, crossing two
 writable pages, preserved guard bytes and overwriting fake input metadata.
 
 These identities currently describe the system context: user 0/session 0/reserved
-system scope 1. Actual user/session creation, scope objects/accounting, reduced
-capability enforcement and protected filesystem grants are not implemented yet.
-A capability description is not proof that all enforcement paths already exist.
+system scope 1. Actual user/session creation, scope objects/accounting and protected filesystem
+grants are not implemented yet. Mechanism-domain filtering is now implemented,
+but a capability description is not proof that the remaining resource/path
+boundaries exist.
 
 Initial integration checks also pass: 92 kernel unit cases, the four directly
 affected integration executables (`native_supervision`, `process_supervision`,
@@ -103,6 +105,46 @@ rebuilt user programs. The fresh default-profile eight-CPU desktop suite passed
 with the new metadata/query SDK. This is compatibility evidence, not enforcement
 of user isolation. All transcripts are `principal-*.log` in the M5 evidence folder;
 these are intermediate checks, not the final M5 milestone matrix.
+
+## Mechanism enforcement and one-way reduction
+
+[Capability policy](../crates/process-abi/tests/capabilities.rs) first failed three
+host tests with allowed ambient operations, unsafe open modes and unauthorized
+audio resume. The implemented explicit allowlist passes the complete process-ABI
+suite. It distinguishes standard I/O from regular descriptors, includes O_CREAT
+side effects with read-only access, rejects malformed open flags and denies future
+unknown syscall numbers. Owned IPC and cleanup remain distinct from factory rights.
+The existing worker allowlist remains a stricter intersection.
+
+[The native probe](../user_programs/zinit/src/capabilities_probe.rs) first failed
+at the missing rights-reduction syscall (130). After implementation it passes on
+1/8/32 CPUs: native init refusal, unknown bits/reserved words and expansion leave
+authority unchanged; sibling threads prevent reduction; single-threaded reduction
+is irreversible/idempotent; ordinary children inherit reduced rights; regular file
+handles lose read/write authority; all old/new spawn paths, threads, factories and
+device operations are denied; file create/overwrite/mkdir have no denied side
+effects; owned channel delivery/interest/close and file close/wait/child cleanup
+still work. A connected restricted worker cannot call 129 or 130. A caller with
+only FILE_READ can read but cannot use read-only create; FILE_WRITE permits a
+write while still denying reads/read-write opens. The native system-action gate
+retains its typed Denied response independently of mechanism rights.
+
+Reduction requires exactly one owned thread, including unreaped records, because
+filesystem calls can release the entry gate during I/O. The entry gate and scheduler
+lock make validation/publication atomic; no user pointer is involved. This call
+revokes neither pre-existing children nor granted objects. It does not replace
+scope-wide containment, accounting, protected roots or explicit launch grants.
+
+`target/initator-m5-evidence/capabilities-host-{red,green}.log` and
+`capabilities-native-{red,green}.log` retain red/green output. Intermediate checks
+also pass: 92 kernel unit cases; five integration executables (`native_supervision`,
+`process_supervision`, `ipc`, `threads`, `stdio`); default/GRUB builds, native GRUB
+release, all rebuilt applications and test compilation. Eighteen native regressions
+cover principal queries, two-service supervision, child ABI, channel validation,
+cooperative stop and halt authorization on each of 1/8/32 CPUs. The eight-CPU
+Spark cooperative-stop and whole-system cooperative-shutdown cases also pass.
+The fresh default-profile eight-CPU desktop suite and 75 Python tooling tests
+also pass. These are checks for this increment, not the final M5 acceptance matrix.
 
 ## Scope integration invariants for the next implementation
 

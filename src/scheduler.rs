@@ -105,7 +105,7 @@ impl Scheduler {
 static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 
 mod principal;
-pub use principal::principal_user;
+pub use principal::{attenuate_principal, principal_user};
 mod supervision;
 pub(crate) use supervision::system_action_gate;
 pub use supervision::{child_next_user, terminate_child, configure_native_init, fault_current};
@@ -1367,14 +1367,20 @@ pub fn restrict_worker(profile: u64, bytes: u64, reserved: u64) -> u64 {
     0
 }
 /// Check process authority before syscall-specific copying, allocation or I/O.
-pub(crate) fn syscall_permitted(number: u64, first: u64) -> bool {
+pub(crate) fn syscall_permitted(number: u64, first: u64, second: u64) -> bool {
     let scheduler = SCHEDULER.lock();
-    let restricted = scheduler
-        .current_pid()
-        .and_then(|pid| scheduler.processes.get(pid as usize))
-        .and_then(Option::as_ref)
-        .is_some_and(|p| p.worker_heap_limit.is_some());
-    !restricted || rustos_process_abi::isolation::permits(number, first)
+    let Some(pid) = scheduler.current_pid() else {
+        // Supervisor-only unit harnesses call the dispatcher without Ring 3.
+        // Real user entry always has a current live process/context.
+        return true;
+    };
+    let Some(process) = scheduler.processes.get(pid as usize).and_then(Option::as_ref) else {
+        return false;
+    };
+    process.state == ProcessState::Live
+        && process.principal.capabilities.permits(number, first, second)
+        && (process.worker_heap_limit.is_none()
+            || rustos_process_abi::isolation::permits(number, first))
 }
 
 /// Create a private process with explicit, attenuated bootstrap endpoint moves.

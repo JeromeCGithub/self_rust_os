@@ -1,6 +1,9 @@
 //! Native principal descriptions. Decoding bytes never grants kernel authority.
 /// Query the calling process's kernel principal; no foreign PID selector exists.
 pub const SYS_PRINCIPAL: u64 = 129;
+/// Irreversibly reduce the single-threaded caller's ambient mechanism rights.
+/// Args: known capability bits, flags=0, reserved=0. Native PID 1 is refused.
+pub const SYS_ATTENUATE: u64 = 130;
 /// Version-1 explicit little-endian output size, without Rust padding.
 pub const SIZE: usize = 40;
 /// System scope is reserved by kernel boot; later scopes use fresh larger IDs.
@@ -33,6 +36,59 @@ impl Capabilities {
     }
     pub const fn bits(self) -> u64 {
         self.0
+    }
+    /// Check the native syscall mechanism domain; object checks remain required.
+    /// Factories/ambient file operations require their domain. Explicitly owned
+    /// handles, cleanup and private progress retain their existing validation.
+    /// Unknown syscalls fail closed, even with ALL; add new operations explicitly.
+    pub fn permits(self, number: u64, first: u64, second: u64) -> bool {
+        match number {
+            2 | 4 => first == 0 || self.contains(Self::FILE_READ),
+            5 | 6 | 27 | 33 => self.contains(Self::FILE_READ),
+            7 | 12 => self.contains(Self::FILE_WRITE),
+            8 | 29 | 30 | 126 | 127 => self.contains(Self::SPAWN),
+            23 => {
+                // Linux-valued flags only, not a Linux syscall ABI. O_CREAT has
+                // a write side effect even with O_RDONLY. TRUNC requires write.
+                let access = second & 3;
+                if second & !(3 | 0o100 | 0o1000) != 0
+                    || access == 3
+                    || second & 0o1000 != 0 && access == 0
+                {
+                    return false;
+                }
+                let reads = access != 1;
+                let writes = access != 0 || second & (0o100 | 0o1000) != 0;
+                (!reads || self.contains(Self::FILE_READ))
+                    && (!writes || self.contains(Self::FILE_WRITE))
+            }
+            25 => first == 1 || first == 2 || self.contains(Self::FILE_WRITE),
+            64..=67 | 69 | 70 => self.contains(Self::NETWORK),
+            82 | 83 => self.contains(Self::AUDIO),
+            84 => second == 0 || self.contains(Self::AUDIO),
+            98 => self.contains(Self::THREADS),
+            120 => self.contains(Self::IPC),
+            // Display operations retain their existing PID-0/ownership gates;
+            // M6 will supply explicit native session display leases.
+            0
+            | 1
+            | 3
+            | 9..=11
+            | 13..=22
+            | 24
+            | 26
+            | 28
+            | 31..=32
+            | 34..=37
+            | 68
+            | 80..=81
+            | 85
+            | 96..=97
+            | 99..=109
+            | 121..=125
+            | 128..=130 => true,
+            _ => false,
+        }
     }
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0

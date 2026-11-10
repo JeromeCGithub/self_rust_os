@@ -25,3 +25,16 @@ pub fn current() -> Result<Principal, Error> {
     }
     Principal::decode(&bytes).map_err(|_| Error::Invalid)
 }
+
+/// Irreversibly reduce this process's mechanism rights before creating threads.
+/// Only subsets are accepted; a live sibling thread or native PID 1 is refused.
+/// Existing children/grants are not revoked. This is not a resource scope or a
+/// filesystem path sandbox. Owned IPC endpoints and cleanup remain usable.
+pub fn attenuate(capabilities: Capabilities) -> Result<(), Error> {
+    // SAFETY: Only a known scalar rights mask and zero reserved words cross the
+    // boundary; the kernel derives the caller and validates attenuation atomically.
+    match unsafe { crate::sys::syscall(abi::SYS_ATTENUATE, capabilities.bits(), 0, 0) } {
+        0 => Ok(()),
+        _ => Err(Error::Unavailable),
+    }
+}

@@ -651,24 +651,47 @@ service completions, ordered stop, global escalation, pending-load and backoff
 cancellation, and a restarted prerequisite before terminal halt.
 
 
-## Principal descriptions (M5 work in progress)
+## Process principals and rights reduction (M5 work in progress)
 
 | Number | Operation | Arguments | Result |
 | --- | --- | --- | --- |
 | 129 | current principal | output pointer, exact size 40, reserved=0 | 0 after full canonical copy; general syscall error on invalid/unavailable request |
+| 130 | reduce mechanism rights | known capability bits, flags=0, reserved=0 | 0 after atomic subset replacement; general syscall error for expansion, unknown bits, native PID 1 or sibling threads |
 
 [The version-1 principal codec](../crates/process-abi/src/principal.rs) is explicit
 little endian: version u32 at 0, flags u32 at 4 (Init=1, Legacy=2), native user u32
 at 8, zero reserved u32 at 12, session u64 at 16, scope u64 at 24 and known mechanism
 capability bits u64 at 32. Invalid combinations, reserved identities and unknown
 bits fail decoding. The syscall derives its data from the live current process;
-there is no foreign-process selector or credential-setting operation. The SDK
+there is no foreign-process selector or identity-setting operation. The SDK
 `userlib::principal::current()` validates its returned snapshot.
 
 Kernel boot selects native-init identity. Ordinary spawn preserves user/session/
 scope and drops the Init flag, protected-system-write and scope-factory bits;
 threads share process metadata. The existing restricted-worker allowlist remains
 stricter and denies this newly added syscall. All source records currently describe
-system contexts; user/session factories, scoped resources, capability enforcement
-and alias-safe filesystem grants remain incomplete in M5. These bytes describe
-metadata and never confer authority. See [M5 progress](initator-m5-progress.md).
+system contexts; user/session factories, scoped resources and alias-safe filesystem
+grants remain incomplete in M5. These bytes describe metadata and never confer
+authority. See [M5 progress](initator-m5-progress.md).
+
+`userlib::principal::attenuate()` performs one-way process-wide reduction to a
+subset. It requires exactly one owned thread (including unreaped thread records)
+and refuses the kernel-selected native init. Unknown bits, nonzero reserved words
+and rights expansion fail without change. Identity/role metadata is unchanged;
+ordinary future children inherit the reduced rights. Existing children and granted
+objects are not revoked. Invoke this before starting threads or untrusted work;
+this is not a filesystem sandbox or a replacement for scope resource limits.
+
+The dispatcher checks mechanism rights **before syscall-specific usercopy,
+allocation and I/O**, intersecting the worker allowlist. File reads and writes,
+all five launch interfaces, thread creation, channel factories, network operations
+and audio open/write/resume require their corresponding domain. Open checks both
+access mode and create/truncate effects: read-only create requires both file rights.
+Regular-descriptor reads/writes also require their domain after reduction. Explicit
+owned IPC operations, child control, private waits, descriptor/socket/audio close
+and progress retain their existing validation without requiring factory rights.
+System action 128 still reaches its independent init gate and returns typed Denied
+for ordinary callers. Unknown syscall numbers fail closed. Display operations keep
+their current legacy ownership gates pending M6; `SYSTEM_WRITE`/`SCOPE_CREATE`
+remain reserved for upcoming path and scope enforcement. The trusted legacy desktop
+retains its inherited mechanism rights and its earlier ownership exceptions.

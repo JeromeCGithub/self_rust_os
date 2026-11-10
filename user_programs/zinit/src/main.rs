@@ -3,8 +3,13 @@ extern crate alloc;
 mod abi;
 mod ipc_probe;
 mod principal_probe;
+mod capabilities_probe;
 use userlib::{recordln, supervision, sys};
 fn main(argc: usize, argv: &[&str]) {
+    if argc > 1 && argv[1].starts_with("--cap-") {
+        capabilities_probe::child(argv[1]);
+        return;
+    }
     if argc > 1 && matches!(argv[1], "--principal-child" | "--principal-grandchild") {
         principal_probe::child(argv[1] == "--principal-child");
         return;
@@ -61,6 +66,7 @@ fn main(argc: usize, argv: &[&str]) {
     let n = sys::read_file("/ETC/INIT.RUN", &mut mode).expect("test mode");
     if &mode[..n] == b"principal" { principal_probe::run(identity.pid); }
     assert_eq!(identity.pid, 1);
+    if &mode[..n] == b"capabilities" { capabilities_probe::run(); }
     if matches!(&mode[..n], b"halt" | b"halt-audio" | b"halt-no-devices") {
         abi::halt(&mode[..n] == b"halt-audio");
     }
