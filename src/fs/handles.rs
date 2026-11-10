@@ -240,30 +240,9 @@ pub fn read(fd: u64, pointer: u64, length: u64) -> u64 {
     if !crate::userspace::usercopy::validate(pointer, length, true) {
         return ERROR;
     }
-    // Declare the lease before the buffer: every return drops buffer storage
-    // before the lock-free release is published, including I/O/copy failure.
-    let Ok(lease) = crate::scheduler::reserve_resource(Usage {
-        kernel_bytes: count as u64,
-        ..Usage::ZERO
-    }) else {
+    let Ok(mut bytes) = crate::scheduler::ResourceBuffer::zeroed(count) else {
         return ERROR;
     };
-    let mut bytes = alloc::vec::Vec::new();
-    if bytes.try_reserve_exact(count).is_err() {
-        return ERROR;
-    }
-    if crate::scheduler::grow_resource(
-        &lease,
-        Usage {
-            kernel_bytes: (bytes.capacity() - count) as u64,
-            ..Usage::ZERO
-        },
-    )
-    .is_err()
-    {
-        return ERROR;
-    }
-    bytes.resize(count, 0);
     // Copying to user memory requires the entry gate. Reserve an offset only
     // after disk I/O succeeded; the full destination was validated above.
     let result = super::with_fs(|fs| {
@@ -288,30 +267,9 @@ fn write(fd: u64, pointer: u64, length: u64) -> u64 {
         return ERROR;
     }
     let count = length.min(MAX_IO as u64) as usize;
-    // Declare the lease before the buffer: every return drops buffer storage
-    // before the lock-free release is published, including I/O/copy failure.
-    let Ok(lease) = crate::scheduler::reserve_resource(Usage {
-        kernel_bytes: count as u64,
-        ..Usage::ZERO
-    }) else {
+    let Ok(mut bytes) = crate::scheduler::ResourceBuffer::zeroed(count) else {
         return ERROR;
     };
-    let mut bytes = alloc::vec::Vec::new();
-    if bytes.try_reserve_exact(count).is_err() {
-        return ERROR;
-    }
-    if crate::scheduler::grow_resource(
-        &lease,
-        Usage {
-            kernel_bytes: (bytes.capacity() - count) as u64,
-            ..Usage::ZERO
-        },
-    )
-    .is_err()
-    {
-        return ERROR;
-    }
-    bytes.resize(count, 0);
     if !crate::userspace::usercopy::from_user(pointer, &mut bytes) {
         return ERROR;
     }
@@ -408,5 +366,54 @@ pub(crate) fn readdir(path_pointer: u64, output: u64, capacity: u64) -> u64 {
         size as u64
     } else {
         ERROR
+    }
+}
+
+/// Whole-file path read for the existing native syscall 6. No user reference
+/// survives filesystem work; complete output validation precedes disk access.
+pub fn read_path(path_pointer: u64, output: u64, length: u64) -> u64 {
+    if !crate::userspace::usercopy::validate(output, length, true) {
+        return ERROR;
+    }
+    let Ok(length) = usize::try_from(length) else {
+        return ERROR;
+    };
+    let Ok(mut bytes) = crate::scheduler::ResourceBuffer::zeroed(length) else {
+        return ERROR;
+    };
+    let Some(path) = path(path_pointer, PathKind::Existing) else {
+        return ERROR;
+    };
+    match super::with_fs(|fs| fs.read_file(&path, &mut bytes)) {
+        Some(Ok(n)) if crate::userspace::usercopy::to_user(output, &bytes[..n]) => n as u64,
+        _ => ERROR,
+    }
+}
+/// Whole-file replacement for the existing native syscall 7. Copy before locking
+/// the filesystem and enforce protected-root policy under its service lock.
+pub fn write_path(path_pointer: u64, input: u64, length: u64) -> u64 {
+    if !crate::userspace::usercopy::validate(input, length, false) {
+        return ERROR;
+    }
+    let Ok(length) = usize::try_from(length) else {
+        return ERROR;
+    };
+    let Ok(mut bytes) = crate::scheduler::ResourceBuffer::zeroed(length) else {
+        return ERROR;
+    };
+    if !crate::userspace::usercopy::from_user(input, &mut bytes) {
+        return ERROR;
+    }
+    let Some(path) = path(path_pointer, PathKind::Existing) else {
+        return ERROR;
+    };
+    let system = crate::scheduler::system_write_authority();
+    match super::with_fs(|fs| {
+        super::authorize_write(fs, &path, system)?;
+        let _ = fs.create_file(&path);
+        fs.write_file(&path, &bytes)
+    }) {
+        Some(Ok(n)) => n as u64,
+        _ => ERROR,
     }
 }

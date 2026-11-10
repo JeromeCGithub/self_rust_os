@@ -79,6 +79,10 @@ pub(crate) mod handles;
 pub use handles::syscall as file_syscall;
 /// Validated reads from a descriptor owned by the current process.
 pub use handles::read as file_read;
+/// Validated owned whole-file read through the existing syscall boundary.
+pub use handles::read_path;
+/// Validated owned whole-file replacement through the existing syscall boundary.
+pub use handles::write_path;
 
 /// Authorize a mutation while holding the same filesystem lock as its effects.
 /// These boot-system root labels cannot be created or changed by an ordinary

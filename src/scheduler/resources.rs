@@ -45,6 +45,66 @@ impl Drop for ResourceLease {
         }
     }
 }
+/// Owned zero-initialized syscall/staging bytes with capacity charged to the
+/// current native scope. Field order frees storage before queuing quota release.
+/// Dereferencing exposes only a fixed slice, never an uncharged growing Vec.
+pub struct ResourceBuffer {
+    bytes: Vec<u8>,
+    _lease: ResourceLease,
+}
+impl core::fmt::Debug for ResourceBuffer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ResourceBuffer")
+            .field("length", &self.bytes.len())
+            .finish()
+    }
+}
+impl ResourceBuffer {
+    /// Reserve first; failed allocation/capacity growth returns no live buffer.
+    pub fn zeroed(length: usize) -> Result<Self, Error> {
+        let lease = reserve_resource(Usage {
+            kernel_bytes: length as u64,
+            ..Usage::ZERO
+        })?;
+        let bytes = Self::allocate(length)?;
+        grow_resource(
+            &lease,
+            Usage {
+                kernel_bytes: (bytes.capacity() - length) as u64,
+                ..Usage::ZERO
+            },
+        )?;
+        Ok(Self {
+            bytes,
+            _lease: lease,
+        })
+    }
+    /// Only trusted initial-image loading, before any process publication, may
+    /// stage outside a process budget. The parent scheduler authenticates phase.
+    pub(super) fn boot_zeroed(length: usize) -> Result<Self, Error> {
+        Ok(Self {
+            bytes: Self::allocate(length)?,
+            _lease: ResourceLease::unscoped(),
+        })
+    }
+    fn allocate(length: usize) -> Result<Vec<u8>, Error> {
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(length).map_err(|_| Error::Limit)?;
+        bytes.resize(length, 0);
+        Ok(bytes)
+    }
+}
+impl core::ops::Deref for ResourceBuffer {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+impl core::ops::DerefMut for ResourceBuffer {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        &mut self.bytes
+    }
+}
 struct Record {
     serial: u64,
     charge: Charge,

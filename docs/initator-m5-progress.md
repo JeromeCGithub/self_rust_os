@@ -13,8 +13,8 @@ Kernel-only scoped construction, page/thread accounting and descendant cleanup
 are now wired. The Ring 3 scope grant/event ABI, session home/tmp grants and
 filesystem grants/remaining allocation paths and socket/audio accounting remain
 incomplete; Nest does not yet run.
-IPC endpoint/inbox budgets, atomic grant accounting and descriptor/buffer leases
-are now wired below.
+IPC endpoint/inbox budgets, atomic grant accounting, descriptor/buffer leases and
+owned executable/startup snapshots are now wired below.
 Syscalls 129–130 and their SDK wrappers are wired. The remaining authority/resource
 enforcement must be implemented in this same milestone before delivery. Do not interpret a decoded description as a
 grant.
@@ -595,6 +595,87 @@ and serial logs; screenshots cannot demonstrate it. Manual host GUI and physical
 hardware checks remain unverified. The earlier missing-doc warning on the new
 integration entry was corrected; only the pre-existing bootloader rustc-abi warning
 remains. M5 is still incomplete and no milestone PR is opened.
+
+## Owned syscall and executable snapshots
+
+[ResourceBuffer](../src/scheduler/resources.rs) now couples fixed-length owned
+bytes to their native reservation. It reserves before allocation, charges actual
+capacity, exposes only a slice and drops byte storage before queuing release.
+Descriptor I/O uses this type instead of repeating the lease/buffer drop-order
+pattern. It also covers console-write copies, old whole-file path read/write,
+explicit mapped-image spawn snapshots and disk executable staging. Allocation or
+scope-budget failure returns existing generic errors before I/O, user-output or
+child-publication effects. This does not impose a new arbitrary transfer-size cap;
+native scope budgets and existing per-operation bounds remain authoritative.
+
+[Disk loading](../src/scheduler.rs) now queries file size, releases the filesystem
+lock to reserve owned storage, then reacquires it to recheck size and read a single
+consistent snapshot. A changed size/short read fails instead of publishing a
+partial image. No scheduler reservation occurs under a filesystem lock. The
+initial boot image alone uses an explicit unscoped buffer: the scheduler verifies
+no current process, no published/retired process or thread, and the untouched
+initial PID sequence. Later no-caller/dead-caller loads cannot claim that exception.
+[Boot entry](../src/entry_point.rs) drops staging after construction copies private
+image/TLS storage, before its nonreturning switch. The kernel integration confirms
+actual heap release and preserved executable bytes after staging is dropped.
+
+[Launch snapshots](../src/userspace/launch.rs) charge copied pointer/length records,
+String vector storage and payload, argv/envp reference arrays and binding metadata.
+Lengths/counts and the combined existing startup bound are checked on owned records
+before allocating payload. Larger actual capacities require additional admission.
+Each owning vector/string is destroyed before its reservation. Version-1 environment
+launch and version-2/3 bound/image launch share the same snapshot path. Zero-length
+vectors keep their existing empty-pointer semantics. Complete mapped usercopy,
+UTF-8/NUL checks and endpoint-constructor authority checks remain separate gates.
+Kernel Rust snapshot callbacks/facades are for constructors and integration; the
+userspace dispatcher still applies mechanism capability checks. No syscall number,
+wire record, SDK wrapper or startup byte/count limit changed.
+
+The expanded [kernel integration](../tests/scoped_files.rs) first staged an image
+with no byte budget (`scopes-snapshot-budget-red.log`), then read nine file bytes
+under the same exhausted budget (`scopes-snapshot-path-red.log`). Both now deny
+without changing output/file bytes. The argument regression initially invoked its
+launch callback (returned 77) without any allowance for copied records/strings
+(`scopes-snapshot-vectors-red.log`); zero and record-only budgets now prevent the
+callback. A valid snapshot succeeds with literal argv and no residual charges.
+A 64 KiB mapped-image snapshot fails while 40 KiB remains available, without
+publishing a child. A control directly constructs and reclaims that same image
+within the remaining allowance, proving the denial concerns the additional
+snapshot rather than target construction. Malformed vector/binding counts fail
+before the callback. A real staged buffer retained after PCB/frame release
+keeps its scope Closing until the buffer drops and collection runs; global counters
+return exactly to baseline. These are still kernel-context scope tests, not the
+pending Ring 3 scope-grant ABI acceptance.
+
+C-string/path/cwd storage, directory output/entries, internal FAT allocations,
+filesystem grants and cancellation still need work. Path-based executable loading
+also needs the same grant/read-authorization boundary as ordinary reads; the current
+SPAWN mechanism domain alone is not a filesystem sandbox. Normal Initator services
+still share the trusted system root. Complete isolation and Nest remain unfinished.
+
+Both boot-path builds, test compilation, 98 kernel unit cases and all nine
+integration executables pass, as do the final expanded scoped-file assertions.
+Fresh native/default GRUB release images rebuild all apps. The native image passes
+66 boot/supervision/principal/capability/system-file cases, three supervised
+filesystem runs and three literal-vector unit runs across 1/8/32 CPUs. The default
+image passes 15 image/environment/large-file/FPU/compiler-TLS cases across those
+profiles and the full eight-CPU desktop interaction suite. All 15 shutdown cases
+pass. Six isolated loader/watchdog profiles (normal/dependent cancellation at
+1/8/32 CPUs) report zero watchdog-delay ticks at unchanged acceptance budgets.
+All 85 Python tooling cases and documentation checks pass. No required check in
+this selected scope remains failing; the existing bootloader rustc-abi warning
+persists. Manual host GUI and physical hardware remain unverified.
+
+Evidence: `scopes-snapshot-{budget-red,path-red,vectors-red,full-green,final-integration}.log`,
+`scopes-snapshot-{unit,integration,native,native-vectors-files,capabilities,desktop,shutdown,latency,tooling}.log`
+and `scopes-snapshot-{build-default,build-grub,no-run,native-build,desktop-build}.log`
+in `target/initator-m5-evidence/`. The final integration refinement is test-only;
+its constructor control and malformed-count cases pass after the broader matrix.
+Tested desktop screenshots are archived in `scopes-snapshot-screenshots/`, with
+generic tracked images restored. Kernel allocator/state assertions and serial logs
+prove the snapshot accounting; screenshots do not demonstrate ownership or cleanup.
+The original disposable FAT fixture is restored after serialized kernel tests.
+This checkpoint does not complete M5 and no milestone PR is opened.
 
 ## Scope integration invariants for the next implementation
 

@@ -116,8 +116,9 @@ native identities, enforces inherited process/page/thread and IPC budgets, and
 closes scoped descendants on owner/leader death. Quota follows frames/stacks into deferred
 reclamation. IPC handles/inboxes follow explicit ownership moves and release, with
 reserved recovery capacity. Descriptor objects and owned descriptor-I/O buffers
-also retain scoped leases through blocked work and deferred release. This remains
-work in progress: the Ring 3 scope ABI, remaining filesystem allocation/grant and
+also retain scoped leases through blocked work and deferred release. Owned path-I/O,
+executable/image and startup snapshots now retain byte charges through construction.
+Boot staging is released after private image/TLS copying. This remains work in progress: the Ring 3 scope ABI, remaining filesystem allocation/grant and
 network/audio accounting, session grants and Nest are not yet complete.
 Normal Initator launches still use its trusted system root. See [current tests and gaps](initator-m5-progress.md).
 

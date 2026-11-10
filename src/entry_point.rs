@@ -130,6 +130,9 @@ fn run_kernel(
     if let Err(error) = self_rust_os::scheduler::spawn_process(&initial_image, 0) {
         panic!("Failed to spawn initial process: {}", error);
     }
+    // Construction copied the image/TLS into owned storage. Release the boot
+    // staging buffer before the nonreturning switch to userspace.
+    drop(initial_image);
     // Now that the scheduler has a runnable process, unmask the timer IRQ.
     // The timer was kept masked since lib::init() to prevent timer_entry from
     // running with no scheduler state (double fault).
