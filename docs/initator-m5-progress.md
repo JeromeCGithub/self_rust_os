@@ -1188,10 +1188,21 @@ probe at 1, 8 and 32 CPUs passed. The 8-CPU existing desktop suite also passed
 before the final directory-search checkpoint; its screenshots are archived under
 `target/initator-m5-evidence/fat-cancellation-screenshots/`. Host GUI and physical
 hardware were not checked. These tests do not prove a cancelled Ring 3 read preserves its user buffer and descriptor cursor, or that a contended
-filesystem-lock waiter exits on cancellation. Cancellation at every remaining
-namespace traversal and allocation boundary, real concurrent stop during slow I/O,
-and manager progress during throttled I/O still need targeted tests. The public
-Ring 3 scope factory remains closed until these prerequisites are satisfied.
+filesystem-lock waiter exits on cancellation. Additional RAM-backed fault injection
+now covers cancellation during free-cluster allocation, short-name and name-slot
+searches, and long read/write FAT-chain walks. Each failed before its corresponding
+check was added; the chain test confirms cancellation stops before another FAT
+sector is read. Rollback continues to use uncancelled low-level I/O. Other
+namespace paths and real concurrent stop during slow I/O still need targeted tests,
+as does an actual stop during a throttled filesystem operation. This checkpoint
+passed both boot builds, 117 kernel cases, `scoped_files`, `fat32`, native
+supervision and file probes at 1/8/32 CPUs, and the 8-CPU existing desktop suite.
+Six isolated watchdog tests at 8 MiB/s passed at 1/8/32 CPUs in normal and
+cancelled-dependent scenarios, with zero watchdog delay ticks. They measure
+manager progress; they do not kill a process inside a filesystem operation.
+Desktop evidence is under `target/initator-m5-evidence/scans-chain-screenshots/`.
+Host GUI and physical hardware were not checked. The public Ring 3 scope factory
+remains closed until its prerequisites are satisfied.
 
 ## Scope integration invariants for the next implementation
 
