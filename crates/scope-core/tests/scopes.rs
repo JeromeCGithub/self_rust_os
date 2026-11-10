@@ -1,6 +1,6 @@
 use rustos_scope_core::{
-    CloseCause, Error, Kind, ProcessKey, Registry, State, Usage, MAX_SCOPES, RECOVERY_SCOPES,
-    SYSTEM,
+    CloseCause, Error, Kind, ProcessKey, Registry, State, Usage, MAX_SCOPES, MAX_SESSION_SERVICES,
+    RECOVERY_SCOPES, SYSTEM,
 };
 fn key(pid: u32) -> ProcessKey {
     ProcessKey { pid, generation: 1 }
@@ -167,7 +167,16 @@ fn user_pressure_preserves_system_resource_and_scope_recovery_capacity() {
     r.release(user).unwrap();
     r.release(recovery).unwrap();
     while r.create_service(key(2), root, Usage::ZERO).is_ok() {}
-    // System root + session root + session leaves stop below the recovery floor.
+    // Fill the global user allowance across independently admitted sessions;
+    // one session can no longer consume every non-recovery record by itself.
+    for pid in 3..MAX_SCOPES as u32 {
+        let Ok(next) = r.create_session(key(1), 1, budget(90)) else {
+            break;
+        };
+        r.appoint_leader(key(1), next, key(pid)).unwrap();
+        while r.create_service(key(pid), next, Usage::ZERO).is_ok() {}
+    }
+    // System root + session roots + leaves stop below the recovery floor.
     let mut extra = 0;
     while r.create_service(key(1), SYSTEM, Usage::ZERO).is_ok() {
         extra += 1;
@@ -454,5 +463,63 @@ fn recovery_use_in_one_resource_does_not_block_unrelated_allocations() {
     );
     r.release(pages).unwrap();
     r.release(trusted).unwrap();
+    assert_eq!(r.status(key(1), SYSTEM).unwrap().used, Usage::ZERO);
+}
+
+#[test]
+fn session_record_pressure_is_bounded_until_cleanup_acknowledgement() {
+    let mut r = kernel();
+    let root = session(&mut r);
+    let other = r.create_session(key(1), 1, budget(80)).unwrap();
+    r.appoint_leader(key(1), other, key(3)).unwrap();
+    let mut leaves = [0; MAX_SESSION_SERVICES];
+    for id in &mut leaves {
+        *id = r.create_service(key(2), root, budget(1)).unwrap();
+    }
+    for _ in 0..3 {
+        assert_eq!(
+            r.create_service(key(2), root, Usage::ZERO),
+            Err(Error::Limit)
+        );
+    }
+    // Empty and closed-but-unacknowledged records still own their slots.
+    r.close(key(2), leaves[0]).unwrap();
+    assert_eq!(r.status(key(2), leaves[0]).unwrap().state, State::Closed);
+    assert_eq!(
+        r.create_service(key(2), root, Usage::ZERO),
+        Err(Error::Limit)
+    );
+    let survivor = r.create_service(key(3), other, Usage::ZERO).unwrap();
+    assert_eq!(
+        survivor,
+        leaves[MAX_SESSION_SERVICES - 1] + 1,
+        "failed admission must not consume identities"
+    );
+    let charge = r.reserve(leaves[1], budget(1)).unwrap();
+    r.close(key(2), leaves[1]).unwrap();
+    assert_eq!(r.status(key(2), leaves[1]).unwrap().state, State::Closing);
+    assert_eq!(
+        r.create_service(key(2), root, Usage::ZERO),
+        Err(Error::Limit)
+    );
+    r.ack_closed(key(2), leaves[0]).unwrap();
+    let replacement = r.create_service(key(2), root, Usage::ZERO).unwrap();
+    assert!(replacement > survivor);
+    assert_eq!(
+        r.create_service(key(2), root, Usage::ZERO),
+        Err(Error::Limit)
+    );
+    r.release(charge).unwrap();
+    assert_eq!(
+        r.create_service(key(2), root, Usage::ZERO),
+        Err(Error::Limit)
+    );
+    r.ack_closed(key(2), leaves[1]).unwrap();
+    assert!(r.create_service(key(2), root, Usage::ZERO).is_ok());
+    assert_eq!(
+        r.create_service(key(2), root, Usage::ZERO),
+        Err(Error::Limit)
+    );
+    assert_eq!(r.status(key(3), survivor).unwrap().state, State::Open);
     assert_eq!(r.status(key(1), SYSTEM).unwrap().used, Usage::ZERO);
 }

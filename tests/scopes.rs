@@ -405,6 +405,7 @@ fn session_ownership_and_orphans(context: &mut u64, initial: &rustos_scope_core:
     );
     assert_eq!(principal.capabilities, factory);
     assert_eq!(scheduler::scope_close(session), Err(Error::Denied));
+    session_record_admission(context, session, manager, other_session, other_manager);
     let service = scheduler::scope_create_service(session, limits(2, 2, 8192)).unwrap();
     let leader =
         scheduler::spawn_process_in_scope(&[0xc3], 4096, &[], &[], service, caps()).unwrap();
@@ -451,6 +452,44 @@ fn session_ownership_and_orphans(context: &mut u64, initial: &rustos_scope_core:
     scheduler::scope_ack_closed(other_session).unwrap();
     assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial.used);
     assert_eq!(scheduler::frame_count(), initial.used.pages);
+}
+fn session_record_admission(
+    context: &mut u64,
+    session: u64,
+    manager: u32,
+    other_session: u64,
+    other_manager: u32,
+) {
+    let mut leaves = [0; rustos_scope_core::MAX_SESSION_SERVICES];
+    for id in &mut leaves {
+        *id = scheduler::scope_create_service(session, Usage::ZERO).unwrap();
+    }
+    assert_eq!(
+        scheduler::scope_create_service(session, Usage::ZERO),
+        Err(Error::Limit)
+    );
+    scheduler::scope_close(leaves[0]).unwrap();
+    assert_eq!(
+        scheduler::scope_create_service(session, Usage::ZERO),
+        Err(Error::Limit),
+        "closed records retain admission capacity until acknowledgement"
+    );
+    activate(other_manager, context);
+    let sibling = scheduler::scope_create_service(other_session, Usage::ZERO)
+        .expect("one session must leave record capacity for another");
+    scheduler::scope_close(sibling).unwrap();
+    scheduler::scope_ack_closed(sibling).unwrap();
+    activate(manager, context);
+    scheduler::scope_ack_closed(leaves[0]).unwrap();
+    leaves[0] = scheduler::scope_create_service(session, Usage::ZERO).unwrap();
+    assert_eq!(
+        scheduler::scope_create_service(session, Usage::ZERO),
+        Err(Error::Limit)
+    );
+    for id in leaves {
+        scheduler::scope_close(id).unwrap();
+        scheduler::scope_ack_closed(id).unwrap();
+    }
 }
 fn activate(pid: u32, context: &mut u64) {
     for _ in 0..64 {

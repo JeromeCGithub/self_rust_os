@@ -366,6 +366,34 @@ on 1/8/32 CPUs (`scopes-smp-stress-green.log`). This is a stale ABI-test migrati
 not evidence that the previous image passed. The generated probe binary is
 regenerated with its source. No kernel behavior changed for either test repair.
 
+## Session record admission
+
+Each session is now limited to 16 service scope records in the shared 64-slot
+registry. This bound includes empty, Closing and Closed records until explicit
+acknowledgement; releasing resources alone cannot admit another record. Only init
+can create additional session roots. The existing four system-recovery slots are
+still reserved independently of this per-session bound. This fixed initial limit
+avoids another configurable quota field before the Ring 3 factory ABI is designed.
+
+The new host regression first admitted a seventeenth leaf (`Ok(20)`); the kernel
+integration independently reproduced the missing bound (`Ok(28)`). Both now pass,
+including a sibling session creating a leaf under pressure, no identity consumption
+on denial, cleanup acknowledgement restoring capacity and resource-release-only
+not restoring it. The global pressure fixture now fills several independently
+admitted sessions and retains its original assertion of exactly four recovery
+slots. Host scope tests pass (17 runtime and two compile-fail cases), the expanded
+kernel scope integration passes, and the 95 kernel unit cases, both boot-path
+builds, native GRUB release and test compilation pass. Evidence:
+`scopes-session-admission-{red,green}.log`, `scopes-session-kernel-{red,green}.log`
+and `scopes-session-{unit,build-default,build-grub,build-release,no-run}.log`.
+
+Before this admission-only change, all six loader/watchdog latency profiles passed
+on 1/8/32 CPUs, with and without dependent cancellation (`scopes-latency.log`).
+Each observed watchdog stop had zero delay ticks; the configured two-tick budget
+was unchanged. Those GRUB images exercise the preceding native scope binding;
+the admission change is covered by the newly rebuilt kernel integration. Neither
+validation exposes the still-incomplete Ring 3 scope factory.
+
 ## Scope integration invariants for the next implementation
 
 - Keep the initial hierarchy bounded: system/session roots and service scopes;
@@ -393,8 +421,8 @@ regenerated with its source. No kernel behavior changed for either test repair.
 ## Remaining milestone acceptance
 
 Finish the Ring 3 authenticated scope/session factory, scoped spawn/status/events,
-and filesystem/IPC/socket/audio accounting and permissions. Add per-session scope
-record admission limits, temporary-I/O reservations/cancellation and quiescence
+and filesystem/IPC/socket/audio accounting and permissions. Add
+temporary-I/O reservations/cancellation and quiescence
 checks, home/tmp grants, old-syscall bypass denial and least-authority IPC.
 Bind Initator's launches to service scopes and wait for scope cleanup in stop/restart
 jobs. Kernel-only identity and frame/thread tests do not complete these gates.
