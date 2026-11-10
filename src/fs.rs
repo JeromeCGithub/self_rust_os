@@ -80,7 +80,10 @@ where
         if operation.as_ref().is_some_and(|op| op.cancelled()) {
             return None;
         }
-        Some(f(&mut filesystem))
+        filesystem.set_cancellation(operation.as_ref().map(|op| op.cancellation()));
+        let result = f(&mut filesystem);
+        filesystem.set_cancellation(None);
+        Some(result)
     })
 }
 

@@ -1170,23 +1170,28 @@ Host GUI and physical hardware were not checked. The red scoped tests specifical
 observed premature scope reclamation, once with a held pin and once from the real
 filesystem callback, before their respective fixes.
 
-Do not place cancellation checks indiscriminately in raw block writes: FAT error
-paths need uncancelled metadata I/O to release staged cluster chains and undo
-unpublished names. Add checks at bounded operation/sector boundaries, with
-rollback allowed to finish. Define the publication checkpoint explicitly: an
-already-admitted metadata write may finish, and closure must wait for it. Existing
-in-place writes are not transactional. Queued FS-lock waiters must observe stop
-without waiting indefinitely for an unrelated operation.
+The operation pin now supplies a generation-checked cancellation token while the
+filesystem lock is held. FAT directory searches and data reads check it at bounded
+sector or cluster boundaries. Replacement and extension writes check before
+publication and clean up staged chains on cancellation. Long-name and directory
+creation check while their entries are staged; existing rollback paths remain able
+to use raw metadata I/O after cancellation. An already-admitted publication write
+may complete, and closure waits for its pin. Existing in-place writes are not
+transactional. A stale token fails closed after slot reuse.
 
-Still required: add executable red cases for a cancelled queued waiter and
-cancellation during read, replacement, extension and directory publication. Verify unchanged user output
-and cursor on cancelled reads, recovery of unpublished clusters, exact scope/frame
-accounting after the final lease, repeated slot reuse and stale-token rejection.
-Exercise the real native path at 1/8/32 CPUs, including manager progress during
-throttled I/O. Fault injection must distinguish cancellation from device errors;
-no timeout increase or weakened shutdown assertion is acceptable. Until those
-checks pass, the Ring 3 scope factory remains closed and filesystem cancellation
-is not claimed.
+RAM-backed QEMU fault injection confirmed red-to-green cancellation during a
+directory search, a multi-cluster read, replacement, extension, long-name creation,
+and directory initialization. The write cases verify that the original file stays
+intact, unpublished clusters are recovered, and a later retry works. Both boot
+builds, `scoped_files`, `fat32`, native two-service supervision and the native file
+probe at 1, 8 and 32 CPUs passed. The 8-CPU existing desktop suite also passed
+before the final directory-search checkpoint; its screenshots are archived under
+`target/initator-m5-evidence/fat-cancellation-screenshots/`. Host GUI and physical
+hardware were not checked. These tests do not prove a cancelled Ring 3 read preserves its user buffer and descriptor cursor, or that a contended
+filesystem-lock waiter exits on cancellation. Cancellation at every remaining
+namespace traversal and allocation boundary, real concurrent stop during slow I/O,
+and manager progress during throttled I/O still need targeted tests. The public
+Ring 3 scope factory remains closed until these prerequisites are satisfied.
 
 ## Scope integration invariants for the next implementation
 

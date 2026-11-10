@@ -5,6 +5,7 @@ const CANCELLED: u64 = 1 << 63;
 const RELEASED: u64 = 1 << 62;
 const COUNT: u64 = RELEASED - 1;
 
+#[derive(Debug)]
 struct Cell {
     owner: AtomicU64,
     state: AtomicU64,
@@ -88,6 +89,24 @@ impl Drop for Owner {
         }
     }
 }
+/// Copyable, generation-checked cancellation observation for locked I/O.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Cancellation {
+    cell: &'static Cell,
+    generation: u64,
+}
+impl Cancellation {
+    pub(crate) fn cancelled(self) -> bool {
+        self.cell.owner.load(Ordering::Acquire) != self.generation
+            || self.cell.state.load(Ordering::Acquire) & CANCELLED != 0
+    }
+    #[cfg(test)]
+    pub(crate) fn cancel_for_test(self) {
+        if self.cell.owner.load(Ordering::Acquire) == self.generation {
+            self.cell.state.fetch_or(CANCELLED, Ordering::AcqRel);
+        }
+    }
+}
 /// Pins the issuing process until an admitted filesystem operation completes.
 pub struct FilesystemOperation {
     cell: &'static Cell,
@@ -96,8 +115,13 @@ pub struct FilesystemOperation {
 impl FilesystemOperation {
     /// Whether the owning process has been stopped.
     pub fn cancelled(&self) -> bool {
-        self.cell.owner.load(Ordering::Acquire) != self.generation
-            || self.cell.state.load(Ordering::Acquire) & CANCELLED != 0
+        self.cancellation().cancelled()
+    }
+    pub(crate) fn cancellation(&self) -> Cancellation {
+        Cancellation {
+            cell: self.cell,
+            generation: self.generation,
+        }
     }
 }
 impl Drop for FilesystemOperation {
@@ -119,6 +143,7 @@ mod tests {
         let address = core::ptr::from_ref(owner.cell);
         let generation = owner.generation;
         let first = owner.begin().unwrap();
+        let stale = first.cancellation();
         let second = owner.begin().unwrap();
         owner.cancel();
         assert!(owner.begin().is_none());
@@ -133,6 +158,10 @@ mod tests {
         let reused = Owner::new().unwrap();
         assert_eq!(core::ptr::from_ref(reused.cell), address);
         assert_ne!(reused.generation, generation);
+        assert!(
+            stale.cancelled(),
+            "a stale token must fail closed after reuse"
+        );
         assert!(!reused.begin().unwrap().cancelled());
     }
 }
