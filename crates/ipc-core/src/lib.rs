@@ -248,7 +248,10 @@ impl Registry {
             let endpoint = &mut channel.ends[side];
             endpoint.owner = None;
             endpoint.tag = None;
-            endpoint.inbox.clear();
+            // The dead owner must not retain its bounded inbox allocation until
+            // an unrelated peer closes. The peer's own queue remains intact so
+            // its messages precede the durable PeerClosed notification.
+            endpoint.inbox = VecDeque::new();
             endpoint.writable = None;
             channel.ends[1 - side].closed_reported = false;
             if channel.ends.iter().all(|e| e.owner.is_none()) {

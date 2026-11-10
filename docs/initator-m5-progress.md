@@ -394,6 +394,29 @@ was unchanged. Those GRUB images exercise the preceding native scope binding;
 the admission change is covered by the newly rebuilt kernel integration. Neither
 validation exposes the still-incomplete Ring 3 scope factory.
 
+## IPC inbox lifetime prerequisite
+
+A new kernel allocator regression exposed a retained allocation in
+[IPC closure](../crates/ipc-core/src/lib.rs): closing an endpoint discarded its
+messages but kept its entire inbox allocation until its peer closed. Returning
+an endpoint's future scope charge at that point would incorrectly claim the
+memory was free. Closure now drops the dead endpoint's inbox immediately. The
+surviving peer retains its own queued messages, drains them in FIFO order and
+receives one durable PeerClosed notification. Binding/rights attenuation semantics
+are unchanged; a live endpoint's reserved inbox is retained.
+
+[The test](../tests/ipc.rs) first failed its actual allocated-kernel-byte assertion
+(`scopes-ipc-storage-red.log`). It now passes eight alternating explicit-close and
+owner-death cycles, with both inboxes full, immediate dead-inbox release, retained
+peer FIFO/sender identities, stale-handle denial, single close notification and
+exact final heap recovery. The full IPC host suite passes (15 cases). Final-source
+checks pass: 95 kernel unit cases, IPC and scope integration executables, both
+boot-path builds, test compilation, a fresh native GRUB release/all-app image and
+nine real Ring 3 IPC/64-cycle cleanup/two-service supervision cases across
+1/8/32 CPUs. Evidence: `scopes-ipc-final-{host,kernel,build-default,build-grub,no-run,image-build,native}.log`.
+This repairs allocation lifetime; scope accounting and atomic budget transfer for
+endpoint grants remain pending. It does not establish complete IPC isolation.
+
 ## Scope integration invariants for the next implementation
 
 - Keep the initial hierarchy bounded: system/session roots and service scopes;
