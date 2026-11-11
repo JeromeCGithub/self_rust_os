@@ -389,3 +389,109 @@ fn restart_has_one_job_and_stops_only_its_service_even_when_another_root_retains
     assert_eq!(e.outcome(), Outcome::Succeeded);
     assert!(e.active(a) && e.active(b));
 }
+
+#[test]
+fn scoped_stop_waits_for_exact_scope_cleanup_before_restarting() {
+    let a = service("a", "");
+    let mut e = engine(&[("A.UNIT", &a)]);
+    let a = id(&e, "a");
+    e.begin_start("a").unwrap();
+    assert_eq!(complete(&mut e), [Command::Start(a)]);
+    e.bind_scope(a, 101).unwrap();
+    let job = e.begin_restart("a").unwrap();
+    assert_eq!(e.next_command(), Some(Command::Stop(a)));
+    e.stopped(job, a).unwrap();
+    assert!(!e.active(a));
+    assert_eq!(
+        e.next_command(),
+        None,
+        "process exit must not bypass scope cleanup"
+    );
+    assert_eq!(e.outcome(), Outcome::Running);
+    assert_eq!(e.scope_drained(a, 100), Err(Error::InvalidResult));
+    assert_eq!(e.next_command(), None);
+    e.scope_drained(a, 101).unwrap();
+    assert_eq!(e.scope_drained(a, 101), Err(Error::InvalidResult));
+    assert_eq!(e.next_command(), Some(Command::Start(a)));
+    e.started(job, a, Ok(())).unwrap();
+    assert_eq!(e.next_command(), None);
+    assert_eq!(e.outcome(), Outcome::Succeeded);
+}
+
+#[test]
+fn scoped_unexpected_exit_keeps_resources_until_scope_drains() {
+    let a = service("a", "");
+    let mut e = engine(&[("A.UNIT", &a)]);
+    let a = id(&e, "a");
+    e.begin_start("a").unwrap();
+    complete(&mut e);
+    e.bind_scope(a, 202).unwrap();
+    let job = e.begin_stop("a").unwrap();
+    assert_eq!(e.next_command(), Some(Command::Stop(a)));
+    e.unavailable(a).unwrap();
+    assert!(!e.active(a));
+    assert_eq!(e.next_command(), None);
+    assert_eq!(e.outcome(), Outcome::Running);
+    assert_eq!(e.stopped(job, a), Err(Error::InvalidResult));
+    e.scope_drained(a, 202).unwrap();
+    assert_eq!(e.next_command(), None);
+    assert_eq!(e.outcome(), Outcome::Succeeded);
+}
+
+#[test]
+fn scoped_crash_and_retry_cannot_relaunch_before_old_scope_drains() {
+    let a = service("a", "");
+    let mut e = engine(&[("A.UNIT", &a)]);
+    let a = id(&e, "a");
+    e.begin_start("a").unwrap();
+    complete(&mut e);
+    e.bind_scope(a, 303).unwrap();
+    e.retrying(a).unwrap();
+    assert!(!e.active(a));
+    e.begin_start("a").unwrap();
+    assert_eq!(e.next_command(), None, "retry waits for previous scope");
+    assert_eq!(e.outcome(), Outcome::Running);
+    assert_eq!(e.restored(a), Err(Error::InvalidResult));
+    assert_eq!(e.reserve_run(a), Err(Error::InvalidResult));
+    e.scope_drained(a, 303).unwrap();
+    assert_eq!(e.next_command(), Some(Command::Start(a)));
+}
+
+#[test]
+fn scope_close_observed_before_process_completion_does_not_finish_stop_early() {
+    let a = service("a", "");
+    let mut e = engine(&[("A.UNIT", &a)]);
+    let a = id(&e, "a");
+    e.begin_start("a").unwrap();
+    complete(&mut e);
+    e.bind_scope(a, 404).unwrap();
+    let job = e.begin_restart("a").unwrap();
+    assert_eq!(e.next_command(), Some(Command::Stop(a)));
+    e.scope_drained(a, 404).unwrap();
+    assert_eq!(e.scope_drained(a, 404), Err(Error::InvalidResult));
+    assert_eq!(e.next_command(), None);
+    assert_eq!(e.outcome(), Outcome::Running);
+    e.stopped(job, a).unwrap();
+    assert_eq!(e.next_command(), Some(Command::Start(a)));
+}
+
+#[test]
+fn scoped_barrier_rejects_unowned_duplicate_and_invalid_scopes() {
+    let a = service("a", "");
+    let b = service("b", "");
+    let mut e = engine(&[("A.UNIT", &a), ("B.UNIT", &b)]);
+    let (a, b) = (id(&e, "a"), id(&e, "b"));
+    assert_eq!(e.bind_scope(a, 1), Err(Error::InvalidResult));
+    assert_eq!(e.bind_scope(64, 1), Err(Error::InvalidResult));
+    e.begin_start("a").unwrap();
+    complete(&mut e);
+    e.begin_start("b").unwrap();
+    complete(&mut e);
+    assert_eq!(e.bind_scope(a, 0), Err(Error::InvalidResult));
+    e.bind_scope(a, 505).unwrap();
+    assert_eq!(e.bind_scope(a, 506), Err(Error::InvalidResult));
+    assert_eq!(e.bind_scope(b, 505), Err(Error::InvalidResult));
+    assert_eq!(e.scope_drained(b, 505), Err(Error::InvalidResult));
+    assert_eq!(e.scope_drained(64, 505), Err(Error::InvalidResult));
+    assert!(e.active(a) && e.active(b));
+}

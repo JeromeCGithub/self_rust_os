@@ -1218,6 +1218,29 @@ Desktop evidence is under `target/initator-m5-evidence/scans-chain-screenshots/`
 Host GUI and physical hardware were not checked. The public Ring 3 scope factory
 remains closed until its prerequisites are satisfied.
 
+## Host transaction scope cleanup barrier
+
+The host-testable transaction engine can now associate a service resource with a
+specific native scope ID. Once its foreground process exits, stop, failure and
+retry retain that resource until the matching scope-drained notification arrives.
+A scope-close notification may arrive before or after process completion; both
+are required. Duplicate, mismatched, unowned and invalid scope identifiers are
+rejected, and a replacement cannot start or be restored while cleanup is pending.
+The scope registry issues nonrepeating IDs. Unscoped services retain their existing
+behavior.
+
+Host regressions first demonstrated restart after foreground exit, early stop
+completion after unexpected exit, automatic retry before cleanup, an unaccepted
+early scope event, and a restore bypass. The service-core and real host-backend
+suites now pass. Both kernel boot builds and native unscoped two-service and stop
+protocol QEMU cases passed at 1, 8 and 32 CPUs after rebuilding userspace.
+
+This is **not yet wired into Manager or the native runtime**. In particular the
+supervisor must defer automatic retries and deadlines without spinning until a
+scope event, and the kernel must expose authenticated scope creation and durable
+closure events before Initator can bind or acknowledge real scopes. This host
+engine interface alone does not establish scope-aware supervision in the OS.
+
 ## Scope integration invariants for the next implementation
 
 - Keep the initial hierarchy bounded: system/session roots and service scopes;
