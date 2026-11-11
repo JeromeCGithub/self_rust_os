@@ -1249,6 +1249,18 @@ handle creation/publication failures and early events, before Initator can bind 
 acknowledge real scopes. These host interfaces do not establish scope-aware
 supervision in the OS.
 
+The host manager can now bind a nonrepeating scope ID to the exact unpublished
+launch token, before a process identity exists. Failed launches, scope closure
+before publication, cancellation during shutdown, and late successful process
+publication retain that scope through the cleanup barrier. The scope may be bound
+even after cancellation has been requested, because an already-created scope must
+still be accounted for. Stale tokens and duplicate bindings are rejected. Host
+regressions showed both a stale token being accepted and shutdown becoming ready
+before the scope drained when binding was omitted. The full service-core and host
+backend suites pass; rebuilt userspace, both kernel builds, and existing native
+unscoped boot/stop tests pass at 1/8/32 CPUs. No new native scope ABI or native
+scope publication has been implemented by this checkpoint.
+
 ## Scope integration invariants for the next implementation
 
 - Keep the initial hierarchy bounded: system/session roots and service scopes;

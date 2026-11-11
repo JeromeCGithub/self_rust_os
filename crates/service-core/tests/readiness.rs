@@ -648,3 +648,107 @@ fn scoped_stop_job_waits_for_process_and_scope_in_either_order() {
         assert_eq!(m.outcome(), Outcome::Succeeded);
     }
 }
+
+#[test]
+fn failed_scoped_launch_waits_for_scope_cleanup_in_either_event_order() {
+    for scope_first in [false, true] {
+        let mut m = manager("never", false);
+        m.start("a").unwrap();
+        let Some(Action::Start(start)) = next(&mut m, 0) else {
+            panic!("launch")
+        };
+        assert!(m
+            .bind_launch_scope(
+                Start {
+                    unit: start.unit,
+                    run: start.run + 1
+                },
+                1000
+            )
+            .is_err());
+        m.bind_launch_scope(start, 1000).unwrap();
+        assert!(m.bind_launch_scope(start, 1001).is_err());
+        if scope_first {
+            m.scope_drained(start.unit, 1000).unwrap();
+        }
+        m.spawn_failed(start, 1).unwrap();
+        if !scope_first {
+            assert_eq!(next(&mut m, 1), None);
+            assert_eq!(m.outcome(), Outcome::Running);
+            assert!(m.scope_drained(start.unit, 999).is_err());
+            m.scope_drained(start.unit, 1000).unwrap();
+        }
+        assert_eq!(next(&mut m, 1), None);
+        assert_eq!(m.outcome(), Outcome::Failed);
+        assert!(m.bind_launch_scope(start, 1002).is_err());
+    }
+}
+
+#[test]
+fn cancelled_scoped_launch_does_not_finish_shutdown_before_cleanup() {
+    let mut m = manager("never", false);
+    m.start("a").unwrap();
+    let Some(Action::Start(start)) = next(&mut m, 0) else {
+        panic!("launch")
+    };
+    m.bind_launch_scope(start, 1100).unwrap();
+    m.shutdown(20).unwrap();
+    assert_eq!(next(&mut m, 1), None);
+    assert!(m.launch_cancelled(start));
+    m.spawn_failed(start, 2).unwrap();
+    assert_eq!(next(&mut m, 2), None);
+    assert!(!m.shutdown_ready());
+    assert_eq!(m.outcome(), Outcome::Running);
+    m.scope_drained(start.unit, 1100).unwrap();
+    assert_eq!(next(&mut m, 2), None);
+    assert!(m.shutdown_ready());
+}
+
+#[test]
+fn scope_bound_before_publication_survives_spawn_and_process_exit() {
+    let mut m = manager("on-failure", false);
+    m.start("a").unwrap();
+    let Some(Action::Start(start)) = next(&mut m, 0) else {
+        panic!("launch")
+    };
+    m.bind_launch_scope(start, 1200).unwrap();
+    m.spawned(start, key(10), 0).unwrap();
+    assert!(m.bind_launch_scope(start, 1201).is_err());
+    m.notify(start.unit, start.run, key(10), Notification::Ready, 0)
+        .unwrap();
+    assert_eq!(next(&mut m, 0), None);
+    assert_eq!(
+        m.completed(key(10), Completion::Exit(1), 1),
+        Some(start.unit)
+    );
+    assert_eq!(m.next_deadline(), None);
+    assert_eq!(next(&mut m, 10), None);
+    m.scope_drained(start.unit, 1200).unwrap();
+    assert!(matches!(next(&mut m, 10), Some(Action::Start(next)) if next.unit == start.unit));
+}
+
+#[test]
+fn late_scoped_child_published_during_shutdown_is_stopped_and_drained() {
+    let mut m = manager("never", false);
+    m.start("a").unwrap();
+    let Some(Action::Start(start)) = next(&mut m, 0) else {
+        panic!("launch")
+    };
+    m.bind_launch_scope(start, 1300).unwrap();
+    m.shutdown(20).unwrap();
+    assert_eq!(next(&mut m, 1), None);
+    assert!(m.launch_cancelled(start));
+    m.spawned(start, key(77), 2).unwrap();
+    assert!(
+        matches!(next(&mut m, 2), Some(Action::NotifyStop { process, .. }) if process == key(77))
+    );
+    assert_eq!(
+        m.completed(key(77), Completion::Exit(0), 3),
+        Some(start.unit)
+    );
+    assert_eq!(next(&mut m, 3), None);
+    assert!(!m.shutdown_ready());
+    m.scope_drained(start.unit, 1300).unwrap();
+    assert_eq!(next(&mut m, 3), None);
+    assert!(m.shutdown_ready());
+}

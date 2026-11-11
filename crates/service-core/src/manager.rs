@@ -94,6 +94,19 @@ impl Manager {
             shutdown: None,
         })
     }
+    /// Bind an unpublished launch to its kernel scope.
+    pub fn bind_launch_scope(&mut self, start: Start, scope: u64) -> Result<(), Invalid> {
+        if self.supervisor.state(start.unit) != Some(State::Spawning(start.run))
+            || !self
+                .run_status(start.unit)
+                .is_some_and(|status| status.run == start.run && status.process.is_none())
+        {
+            return Err(Invalid);
+        }
+        self.engine
+            .bind_scope(start.unit, scope)
+            .map_err(|_| Invalid)
+    }
     /// Bind a live, identity-verified service run to its kernel scope.
     pub fn bind_scope(
         &mut self,
