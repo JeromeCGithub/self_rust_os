@@ -72,6 +72,9 @@ impl Engine {
             transaction: None,
         }
     }
+    pub(crate) fn draining_scopes(&self) -> u64 {
+        self.draining
+    }
     /// Bind runtime callbacks to the currently admitted transaction.
     pub fn job_id(&self) -> Option<u64> {
         self.transaction.as_ref().map(|tx| tx.id)

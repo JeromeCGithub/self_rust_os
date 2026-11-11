@@ -151,7 +151,13 @@ impl<const N: usize> Supervisor<N> {
     /// Reserve one eligible launch; each successful reservation counts as an attempt.
     /// Call only after events or the earliest deadline, not on periodic ticks.
     pub fn next_start(&mut self, now: u64) -> Option<Start> {
+        self.next_start_excluding(now, 0)
+    }
+    pub(crate) fn next_start_excluding(&mut self, now: u64, excluded: u64) -> Option<Start> {
         for (unit, i) in self.instances.iter_mut().enumerate() {
+            if unit < 64 && excluded & (1u64 << unit) != 0 {
+                continue;
+            }
             if !i.wanted
                 || !matches!(i.state, State::Ready)
                     && !matches!(i.state, State::Backoff(d) if now >= d)
@@ -349,9 +355,14 @@ impl<const N: usize> Supervisor<N> {
     }
     /// Earliest restart deadline. None means the runtime may wait indefinitely.
     pub fn next_deadline(&self) -> Option<u64> {
+        self.next_deadline_excluding(0)
+    }
+    pub(crate) fn next_deadline_excluding(&self, excluded: u64) -> Option<u64> {
         self.instances
             .iter()
-            .filter_map(|i| match i.state {
+            .enumerate()
+            .filter(|(unit, _)| *unit >= 64 || excluded & (1u64 << unit) == 0)
+            .filter_map(|(_, i)| match i.state {
                 State::Backoff(d) => Some(d),
                 _ => None,
             })

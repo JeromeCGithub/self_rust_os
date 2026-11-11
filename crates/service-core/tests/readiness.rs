@@ -566,3 +566,85 @@ fn stopping_a_graph_cannot_rearm_prerequisite_watchdogs_while_waiting_for_depend
         "withdrawn health cannot shorten ordered stop grace"
     );
 }
+
+#[test]
+fn scoped_restart_waits_for_cleanup_without_expired_deadline_spin() {
+    let mut m = manager("on-failure", false);
+    m.start("a").unwrap();
+    let old = launch(&mut m, 0, 10);
+    m.notify(old.unit, old.run, key(10), Notification::Ready, 0)
+        .unwrap();
+    assert_eq!(next(&mut m, 0), None);
+    m.bind_scope(old.unit, old.run, key(10), 700).unwrap();
+    assert_eq!(m.completed(key(10), Completion::Exit(1), 1), Some(old.unit));
+    assert_eq!(
+        m.next_deadline(),
+        None,
+        "draining scopes must not leave an expired restart deadline"
+    );
+    assert_eq!(next(&mut m, 50), None, "no restart before cleanup");
+    assert!(m.scope_drained(old.unit, 701).is_err());
+    assert_eq!(next(&mut m, 50), None);
+    m.scope_drained(old.unit, 700).unwrap();
+    assert!(m.scope_drained(old.unit, 700).is_err());
+    assert_eq!(m.next_deadline(), Some(3));
+    let Some(Action::Start(new)) = next(&mut m, 50) else {
+        panic!("retry after scope closure")
+    };
+    assert_eq!(
+        new.run,
+        old.run + 1,
+        "waiting must not consume launch attempts"
+    );
+}
+
+#[test]
+fn draining_scope_does_not_block_unrelated_service_and_rejects_stale_binding() {
+    let a = b"Version=1\nKind=service\nName=a\nExec=/BIN/A.SVC\nRestart=on-failure\nRestartDelayTicks=2\nRestartMaxDelayTicks=8\nRestartBurst=3\nRestartWindowTicks=100\nHealthyResetTicks=50\n";
+    let b = b"Version=1\nKind=service\nName=b\nExec=/BIN/B.SVC\n";
+    let mut m = Manager::new(Catalog::load(&[("A.UNIT", a), ("B.UNIT", b)]).unwrap()).unwrap();
+    m.start("a").unwrap();
+    let old = launch(&mut m, 0, 10);
+    next(&mut m, 0);
+    assert!(m.bind_scope(old.unit, old.run + 1, key(10), 800).is_err());
+    assert!(m.bind_scope(old.unit, old.run, key(11), 800).is_err());
+    m.bind_scope(old.unit, old.run, key(10), 800).unwrap();
+    assert_eq!(m.completed(key(10), Completion::Exit(1), 1), Some(old.unit));
+    m.start("b").unwrap();
+    let Action::Start(other) = next(&mut m, 4).unwrap() else {
+        panic!("unrelated service")
+    };
+    assert_ne!(other.unit, old.unit);
+    m.spawned(other, key(20), 4).unwrap();
+    assert_eq!(next(&mut m, 4), None);
+    assert!(m.scope_drained(other.unit, 800).is_err());
+    m.scope_drained(old.unit, 800).unwrap();
+    assert!(matches!(next(&mut m, 4), Some(Action::Start(start)) if start.unit == old.unit));
+}
+
+#[test]
+fn scoped_stop_job_waits_for_process_and_scope_in_either_order() {
+    for scope_first in [false, true] {
+        let mut m = manager("never", false);
+        m.start("a").unwrap();
+        let run = launch(&mut m, 0, 10);
+        m.notify(run.unit, run.run, key(10), Notification::Ready, 0)
+            .unwrap();
+        assert_eq!(next(&mut m, 0), None);
+        m.bind_scope(run.unit, run.run, key(10), 900).unwrap();
+        m.stop("a").unwrap();
+        assert!(matches!(next(&mut m, 1), Some(Action::NotifyStop { .. })));
+        if scope_first {
+            m.scope_drained(run.unit, 900).unwrap();
+        }
+        assert_eq!(m.outcome(), Outcome::Running);
+        assert_eq!(m.completed(key(10), Completion::Exit(0), 2), Some(run.unit));
+        if !scope_first {
+            assert_eq!(next(&mut m, 2), None);
+            assert_eq!(m.outcome(), Outcome::Running);
+            m.scope_drained(run.unit, 900).unwrap();
+        }
+        assert_eq!(next(&mut m, 2), None);
+        assert_eq!(m.outcome(), Outcome::Succeeded);
+    }
+}

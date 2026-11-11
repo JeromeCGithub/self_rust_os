@@ -1235,11 +1235,19 @@ early scope event, and a restore bypass. The service-core and real host-backend
 suites now pass. Both kernel boot builds and native unscoped two-service and stop
 protocol QEMU cases passed at 1, 8 and 32 CPUs after rebuilding userspace.
 
-This is **not yet wired into Manager or the native runtime**. In particular the
-supervisor must defer automatic retries and deadlines without spinning until a
-scope event, and the kernel must expose authenticated scope creation and durable
-closure events before Initator can bind or acknowledge real scopes. This host
-engine interface alone does not establish scope-aware supervision in the OS.
+The host manager now binds a scope only to the exact live process/run and accepts
+matching scope-drained events. It suppresses automatic retry admission and retry
+deadlines while a scope drains, so an expired backoff cannot cause an event-loop
+spin; unrelated services can still start. Host tests cover both completion/event
+orders, stop jobs, retries, stale identities and independent services. The retry
+test first failed on the expired deadline, before filtering was added. Existing
+unscoped host and native supervision tests continue to pass.
+
+This is **not yet wired into the native runtime**. The kernel must expose
+authenticated scope creation and durable closure events, and the adapter must
+handle creation/publication failures and early events, before Initator can bind or
+acknowledge real scopes. These host interfaces do not establish scope-aware
+supervision in the OS.
 
 ## Scope integration invariants for the next implementation
 

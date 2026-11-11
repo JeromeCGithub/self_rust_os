@@ -94,6 +94,26 @@ impl Manager {
             shutdown: None,
         })
     }
+    /// Bind a live, identity-verified service run to its kernel scope.
+    pub fn bind_scope(
+        &mut self,
+        unit: usize,
+        run: u64,
+        process: ProcessKey,
+        scope: u64,
+    ) -> Result<(), Invalid> {
+        if !self
+            .run_status(unit)
+            .is_some_and(|status| status.run == run && status.process == Some(process))
+        {
+            return Err(Invalid);
+        }
+        self.engine.bind_scope(unit, scope).map_err(|_| Invalid)
+    }
+    /// Report a durable scope cleanup event for its exact service.
+    pub fn scope_drained(&mut self, unit: usize, scope: u64) -> Result<(), Invalid> {
+        self.engine.scope_drained(unit, scope).map_err(|_| Invalid)
+    }
     pub fn catalog(&self) -> &Catalog {
         self.engine.catalog()
     }
@@ -443,7 +463,10 @@ impl Manager {
                     return Ok(Some(Action::Terminate { unit, process }));
                 }
             }
-            if let Some(start) = self.supervisor.next_start(now) {
+            if let Some(start) = self
+                .supervisor
+                .next_start_excluding(now, self.engine.draining_scopes())
+            {
                 self.engine.reserve_run(start.unit).map_err(|_| Invalid)?;
                 let ticks = self
                     .catalog()
@@ -596,7 +619,10 @@ impl Manager {
             .flatten()
             .flat_map(|r| [r.start_deadline, r.watchdog_deadline, r.stop_deadline])
             .flatten()
-            .chain(self.supervisor.next_deadline())
+            .chain(
+                self.supervisor
+                    .next_deadline_excluding(self.engine.draining_scopes()),
+            )
             .chain(
                 self.shutdown
                     .as_ref()
