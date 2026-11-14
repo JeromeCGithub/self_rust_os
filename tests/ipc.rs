@@ -304,6 +304,73 @@ fn binding_wake_and_exit(context: &mut u64) {
         "bound child exit must reclaim all private frames"
     );
 }
+/// A dead endpoint cannot retain its inbox allocation through a surviving peer.
+/// Measure the real kernel allocator, including repeated explicit close and death.
+#[test_case]
+fn closed_endpoint_releases_storage_while_peer_retains_ordered_messages() {
+    use rustos_ipc_core::{abi as ipc, Error, Pending, Registry};
+    let parent = ipc::ProcessKey {
+        pid: 1,
+        generation: 1,
+    };
+    let child = ipc::ProcessKey {
+        pid: 2,
+        generation: 1,
+    };
+    let baseline = allocator::allocated_bytes();
+    for iteration in 0..8 {
+        let mut registry = Registry::new();
+        let [a, b] = registry.pair(parent).unwrap();
+        registry
+            .bindings(
+                parent,
+                child,
+                &[ipc::Binding {
+                    source: b,
+                    tag: 1,
+                    rights: ipc::Rights::ALL,
+                }],
+            )
+            .unwrap();
+        for n in 0..ipc::MAX_MESSAGES {
+            registry.send(parent, a, &[n as u8]).unwrap();
+            registry.send(child, b, &[n as u8]).unwrap();
+        }
+        let populated = allocator::allocated_bytes();
+        if iteration % 2 == 0 {
+            registry.close(child, b).unwrap();
+        } else {
+            registry.close_owner(child);
+        }
+        let released = populated.checked_sub(allocator::allocated_bytes()).unwrap();
+        assert!(
+            released >= ipc::MAX_MESSAGES * core::mem::size_of::<Pending>(),
+            "closed endpoint must release its own inbox before the peer closes"
+        );
+        assert_eq!(registry.handles(child), 0);
+        assert_eq!(registry.send(parent, a, b"late"), Err(Error::Closed));
+        assert_eq!(registry.send(child, b, b"stale"), Err(Error::Denied));
+        for n in 0..ipc::MAX_MESSAGES {
+            let pending = registry.peek(parent).unwrap().unwrap();
+            assert_eq!(pending.event.kind, ipc::Kind::Message);
+            assert_eq!(pending.event.sender, Some(child));
+            assert_eq!(pending.event.payload[0], n as u8);
+            registry.consume(parent, pending).unwrap();
+        }
+        let closed = registry.peek(parent).unwrap().unwrap();
+        assert_eq!(closed.event.kind, ipc::Kind::PeerClosed);
+        registry.consume(parent, closed).unwrap();
+        assert_eq!(registry.peek(parent), Ok(None));
+        registry.close(parent, a).unwrap();
+        assert_eq!(registry.channels(), 0);
+        drop(registry);
+        assert_eq!(
+            allocator::allocated_bytes(),
+            baseline,
+            "both ownership paths must restore the exact heap baseline"
+        );
+    }
+}
 fn activate(pid: u32, context: &mut u64) {
     for _ in 0..128 {
         if scheduler::current_pid() == Some(pid) {

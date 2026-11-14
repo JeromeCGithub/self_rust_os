@@ -671,9 +671,9 @@ scope and drops the Init flag, protected-system-write and scope-factory bits;
 threads share process metadata. The existing restricted-worker allowlist remains
 stricter and denies this newly added syscall. Normal boot still launches system
 contexts. Kernel-only scoped constructors can now attach other identities and
-account private pages/threads, but no Ring 3 session/scope factory is exposed yet;
-filesystem/IPC/socket/audio accounting and per-session filesystem grants remain
-incomplete in M5. These bytes describe metadata and never confer
+account private pages/threads and IPC endpoint/inbox ownership, but no Ring 3
+session/scope factory is exposed yet; filesystem/socket/audio accounting and
+per-session filesystem grants remain incomplete in M5. These bytes describe metadata and never confer
 authority. See [M5 progress](initator-m5-progress.md).
 
 `userlib::principal::attenuate()` performs one-way process-wide reduction to a

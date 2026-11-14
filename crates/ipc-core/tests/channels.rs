@@ -259,3 +259,42 @@ fn paused_receive_interest_keeps_data_queued_without_starving_control_or_losing_
     assert_eq!(receive(&mut r, 2).kind, Kind::PeerClosed);
     assert!(!r.ready(owner(2)));
 }
+
+#[test]
+fn inbox_reservations_follow_validated_endpoint_moves_and_actual_close() {
+    let mut r = Registry::new();
+    let empty = r.owner_usage(owner(1)).unwrap();
+    assert_eq!(empty.handles, 0);
+    assert_eq!(empty.inbox_bytes, 0);
+    let [a, b] = r.pair(owner(1)).unwrap();
+    let full = r.owner_usage(owner(1)).unwrap();
+    assert_eq!(full.handles, 2);
+    assert!(full.inbox_bytes >= PAIR_INBOX_BYTES);
+    let grants = [binding(b, 1, Rights::SEND)];
+    let moved = r.binding_usage(owner(1), owner(2), &grants).unwrap();
+    assert_eq!(moved.handles, 1);
+    assert_eq!(moved.inbox_bytes * 2, full.inbox_bytes);
+    assert!(r
+        .binding_usage(owner(1), owner(2), &[grants[0], grants[0]])
+        .is_err());
+    assert_eq!(r.owner_usage(owner(1)).unwrap(), full);
+    r.bindings(owner(1), owner(2), &grants).unwrap();
+    assert_eq!(r.owner_usage(owner(1)).unwrap(), moved);
+    assert_eq!(
+        r.owner_usage(owner(2)).unwrap(),
+        moved,
+        "attenuation discards messages but retains the live endpoint reservation"
+    );
+    r.close(owner(1), a).unwrap();
+    assert_eq!(r.owner_usage(owner(1)).unwrap(), empty);
+    assert_eq!(r.owner_usage(owner(2)).unwrap(), moved);
+    r.close_owner(owner(2));
+    assert_eq!(r.owner_usage(owner(2)).unwrap(), empty);
+    assert_eq!(r.channels(), 0);
+    assert!(r
+        .owner_usage(ProcessKey {
+            pid: 1,
+            generation: 2
+        })
+        .is_err());
+}

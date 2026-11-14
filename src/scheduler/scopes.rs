@@ -41,8 +41,8 @@ pub fn scope_create_service(parent: u64, limit: Usage) -> Result<u64, Error> {
     s.scopes.create_service(owner, parent, limit)
 }
 /// Snapshot an owned scope. Currently charged: processes/base threads, private
-/// frames and constructor/heap/thread ownership allocations. Filesystem, IPC,
-/// socket and audio accounting remain pending; this is not a Ring 3 ABI.
+/// frames, constructor/heap/thread ownership allocations and IPC handles/inboxes.
+/// Filesystem/socket/audio accounting remain pending; this is not a Ring 3 ABI.
 pub fn scope_status(scope: u64) -> Result<Snapshot, Error> {
     let s = SCHEDULER.lock();
     s.scopes.status(caller(&s)?, scope)
@@ -76,9 +76,22 @@ pub fn spawn_process_in_scope(
     scope: u64,
     caps: Capabilities,
 ) -> Result<super::Pid, &'static str> {
+    spawn_process_in_scope_with_bindings(binary, readonly, argv, envp, &[], scope, caps)
+}
+/// Publish an explicitly scoped leader and its attenuated endpoint moves under
+/// the same scheduler lock. Kernel-only until the Ring 3 grant ABI is complete.
+pub fn spawn_process_in_scope_with_bindings(
+    binary: &[u8],
+    readonly: usize,
+    argv: &[&str],
+    envp: &[&str],
+    bindings: &[rustos_ipc_abi::Binding],
+    scope: u64,
+    caps: Capabilities,
+) -> Result<super::Pid, &'static str> {
     rustos_process_abi::startup_size(argv, envp).map_err(|_| "invalid startup vectors")?;
     x86_64::instructions::interrupts::without_interrupts(|| {
-        super::spawn_process_inner(binary, readonly, argv, envp, &[], Some((scope, caps)))
+        super::spawn_process_inner(binary, readonly, argv, envp, bindings, Some((scope, caps)))
     })
 }
 pub(super) fn launch_principal(

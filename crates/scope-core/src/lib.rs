@@ -22,14 +22,17 @@
 //! scope controls pass to init. These events never consume process completion.
 //! This crate is not a userspace ABI. The native scheduler adapter currently
 //! accounts process/thread reservations, private frames and selected persistent
-//! allocations; filesystem, IPC, socket and audio accounting remain separate
-//! work. Host tests alone do not prove kernel containment.
+//! allocations and IPC handles/inboxes; filesystem, socket and audio accounting
+//! remain separate work. Host tests alone do not prove kernel containment.
 #![no_std]
 pub use rustos_process_abi::supervision::ProcessKey;
 /// Fixed scope table, including the reserved system root.
 pub const MAX_SCOPES: usize = 64;
 /// Slots unavailable to sessions, preserving system recovery capacity.
 pub const RECOVERY_SCOPES: usize = 4;
+/// Maximum service records per session, including Closing and unacknowledged
+/// Closed records. The session root is separate; empty leaves also consume slots.
+pub const MAX_SESSION_SERVICES: usize = 16;
 pub const SYSTEM: u64 = rustos_process_abi::principal::SYSTEM_SCOPE;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Bookkeeping/authority failure. No errno or syscall encoding is implied.
@@ -75,6 +78,7 @@ macro_rules! resources {
             fn permits_growth(self, delta:Self, ceiling:Self)->bool {
                 $((delta.$field==0 || self.$field<=ceiling.$field))&&+
             }
+            fn increase_over(self, before:Self)->Self {Self{$($field:self.$field.saturating_sub(before.$field)),+}}
             fn room(self, used:Self)->Self {Self{$($field:self.$field.saturating_sub(used.$field)),+}}
             fn minimum(self, other:Self)->Self {Self{$($field:self.$field.min(other.$field)),+}}
             fn add(self, rhs:Self)->Result<Self,Error> {
@@ -261,6 +265,17 @@ impl Registry {
         }
         if user.is_some_and(|id| id == 0 || id == u32::MAX) {
             return Err(Error::Invalid);
+        }
+        if base.kind == Kind::Session
+            && self
+                .slots
+                .iter()
+                .flatten()
+                .filter(|node| node.parent == Some(parent))
+                .count()
+                >= MAX_SESSION_SERVICES
+        {
+            return Err(Error::Limit);
         }
         let ceiling = if session {
             base.limit.subtract(self.recovery)?
@@ -531,7 +546,9 @@ impl Registry {
     }
     /// Trusted kernel reaper lookup for a process's kernel-owned scope identity.
     /// This is not an authorization API or a userspace PID selector.
-    pub fn controller(&self, scope:u64)->Option<ProcessKey> {self.view(scope).ok().map(|node|node.owner)}
+    pub fn controller(&self, scope: u64) -> Option<ProcessKey> {
+        self.view(scope).ok().map(|node| node.owner)
+    }
     /// Kernel-side victim selection; not an authorization or process lookup API.
     pub fn is_closing(&self, scope: u64) -> bool {
         self.view(scope).is_ok_and(|node| node.state != State::Open)
@@ -588,3 +605,5 @@ mod tests {
 
 mod transaction;
 pub use transaction::{Growth, Reservation};
+
+mod transfer;
