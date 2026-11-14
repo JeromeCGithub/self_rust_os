@@ -285,3 +285,6 @@ mod environment_tests {
         assert_eq!(core::mem::size_of::<StringRef>(), 16);
     }
 }
+
+/// Descriptive native identity/capability ABI; authority remains kernel-owned.
+pub mod principal;

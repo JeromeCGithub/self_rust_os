@@ -100,13 +100,17 @@ const SYSCALL_ERROR: u64 = u64::MAX - 1;
 /// The syscall return value, or [`PROCESS_EXIT_SENTINEL`] to signal process exit.
 pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
     crate::scheduler::reap_retired();
-    if !crate::scheduler::syscall_permitted(num, arg1) {
+    if !crate::scheduler::syscall_permitted(num, arg1, arg2) {
         return SYSCALL_ERROR;
     }
     if (96..=109).contains(&num) {
         return thread_dispatch(num, arg1, arg2, arg3);
     }
     match num {
+        rustos_process_abi::principal::SYS_ATTENUATE => {
+            crate::scheduler::attenuate_principal(arg1, arg2, arg3)
+        }
+        rustos_process_abi::principal::SYS_PRINCIPAL => crate::scheduler::principal_user(arg1, arg2, arg3),
         120..=125 => crate::scheduler::ipc_syscall(num, arg1, arg2, arg3),
         rustos_ipc_abi::SYS_SPAWN_BOUND => {
             if arg3 != rustos_ipc_abi::SPAWN_SIZE as u64 {
@@ -523,8 +527,12 @@ fn sys_ls(path_ptr: u64, buf_ptr: u64, max_entries: u64) -> u64 {
 /// Takes a null-terminated path in `path_ptr`. Returns 0 on success,
 /// or SYSCALL_ERROR.
 fn sys_mkdir(path_ptr: u64) -> u64 {
+    let system = crate::scheduler::system_write_authority();
     let result = crate::fs::handles::path(path_ptr, crate::fs::handles::PathKind::RecursiveCreate)
-        .map(|path| crate::fs::with_fs(|fs| fs.create_dir(&path)));
+        .map(|path| crate::fs::with_fs(|fs| {
+            crate::fs::authorize_write(fs, &path, system)?;
+            fs.create_dir(&path)
+        }));
     match result {
         Some(Some(Ok(()))) => 0,
         _ => {
@@ -581,8 +589,10 @@ fn sys_write_file(path_ptr: u64, buf_ptr: u64, len: u64) -> u64 {
     let Ok(bytes) = user_slice(buf_ptr, len) else {
         return SYSCALL_ERROR;
     };
+    let system = crate::scheduler::system_write_authority();
     match with_user_path(path_ptr, |path| {
         crate::fs::with_fs(|fs| {
+            crate::fs::authorize_write(fs, path, system)?;
             let _ = fs.create_file(path);
             fs.write_file(path, &bytes)
         })

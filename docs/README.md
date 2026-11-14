@@ -6,7 +6,7 @@ current behavior; architecture targets are not evidence of implemented features.
 | Document | Purpose |
 | --- | --- |
 | [AI contribution instructions](../AGENTS.md) | Mandatory TDD, verification, safety, and delivery rules |
-| [Initator service management](init-system-plan.md) | Native PID 1 roadmap; [M1 evidence](initator-progress.md), [native unit format](initator-units.md), [M2 evidence](initator-m2-progress.md), and [M3 evidence](initator-m3-progress.md), and [host development](initator-host.md); [M4 evidence](initator-m4-progress.md) |
+| [Initator service management](init-system-plan.md) | Native PID 1 roadmap; [M1 evidence](initator-progress.md), [native unit format](initator-units.md), [M2 evidence](initator-m2-progress.md), and [M3 evidence](initator-m3-progress.md), and [host development](initator-host.md); [M4 evidence](initator-m4-progress.md); [M5 work in progress](initator-m5-progress.md) |
 | [Architecture](architecture.md) | Ring 0/Ring 3 ownership, driver hierarchy, repository map, lifecycle, and limitations |
 | [Native threads and SMP](threading.md) | Current 1–32 CPU support, Ring 3 threading/synchronization APIs, ownership, limits and validation |
 | [Interactive SMP latency](parallel-latency-validation.md) | Two terminal/shell pairs, event waits, compact loading and measured 16-CPU response |

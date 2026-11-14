@@ -135,6 +135,8 @@ pub enum FatError {
     DirFull,
     /// The read buffer is smaller than the file.
     BufferTooSmall,
+    /// A syscall caller lacks authority for this resolved filesystem object.
+    AccessDenied,
 }
 
 /// A directory listing entry.
@@ -400,6 +402,30 @@ impl<B: BlockDevice> Fat32<B> {
         entry[11] = ATTR_ARCHIVE;
         self.install_name(dir_cluster, &name_83, entry)?;
         Ok(())
+    }
+
+    /// Resolve a normalized absolute path's first component against a reserved
+    /// root entry. Long names and 8.3 aliases compare by actual entry location;
+    /// the reserved spelling also matches if the entry has not been created.
+    /// Callers must serialize this check with the protected mutation.
+    pub(crate) fn in_root_entry(&mut self, path: &str, root: &str) -> Result<bool, FatError> {
+        if !path.starts_with('/') || !lfn::valid(root) {
+            return Err(FatError::InvalidName);
+        }
+        let mut components = path.split('/').filter(|part| !part.is_empty());
+        let Some(first) = components.next() else {
+            return Ok(false);
+        };
+        if !lfn::valid(first) || !components.all(lfn::valid) {
+            return Err(FatError::InvalidName);
+        }
+        if name_equal(first, root) {
+            return Ok(true);
+        }
+        let Some(reserved) = self.find_entry_in(self.root_cluster, root)? else {
+            return Ok(false);
+        };
+        Ok(self.find_entry_in(self.root_cluster, first)? == Some(reserved))
     }
 
     /// Creates a directory at `path`, creating missing parents (`mkdir -p`).
@@ -1499,6 +1525,49 @@ mod tests {
 
     // Small enough to fit in the 1 MiB kernel heap with room to spare.
     const TEST_SECTORS: u32 = 512;
+
+    #[test_case]
+    fn root_entry_protection_resolves_aliases_and_reserves_missing_names() {
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        assert_eq!(fs.in_root_entry("/EtC/new/child", "ETC"), Ok(true));
+        assert_eq!(fs.in_root_entry("/ETCETERA/file", "ETC"), Ok(false));
+        fs.create_dir("/Protected Long Directory").unwrap();
+        fs.create_file("/Protected Long Filename.txt").unwrap();
+        let entries = fs.list_dir(None).unwrap();
+        for entry in entries {
+            let root = entry.long_name.as_deref().unwrap();
+            let alias = super::short_name(&entry.name);
+            assert_ne!(root, alias);
+            let long = alloc::format!("/{root}");
+            let short = alloc::format!("/{alias}");
+            assert_eq!(fs.in_root_entry(&long, root), Ok(true));
+            assert_eq!(fs.in_root_entry(&short, root), Ok(true));
+            // Both sides resolve aliases, including an alias used as the label.
+            assert_eq!(fs.in_root_entry(&long, &alias), Ok(true));
+            if entry.is_dir() {
+                assert_eq!(
+                    fs.in_root_entry(&alloc::format!("{short}/missing"), root),
+                    Ok(true)
+                );
+            }
+            assert_eq!(fs.in_root_entry("/elsewhere/file", root), Ok(false));
+        }
+        for path in ["relative", "/ETC/../elsewhere", "/./ETC", "/ETC/bad?name"] {
+            assert_eq!(fs.in_root_entry(path, "ETC"), Err(FatError::InvalidName));
+        }
+        assert_eq!(fs.in_root_entry("/", "ETC"), Ok(false));
+        for root in ["", ".", "..", "/ETC", "ETC/sub"] {
+            assert_eq!(fs.in_root_entry("/file", root), Err(FatError::InvalidName));
+        }
+        assert!(fs.device.writes.iter().any(|n| *n > 0));
+        fs.device.writes.fill(0);
+        assert_eq!(fs.in_root_entry("/ETC/new", "ETC"), Ok(true));
+        assert!(
+            fs.device.writes.iter().all(|n| *n == 0),
+            "authorization must not write"
+        );
+    }
 
     #[test_case]
     fn range_write_does_not_rewrite_unaffected_file_clusters() {

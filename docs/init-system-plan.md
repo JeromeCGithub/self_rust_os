@@ -19,8 +19,10 @@ see [its evidence and limits](initator-m3-progress.md) and
 [the real host backend](initator-host.md). M3 now includes native control and a
 chunked launch worker with image syscall 127, added after measured single-CPU
 synchronous loading exceeded the declared watchdog tolerance. M4 is implemented and locally validated; see
-[stop/shutdown/halt evidence and limits](initator-m4-progress.md). M5–M7 remain
-future milestones.
+[stop/shutdown/halt evidence and limits](initator-m4-progress.md). M5 is in progress
+with principal queries, mechanism-right enforcement and protected system-file
+mutations; see [its current checks and remaining scope](initator-m5-progress.md).
+M5 is not delivered; M6–M7 remain future milestones.
 
 The requested outcome is a native Ring 3 PID 1 that orchestrates boot and supervises
 system services, followed by a separate user manager that supervises login sessions
@@ -1533,6 +1535,13 @@ without a hardware contract is not general shutdown. Existing FAT/ATA writes do
 not imply transactional or power-loss durability.
 
 ### M5 — Enforced identities, service scopes, and a non-graphical user manager
+
+**Review phases:** M5 is split into stacked PRs. Phase 1 delivers kernel
+principals, attenuation and protected system-file mutations. Phase 2 adds the
+scope model and transaction primitives. Subsequent phases integrate kernel scope
+enforcement and grants, then Nest and the fixed developer session, then remaining
+isolation, resource accounting, recovery and full M5 acceptance checks. Earlier
+phases do not claim the complete M5 security boundary; M6 and M7 remain in scope.
 
 **Objective:** launch a separate manager with a real kernel user/session identity
 and reduced authority; clean up its services even when it dies.
