@@ -51,6 +51,8 @@ pub struct Process {
     pub pid: Pid,
     /// Kernel-owned native identity with irreversibly reducible mechanism rights.
     pub(crate) principal: rustos_process_abi::principal::Principal,
+    /// Kernel-sealed directory roots, inherited only within one session.
+    pub(crate) filesystem_authority: crate::fs::access::Authority,
     /// Native resource reservation, retained through off-CPU physical reclamation.
     pub(crate) scope_charge: Option<rustos_scope_core::Charge>,
     /// Completion owner assigned before publishing the process.

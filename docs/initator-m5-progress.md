@@ -10,6 +10,17 @@ primitives; later phases integrate kernel scope enforcement, grants and Nest,
 then complete isolation, resource accounting and milestone-wide validation.
 Phase 1 is a foundation, not an untrusted multi-user security boundary.
 
+Phase 8 adds identity-anchored directory grants, inherited authority reduction,
+and atomic installation of initial filesystem and endpoint grants during scoped
+construction. Kernel unit, scoped-file, FAT32, scope and IPC QEMU tests pass.
+The rebuilt native capability/protected-file probes, two-service supervision and
+the eight-worker file probe pass at 1, 8 and 32 configured CPUs. The test image
+reused phase-7 userspace except for the rebuilt probe, with a fresh phase-8 kernel.
+Grant installation remains kernel-only in this phase; the user-session ABI and
+in-flight filesystem cancellation remain later work.
+The eight-CPU legacy desktop QEMU regression passed; its [capture](screenshots/initator-m5-phase8-desktop.png)
+shows the tested compatibility boot. No manual host GUI check was performed.
+
 Phase 7 streams directory output through admitted storage, bounds FAT file and
 namespace scratch, and rolls back failed directory initialization. Kernel unit,
 FAT32, scoped-file and scope tests pass; native file and protected-system-path
@@ -1048,6 +1059,171 @@ checks intermediate directories, so guarding only the final open is insufficient
 The Ring 3 scope factory stays closed until those permissions and remaining
 resource/lifetime gates are enforced. Nest and scoped Initator restart/cleanup
 integration remain unfinished; no M5 PR is claimed by these kernel prerequisites.
+
+## Enforced kernel directory grants
+
+[`fs/access.rs`](../src/fs/access.rs) adds READ/WRITE upper bounds for up to eight
+existing directory roots. Requests resolve to opaque FAT directory identities,
+including long/short aliases, rather than relying on string prefixes. Root
+creation validates directory geometry and a bounded, acyclic parent chain to the
+mounted root. Subtree and ancestor checks use those validated parent links.
+There is one immutable boot mount; no userspace directory deletion, rename or
+remount can recycle identities. Those future APIs require explicit grant
+invalidation/generation handling before introduction. Filesystem metadata remains
+trusted kernel-maintained data; this is not resistance to an attacker replacing
+the whole boot disk.
+
+Each PCB owns a fixed grant set in the existing bounded process table.
+`scheduler::restrict_filesystem` is a kernel-only adapter: it snapshots the live
+caller, excludes PID 1 and sibling/unreaped threads, validates roots/rights under
+FS, then revalidates and publishes the complete subset under SCHEDULER. No
+scheduler lock is acquired under FS. Empty grants deny all file access. Existing
+children retain copied rights; future ordinary children inherit the current set.
+Kernel scoped construction across a session boundary defaults to no access.
+Initial grants must still be added atomically to the future public scope factory.
+The kernel chooses no home/tmp names or login policy.
+
+The [filesystem adapter](../src/fs/handles.rs) applies these bounds to path
+traversal, cwd changes, open/create/truncate, reads/writes, metadata seeks and both
+directory formats, including both passes of staged listings. Search can traverse
+ancestors of a grant without granting a directory listing there. Write-only roots
+do not allow reads or listings. Existing descriptors are checked against current
+authority on each operation, so opening before reduction cannot retain outside
+access. Cleanup/close stays available. Recursive mkdir is now routed through the
+same adapter. Existing protected-system-root checks remain additional bounds.
+
+[Disk executable loading](../src/scheduler.rs) checks FILE_READ and directory
+rights before metadata access and again for the data pass. This closes the old
+SPAWN-only file-loading bypass across path-based spawn routes. Owned-image launch
+still needs only SPAWN and the caller's valid owned bytes. No syscall numbers or
+principal wire layout changed; there is no Ring 3 grant configuration API yet.
+
+Observed red evidence in `target/initator-m5-evidence/`:
+
+- `fs-grants-policy-red.log`: a requested write outside the allowed rights still
+  succeeded before the policy checks were implemented.
+- `fs-grants-native-red.log`: an already-open outside descriptor returned three
+  bytes after filesystem attenuation instead of failing without output.
+- `fs-grants-malformed-root-red.log`: an invalid zero-cluster directory could mint
+  a root grant; root sealing now rejects invalid geometry and cyclic parents.
+- `fs-grants-spawn-read-red.log`: the strengthened real Ring 3 probe, booted with
+  the previous kernel image, published a path-spawned child without FILE_READ.
+  The current kernel passes those denials while owned-image spawning succeeds.
+
+The first full native run (`fs-grants-pre-migration.log`) exposed the previous
+probe's obsolete SPAWN-only positive path launch. The updated probe preserves
+SPAWN-only inheritance through an owned image, asserts all path-spawn denials,
+and adds positive path inheritance with SPAWN plus FILE_READ. It was run against
+the old kernel to demonstrate the missing check, then rebuilt with the current
+kernel. No timeout, expected child exit or existing cleanup assertion was relaxed.
+
+Kernel policy tests cover aliases, subset/expansion, empty/oversized grants,
+readonly/write-only roots, nested unions, malformed links and allocation-free
+checks. The scoped-files integration exercises old descriptors, whole-file I/O,
+listings, traversal canceled by `..`, mkdir effects, executable reads, inherited
+children, further reduction, capability bounds and exact scope resource recovery.
+These are kernel-context restricted-process tests. Real Ring 3 probes exercise the
+read/spawn fix and compatibility, but do not yet configure restricted directory
+grants through the still-closed scope/session factory. That native matrix, initial
+assignment, I/O quiescence/cancellation, socket/audio accounting, scope-aware
+Initator stop/restart and Nest remain required before M5 delivery.
+
+Validation for the directory-grant checkpoint:
+
+- Default and GRUB debug builds; both complete release builders produced
+  `target/init-m5-fs-grants.img` and `target/init-m5-fs-grants-desktop.img`.
+- 108 kernel unit cases and ten integration executables (`display_mapping`,
+  `fat32`, `ipc`, `keyboard_timer`, `native_supervision`, `process_supervision`,
+  `scoped_files`, `scopes`, `stdio`, `threads`), serialized around writable
+  fixtures. These include restricted kernel-context grant tests, not a Ring 3
+  scope-factory acceptance claim.
+- 81 real Ring 3 runs: all 22 native init cases, native `init_file_io.py`, unit
+  `vectors`, default `file_io.py`, and capability `names`/`files`, each at 1/8/32
+  CPUs. The migrated capability probe checks file-read permission on every path
+  spawn route, positive owned-image inheritance and positive read+spawn paths.
+- Full default desktop at eight CPUs; six isolated 8 MiB/s loader/watchdog
+  normal/cancellation checks at 1/8/32 CPUs, all with zero watchdog delay ticks.
+- Documentation/link and whitespace checks. Unchanged host policy/tooling suites
+  were not rerun, and no timeout or latency budget was increased.
+
+Evidence is retained as `fs-grants-*.log` under `target/initator-m5-evidence/`.
+The successful focused capability run at one CPU was included once in the full
+matrix rather than needlessly repeated. Probe binaries and read-only metadata
+were regenerated together with `tools/build-user.sh`; metadata bytes remained
+unchanged. Final source edits after the builds are documentation only. Tested
+screenshots are in `fs-grants-screenshots/`; tracked generic screenshots and the
+FAT fixture are restored. Permission/resource assertions establish these
+properties; screenshots demonstrate desktop compatibility only. Manual host GUI
+and physical hardware remain unverified. The known debug heap-stress timeout
+was not rerun or claimed as passing.
+
+## Atomic initial filesystem and endpoint delegation
+
+The new kernel-only [`InitialGrants`](../src/scheduler/scopes.rs) batch combines
+bootstrap endpoint bindings with up to eight explicit directory roots.
+`spawn_process_in_scope_with_grants` validates owned startup data and scoped
+launch authority, snapshots the creator/target principal and current filesystem
+bounds, checks requested directory rights against target mechanism capabilities,
+and resolves a subset under FS without holding SCHEDULER. A private prepared
+value contains scalar snapshots and sealed identities only; it borrows no process,
+filesystem or user data.
+
+The [common constructor](../src/scheduler.rs) revalidates the current native
+creator, its exact principal/filesystem authority and the fresh target principal
+under SCHEDULER before resource reservations or endpoint moves. Existing scoped
+owner/open/leader checks run again. The final PCB contains the delegated policy
+before process/thread publication; endpoint ownership and leader appointment use
+the same existing transaction. The ordinary launch adapters pass no prepared
+value and retain their existing inheritance/default-deny behavior. An explicit
+empty initial filesystem set means no access even within the system session.
+This chooses no home/tmp policy and introduces no userspace syscall or SDK API.
+
+`fs-initial-grants-red.log` records the observable missing behavior: the first
+operation in a newly created user-session context could not read its approved
+directory (general error instead of three bytes). The completed
+[scoped-files test](../tests/scoped_files.rs) verifies approved first access,
+outside denial, a session manager delegating a read-only service subset, denied
+foreign delegation, target-capability mismatch and empty-grant override.
+
+Combined failure tests repeatedly reject a nonexistent root and a valid root
+with zero frame quota. They assert zero target usage/no leader, unchanged real
+frame counts and aggregate usage, and continued creator ownership of the exact
+endpoint. The same endpoint then moves successfully to the new session and is
+available through its bootstrap tag while the creator loses ownership. Closing
+the session/service hierarchy and peer restores exact initial resource usage.
+These are kernel-context assertions, not execution of a restricted Ring 3 session
+manager. The source revalidation across the FS/SCHEDULER boundary still needs the
+public factory's SMP cancellation/race matrix before M5 acceptance.
+
+The public scope/session factory, I/O cancellation/quiescence, socket/audio
+accounting, scope-aware Initator stop/restart and Nest remain unfinished. No M5 PR
+is claimed by this kernel adapter. Its public factory must snapshot complete
+userspace records into owned storage before invoking this synchronous interface.
+
+Validation for the initial-delegation checkpoint:
+
+- Default and GRUB debug builds; both complete release disk builders:
+  `target/init-m5-fs-initial.img` and `target/init-m5-fs-initial-desktop.img`.
+- 108 kernel unit cases, the expanded `scoped_files` executable, and nine other
+  integration executables (`display_mapping`, `fat32`, `ipc`, `keyboard_timer`,
+  `native_supervision`, `process_supervision`, `scopes`, `stdio`, `threads`).
+  Writable fixture checks ran serially; the FAT wrapper's test ran directly.
+- 81 real Ring 3 runs: all 22 native init cases, native `init_file_io.py`, unit
+  `vectors`, default `file_io.py`, and capability `names`/`files`, each at 1/8/32
+  CPUs. These verify integration compatibility, not public initial-grant calls.
+- Full default desktop at eight CPUs; six isolated 8 MiB/s normal/cancellation
+  loader checks at 1/8/32 CPUs, all with zero watchdog delay ticks.
+- Documentation/link checks and `git diff --check`. Unchanged host core/tooling
+  suites were not rerun. No timeout or latency budget was increased.
+
+Evidence is retained as `fs-initial-*.log` under `target/initator-m5-evidence/`;
+tested desktop screenshots are in `fs-initial-screenshots/`. Tracked generated
+screenshots and the disposable FAT fixture are restored. Runtime assertions and
+resource counters establish delegation/rollback properties; screenshots show
+desktop compatibility. Source edits after the release builds are documentation
+only. Manual host GUI, physical hardware and the public factory's restricted
+Ring 3 matrix remain unverified. The existing debug heap-stress baseline was not
+rerun or claimed as passing. This remains a local M5 checkpoint, not its PR.
 
 ## Scope integration invariants for the next implementation
 

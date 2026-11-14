@@ -136,6 +136,11 @@ pub enum FatError {
     AccessDenied,
 }
 
+/// Opaque directory identity for the single boot-mounted volume. No userspace
+/// rename, directory deletion or remount API can recycle these identities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DirectoryKey(u32);
+
 /// A directory listing entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirEntry {
@@ -653,6 +658,87 @@ impl<B: BlockDevice> Fat32<B> {
     /// Validate an existing directory without allocating its entry listing.
     pub fn check_directory(&mut self, path: &str) -> Result<(), FatError> {
         self.directory_cluster(path).map(|_| ())
+    }
+
+    pub(crate) fn directory_key(&mut self, path: &str) -> Result<DirectoryKey, FatError> {
+        if !path.starts_with('/') {
+            return Err(FatError::AccessDenied);
+        }
+        let directory = self.directory_cluster(path)?;
+        self.checked_directory_key(directory)
+    }
+    pub(crate) fn file_parent_key(&mut self, path: &str) -> Result<DirectoryKey, FatError> {
+        if !path.starts_with('/') {
+            return Err(FatError::AccessDenied);
+        }
+        let (directory, _) = self.resolve_parent(path)?;
+        self.checked_directory_key(directory)
+    }
+    /// Last existing directory on a validated recursive-create path.
+    pub(crate) fn creation_parent_key(&mut self, path: &str) -> Result<DirectoryKey, FatError> {
+        if !path.starts_with('/') {
+            return Err(FatError::AccessDenied);
+        }
+        let components = path.split('/').filter(|part| !part.is_empty());
+        if !components.clone().all(lfn::valid) {
+            return Err(FatError::InvalidName);
+        }
+        let mut directory = self.root_cluster;
+        for component in components {
+            let Some((cluster, index)) = self.find_entry_in(directory, component)? else {
+                break;
+            };
+            let mut entry = [0; 32];
+            self.read_dir_entry(cluster, index, &mut entry)?;
+            if entry[11] & ATTR_DIRECTORY == 0 {
+                break;
+            }
+            directory = self.dir_entry_cluster(cluster, index)?;
+        }
+        self.checked_directory_key(directory)
+    }
+    fn checked_directory_key(&mut self, cluster: u32) -> Result<DirectoryKey, FatError> {
+        let key = DirectoryKey(cluster);
+        if !self.directory_contains(DirectoryKey(self.root_cluster), key)? {
+            return Err(FatError::DeviceError);
+        }
+        Ok(key)
+    }
+    /// Follow validated parent links rather than comparing path spellings.
+    pub(crate) fn directory_contains(
+        &mut self,
+        root: DirectoryKey,
+        target: DirectoryKey,
+    ) -> Result<bool, FatError> {
+        let limit =
+            (self.total_sectors - self.first_data_sector) / u32::from(self.sectors_per_cluster);
+        let valid = |cluster| cluster >= 2 && cluster < limit + 2;
+        if !valid(root.0) || !valid(target.0) {
+            return Err(FatError::DeviceError);
+        }
+        let mut current = target.0;
+        for _ in 0..limit {
+            if current == root.0 {
+                return Ok(true);
+            }
+            if current == self.root_cluster {
+                return Ok(false);
+            }
+            let mut parent = [0; 32];
+            self.read_dir_entry(current, 1, &mut parent)?;
+            if parent[..11] != *b"..         " || parent[11] & ATTR_DIRECTORY == 0 {
+                return Err(FatError::DeviceError);
+            }
+            let high = u32::from(u16::from_le_bytes([parent[20], parent[21]]));
+            let low = u32::from(u16::from_le_bytes([parent[26], parent[27]]));
+            let next = (high << 16) | low;
+            let next = if next == 0 { self.root_cluster } else { next };
+            if !valid(next) || next == current {
+                return Err(FatError::DeviceError);
+            }
+            current = next;
+        }
+        Err(FatError::DeviceError)
     }
 
     fn directory_cluster(&mut self, path: &str) -> Result<u32, FatError> {
@@ -1664,6 +1750,169 @@ mod tests {
 
     // Bound the disposable RAM volume and its per-sector I/O counters.
     const TEST_SECTORS: u32 = 512;
+
+    #[test_case]
+    fn filesystem_grants_resolve_aliases_and_keep_search_separate_from_listing() {
+        use crate::fs::access::{Authority, Rights};
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        fs.create_dir("/A long café home/child").unwrap();
+        fs.create_dir("/OTHER").unwrap();
+        let entries = fs.list_dir(None).unwrap();
+        let alias = super::short_name(
+            &entries
+                .iter()
+                .find(|entry| entry.long_name.as_deref() == Some("A long café home"))
+                .unwrap()
+                .name,
+        );
+        let alias_root = alloc::format!("/{alias}");
+        let alias_file = alloc::format!("/{alias}/new");
+        fs.device.heap_ceiling = Some(crate::allocator::allocated_bytes());
+        let grants = Authority::System
+            .narrow(&mut fs, &[("/A long café home", Rights::READ_WRITE)])
+            .unwrap();
+        assert_eq!(
+            grants.file(&mut fs, &alias_file, Rights::READ_WRITE),
+            Ok(())
+        );
+        assert_eq!(
+            grants
+                .narrow(&mut fs, &[(&alias_root, Rights::READ)])
+                .unwrap()
+                .file(&mut fs, "/A long café home/new", Rights::READ),
+            Ok(())
+        );
+        assert_eq!(grants.search(&mut fs, "/"), Ok(()));
+        assert_eq!(
+            grants.directory(&mut fs, "/", Rights::READ),
+            Err(FatError::AccessDenied)
+        );
+        assert_eq!(
+            grants.recursive_create(&mut fs, "/A long café home/new/deep"),
+            Ok(())
+        );
+        assert_eq!(
+            grants.recursive_create(&mut fs, "/OTHER/new/deep"),
+            Err(FatError::AccessDenied)
+        );
+        assert!(grants
+            .narrow(&mut fs, &[("/A long café home", Rights::READ); 9])
+            .is_err());
+        assert!(grants
+            .narrow(&mut fs, &[("relative", Rights::READ)])
+            .is_err());
+        let combined = Authority::System
+            .narrow(
+                &mut fs,
+                &[
+                    ("/A long café home", Rights::READ),
+                    ("/A long café home/child", Rights::WRITE),
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            combined.file(&mut fs, "/A long café home/child/new", Rights::READ_WRITE),
+            Ok(())
+        );
+        assert!(combined
+            .file(&mut fs, "/A long café home/new", Rights::WRITE)
+            .is_err());
+        fs.device.heap_ceiling = None;
+    }
+
+    #[test_case]
+    fn filesystem_grant_roots_reject_malformed_directory_links() {
+        use crate::fs::access::{Authority, Rights};
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        fs.create_dir("/BROKEN").unwrap();
+        let (entry_cluster, index) = fs
+            .find_entry_in(fs.root_cluster, "BROKEN")
+            .unwrap()
+            .unwrap();
+        let mut entry = [0; 32];
+        fs.read_dir_entry(entry_cluster, index, &mut entry).unwrap();
+        let original = entry;
+        super::set_entry_cluster(&mut entry, 0);
+        fs.write_dir_entry(entry_cluster, index, &entry).unwrap();
+        assert!(
+            Authority::System
+                .narrow(&mut fs, &[("/BROKEN", Rights::READ)])
+                .is_err(),
+            "a malformed directory entry must not mint a sealed grant"
+        );
+        fs.write_dir_entry(entry_cluster, index, &original).unwrap();
+        let directory = fs.dir_entry_cluster(entry_cluster, index).unwrap();
+        let mut parent = [0; 32];
+        fs.read_dir_entry(directory, 1, &mut parent).unwrap();
+        super::set_entry_cluster(&mut parent, directory);
+        fs.write_dir_entry(directory, 1, &parent).unwrap();
+        assert!(
+            Authority::System
+                .narrow(&mut fs, &[("/BROKEN", Rights::READ)])
+                .is_err(),
+            "cyclic parents must fail without unbounded traversal"
+        );
+    }
+
+    #[test_case]
+    fn filesystem_grants_follow_directory_identity_and_only_attenuate() {
+        use crate::fs::access::{Authority, Rights};
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        fs.create_dir("/A long home/sub").unwrap();
+        fs.create_dir("/PRIVATE").unwrap();
+        fs.create_dir("/OUTSIDE").unwrap();
+        fs.create_file("/A long home/READ.TXT").unwrap();
+        let access = Authority::System
+            .narrow(
+                &mut fs,
+                &[("/A long home", Rights::READ), ("/PRIVATE", Rights::WRITE)],
+            )
+            .unwrap();
+        assert_eq!(
+            access.file(&mut fs, "/A long home/READ.TXT", Rights::READ),
+            Ok(())
+        );
+        assert_eq!(
+            access.file(&mut fs, "/A long home/READ.TXT", Rights::WRITE),
+            Err(FatError::AccessDenied)
+        );
+        assert_eq!(access.file(&mut fs, "/PRIVATE/new", Rights::WRITE), Ok(()));
+        assert_eq!(
+            access.file(&mut fs, "/PRIVATE/new", Rights::READ),
+            Err(FatError::AccessDenied)
+        );
+        assert_eq!(
+            access.file(&mut fs, "/OUTSIDE/new", Rights::WRITE),
+            Err(FatError::AccessDenied)
+        );
+        assert_eq!(access.search(&mut fs, "/"), Ok(()));
+        assert_eq!(access.search(&mut fs, "/A long home"), Ok(()));
+        assert_eq!(
+            access.search(&mut fs, "/OUTSIDE"),
+            Err(FatError::AccessDenied)
+        );
+        assert!(access
+            .narrow(&mut fs, &[("/A long home", Rights::READ_WRITE)])
+            .is_err());
+        assert!(access.narrow(&mut fs, &[("/", Rights::READ)]).is_err());
+        let child = access
+            .narrow(&mut fs, &[("/A long home/sub", Rights::READ)])
+            .unwrap();
+        assert!(child
+            .file(&mut fs, "/A long home/READ.TXT", Rights::READ)
+            .is_err());
+        assert!(child
+            .file(&mut fs, "/A long home/sub/new", Rights::READ)
+            .is_ok());
+        let empty = child.narrow(&mut fs, &[]).unwrap();
+        assert!(empty.search(&mut fs, "/").is_err());
+        assert!(empty
+            .narrow(&mut fs, &[("/A long home/sub", Rights::READ)])
+            .is_err());
+    }
 
     #[test_case]
     fn directory_creation_metadata_failures_reclaim_the_new_cluster() {

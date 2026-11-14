@@ -92,3 +92,79 @@ pub(crate) fn system_write_authority() -> bool {
                     .contains(abi::Capabilities::SYSTEM_WRITE)
         })
 }
+
+/// Copy authority before acquiring FS; callers retain no scheduler references.
+pub(crate) fn filesystem_authority() -> Option<crate::fs::access::Authority> {
+    filesystem_snapshot(false)
+}
+pub(crate) fn filesystem_read_authority() -> Option<crate::fs::access::Authority> {
+    filesystem_snapshot(true)
+}
+fn filesystem_snapshot(read: bool) -> Option<crate::fs::access::Authority> {
+    let s = SCHEDULER.lock();
+    let process = s.processes.get(s.current_pid()? as usize)?.as_ref()?;
+    if process.state != ProcessState::Live
+        || (read
+            && !process
+                .principal
+                .capabilities
+                .contains(abi::Capabilities::FILE_READ))
+    {
+        return None;
+    }
+    Some(process.filesystem_authority)
+}
+/// Irreversibly narrow this native process's directory grants. Kernel-only until
+/// the scope factory ABI can install initial grants atomically before publication.
+/// Single-thread admission excludes concurrent filesystem I/O by a sibling.
+pub fn restrict_filesystem(requests: &[(&str, crate::fs::FileRights)]) -> Result<(), &'static str> {
+    let (pid, source) = {
+        let s = SCHEDULER.lock();
+        let pid = s.current_pid().ok_or("no filesystem authority owner")?;
+        if s.init_pid.is_none()
+            || s.init_pid == Some(pid)
+            || s.threads.iter().flatten().filter(|t| t.pid == pid).count() != 1
+        {
+            return Err("filesystem attenuation requires one native non-init thread");
+        }
+        let p = s
+            .processes
+            .get(pid as usize)
+            .and_then(Option::as_ref)
+            .filter(|p| p.state == ProcessState::Live)
+            .ok_or("filesystem owner exited")?;
+        for &(_, rights) in requests {
+            if (rights.contains(crate::fs::FileRights::READ)
+                && !p
+                    .principal
+                    .capabilities
+                    .contains(abi::Capabilities::FILE_READ))
+                || (rights.contains(crate::fs::FileRights::WRITE)
+                    && !p
+                        .principal
+                        .capabilities
+                        .contains(abi::Capabilities::FILE_WRITE))
+            {
+                return Err("filesystem mechanism rights denied");
+            }
+        }
+        (pid, p.filesystem_authority)
+    };
+    let narrowed = crate::fs::with_fs(|fs| source.narrow(fs, requests))
+        .ok_or("filesystem unavailable")?
+        .map_err(|_| "filesystem grant expansion or invalid root")?;
+    let mut s = SCHEDULER.lock();
+    if s.current_pid() != Some(pid)
+        || s.threads.iter().flatten().filter(|t| t.pid == pid).count() != 1
+    {
+        return Err("filesystem owner changed");
+    }
+    let p = s
+        .processes
+        .get_mut(pid as usize)
+        .and_then(Option::as_mut)
+        .filter(|p| p.state == ProcessState::Live && p.filesystem_authority == source)
+        .ok_or("filesystem owner changed")?;
+    p.filesystem_authority = narrowed;
+    Ok(())
+}

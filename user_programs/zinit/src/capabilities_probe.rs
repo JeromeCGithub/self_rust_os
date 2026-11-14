@@ -15,15 +15,34 @@ fn no_files() {
     assert!(fs::File::open("/CAP.TXT", fs::O_RDONLY).is_err());
     assert!(fs::read_dir("/").is_err());
 }
-fn no_spawn(image: &[u8]) {
+fn no_path_spawn() {
+    assert!(sys::spawn_with_args("/BIN/ZINIT.SVC", &["--cap-unexpected"]).is_err());
     assert!(sys::spawn("/BIN/ZINIT.SVC").is_err());
     assert!(sys::spawn_with_args("/BIN/ZINIT.SVC", &["--cap-unexpected"]).is_err());
     assert!(sys::spawn_with_env("/BIN/ZINIT.SVC", &["--cap-unexpected"], &[]).is_err());
     assert!(ipc::spawn("/BIN/ZINIT.SVC", &["--cap-unexpected"], &[], &mut []).is_err());
-    assert!(ipc::spawn_image("zinit", image, &["--cap-unexpected"], &[], &mut []).is_err());
     // Exercise the old numeric path-spawn as well as the SDK's newer v1/v2/v3 paths.
     let path = b"/BIN/ZINIT.SVC\0";
     assert_eq!(raw(8, path.as_ptr() as u64, 0, 0), sys::SYSCALL_ERROR);
+}
+fn no_spawn(image: &[u8]) {
+    no_path_spawn();
+    assert!(ipc::spawn_image("zinit", image, &["--cap-unexpected"], &[], &mut []).is_err());
+}
+fn own_image() -> alloc::vec::Vec<u8> {
+    let mut file = fs::File::open("/BIN/ZINIT.SVC", fs::O_RDONLY).unwrap();
+    let length = file.seek(0, fs::SEEK_END).unwrap() as usize;
+    assert!(length < 1024 * 1024);
+    file.seek(0, fs::SEEK_SET).unwrap();
+    let mut image = alloc::vec![0; length];
+    let mut offset = 0;
+    while offset < length {
+        let end = (offset + 64 * 1024).min(length);
+        let count = file.read(&mut image[offset..end]).unwrap();
+        assert!(count > 0);
+        offset += count;
+    }
+    image
 }
 pub fn child(mode: &str) {
     if mode == "--cap-unexpected" {
@@ -43,9 +62,27 @@ pub fn child(mode: &str) {
         return;
     }
     if mode == "--cap-inherit" {
+        let image = own_image();
         principal::attenuate(Caps::SPAWN).expect("drop before spawning a child");
-        let pid = sys::spawn_with_args("/BIN/ZINIT.SVC", &["--cap-inherited"]).unwrap();
+        no_files();
+        no_path_spawn();
+        let pid = ipc::spawn_image("zinit", &image, &["--cap-inherited"], &[], &mut []).unwrap();
         assert_eq!(sys::waitpid(pid), Ok(0));
+        return;
+    }
+    if mode == "--cap-path-read" {
+        let caps = Caps::from_bits(Caps::SPAWN.bits() | Caps::FILE_READ.bits()).unwrap();
+        principal::attenuate(caps).unwrap();
+        let pid = sys::spawn_with_args("/BIN/ZINIT.SVC", &["--cap-path-inherited"]).unwrap();
+        assert_eq!(sys::waitpid(pid), Ok(0));
+        return;
+    }
+    if mode == "--cap-path-inherited" {
+        let caps = Caps::from_bits(Caps::SPAWN.bits() | Caps::FILE_READ.bits()).unwrap();
+        assert_eq!(principal::current().unwrap().capabilities, caps);
+        let mut bytes = [0; 4];
+        assert_eq!(sys::read_file("/CAP.TXT", &mut bytes), Some(4));
+        assert_eq!(&bytes, b"keep");
         return;
     }
     if mode == "--cap-read" {
@@ -73,19 +110,7 @@ pub fn child(mode: &str) {
     let initial = principal::current().unwrap();
     let fd = sys::open("/CAP.TXT", fs::O_RDWR).unwrap();
     let [mut a, b] = ipc::Endpoint::pair().unwrap();
-    let mut file = fs::File::open("/BIN/ZINIT.SVC", fs::O_RDONLY).unwrap();
-    let length = file.seek(0, fs::SEEK_END).unwrap() as usize;
-    assert!(length < 1024 * 1024);
-    file.seek(0, fs::SEEK_SET).unwrap();
-    let mut image = alloc::vec![0;length];
-    let mut offset = 0;
-    while offset < length {
-        let end = (offset + 64 * 1024).min(length);
-        let count = file.read(&mut image[offset..end]).unwrap();
-        assert!(count > 0);
-        offset += count;
-    }
-    drop(file);
+    let image = own_image();
     for (bits, flags, reserved) in [(512, 0, 0), (u64::MAX, 0, 0), (0, 1, 0), (0, 0, 1)] {
         assert_eq!(raw(130, bits, flags, reserved), sys::SYSCALL_ERROR);
         assert_eq!(principal::current().unwrap(), initial);
@@ -153,7 +178,13 @@ pub fn run() -> ! {
     );
     assert_eq!(principal::current().unwrap(), init);
     assert_eq!(sys::write_file("/CAP.TXT", b"keep"), Some(4));
-    for mode in ["--cap-none", "--cap-read", "--cap-inherit", "--cap-write"] {
+    for mode in [
+        "--cap-none",
+        "--cap-read",
+        "--cap-inherit",
+        "--cap-path-read",
+        "--cap-write",
+    ] {
         let pid = sys::spawn_with_args("/BIN/ZINIT.SVC", &[mode]).unwrap();
         assert_eq!(sys::waitpid(pid), Ok(0), "child mode {mode}");
     }

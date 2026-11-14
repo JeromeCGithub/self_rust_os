@@ -288,8 +288,9 @@ live-orphan adoption events or already-dead orphan completion. PID-control calls
 check parent authority in this profile; new typed control always checks ownership.
 PID values never wrap/reuse; the wire key also contains a checked generation.
 M5 work adds native process principals, capability attenuation, protected system
-root writes and selected resource accounting. The scope/session factory remains
-kernel-only while filesystem grants and other isolation gates are unfinished;
+root writes, kernel-sealed directory grants and selected resource accounting.
+The scope/session and initial-filesystem-grant factory remains kernel-only while
+I/O lifecycle, socket/audio and other isolation gates are unfinished;
 normal services still share the trusted system scope. These mechanisms do not
 establish hostile-service isolation. See [M5 progress](initator-m5-progress.md).
 
