@@ -67,6 +67,10 @@ pub mod usercopy;
 
 /// General argument/environment launch validation.
 pub(crate) mod launch;
+/// Validated native launch snapshots for kernel constructors and integration.
+pub use launch::with_launch_snapshot;
+/// Validated native image-snapshot constructor for kernel entry and integration.
+pub use launch::spawn_image as spawn_from_image;
 
 /// Static compiler TLS template mapping.
 pub(crate) mod tls;

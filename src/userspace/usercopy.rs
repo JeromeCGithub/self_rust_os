@@ -224,24 +224,22 @@ pub fn to_user(destination: u64, source: &[u8]) -> bool {
 /// Copy a bounded C string page by page into owned kernel storage. Reads never
 /// cross an unvalidated page, and no user reference survives a copy or syscall.
 #[cfg(target_os = "none")]
-pub fn cstring(pointer: u64, limit: usize) -> Option<alloc::vec::Vec<u8>> {
-    let mut result = alloc::vec::Vec::new();
-    let mut scratch = [0; 256];
-    while result.len() < limit {
-        let address = pointer.checked_add(result.len() as u64)?;
+pub fn cstring(pointer: u64, limit: usize) -> Option<crate::scheduler::ResourceBuffer> {
+    let mut result = crate::scheduler::ResourceBuffer::zeroed(limit).ok()?;
+    let mut length = 0;
+    while length < limit {
+        let address = pointer.checked_add(length as u64)?;
         let amount = (4096 - (address as usize & 4095))
-            .min(scratch.len())
-            .min(limit - result.len());
-        if !from_user(address, &mut scratch[..amount]) {
+            .min(256)
+            .min(limit - length);
+        if !from_user(address, &mut result[length..length + amount]) {
             return None;
         }
-        let end = scratch[..amount].iter().position(|&b| b == 0);
-        let take = end.unwrap_or(amount);
-        result.try_reserve(take).ok()?;
-        result.extend_from_slice(&scratch[..take]);
-        if end.is_some() {
+        if let Some(end) = result[length..length + amount].iter().position(|&b| b == 0) {
+            result.truncate(length + end);
             return Some(result);
         }
+        length += amount;
     }
     None
 }

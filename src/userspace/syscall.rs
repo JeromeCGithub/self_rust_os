@@ -122,7 +122,7 @@ pub(crate) extern "C" fn syscall_dispatch(num: u64, arg1: u64, arg2: u64, arg3: 
             if arg3 != rustos_ipc_abi::IMAGE_SPAWN_SIZE as u64 {
                 return SYSCALL_ERROR;
             }
-            crate::userspace::launch::spawn_image(arg1, arg2)
+            crate::userspace::spawn_from_image(arg1, arg2)
         }
         rustos_process_abi::isolation::SYS_RESTRICT => {
             crate::scheduler::restrict_worker(arg1, arg2, arg3)
@@ -300,13 +300,12 @@ fn thread_dispatch(number: u64, first: u64, second: u64, third: u64) -> u64 {
     }
 }
 
-fn user_slice(ptr: u64, len: u64) -> Result<alloc::vec::Vec<u8>, ()> {
+fn user_slice(ptr: u64, len: u64) -> Result<crate::scheduler::ResourceBuffer, ()> {
     if !userspace::usercopy::validate(ptr, len, false) {
         return Err(());
     }
-    let mut bytes = alloc::vec::Vec::new();
-    bytes.try_reserve_exact(len as usize).map_err(|_| ())?;
-    bytes.resize(len as usize, 0);
+    let length = usize::try_from(len).map_err(|_| ())?;
+    let mut bytes = crate::scheduler::ResourceBuffer::zeroed(length).map_err(|_| ())?;
     if !userspace::usercopy::from_user(ptr, &mut bytes) {
         return Err(());
     }
@@ -341,7 +340,7 @@ fn sys_write(buf_ptr: u64, len: u64) -> u64 {
         }
         Err(_) => {
             // Fall back to printing byte-by-byte for non-UTF-8 data.
-            for &byte in &buf {
+            for &byte in buf.iter() {
                 if byte.is_ascii_graphic() || byte == b' ' || byte == b'\n' {
                     print!("{}", byte as char);
                 } else {
@@ -483,12 +482,6 @@ fn validate_user_buffer(ptr: u64, len: u64) -> bool {
     userspace::usercopy::validate(ptr, len, true)
 }
 
-/// Copy the path before invoking filesystem mechanisms.
-fn with_user_path<R>(ptr: u64, f: impl FnOnce(&str) -> R) -> Option<R> {
-    let path = crate::fs::handles::path(ptr, crate::fs::handles::PathKind::Existing)?;
-    Some(f(&path))
-}
-
 /// Lists directory entries into a user buffer.
 ///
 /// `path_ptr` is a null-terminated path ("" = cwd, "/" = root).
@@ -570,36 +563,10 @@ fn sys_fb_info(buf_ptr: u64) -> u64 {
 ///
 /// Path is null-terminated. Returns bytes read, or SYSCALL_ERROR.
 fn sys_read_file(path_ptr: u64, buf_ptr: u64, len: u64) -> u64 {
-    if !validate_user_buffer(buf_ptr, len) {
-        return SYSCALL_ERROR;
-    }
-    let mut bytes = alloc::vec::Vec::new();
-    if bytes.try_reserve_exact(len as usize).is_err() {
-        return SYSCALL_ERROR;
-    }
-    bytes.resize(len as usize, 0);
-    match with_user_path(path_ptr, |path| {
-        crate::fs::with_fs(|fs| fs.read_file(path, &mut bytes))
-    }) {
-        Some(Some(Ok(n))) if userspace::usercopy::to_user(buf_ptr, &bytes[..n]) => n as u64,
-        _ => SYSCALL_ERROR,
-    }
+    crate::fs::read_path(path_ptr, buf_ptr, len)
 }
 fn sys_write_file(path_ptr: u64, buf_ptr: u64, len: u64) -> u64 {
-    let Ok(bytes) = user_slice(buf_ptr, len) else {
-        return SYSCALL_ERROR;
-    };
-    let system = crate::scheduler::system_write_authority();
-    match with_user_path(path_ptr, |path| {
-        crate::fs::with_fs(|fs| {
-            crate::fs::authorize_write(fs, path, system)?;
-            let _ = fs.create_file(path);
-            fs.write_file(path, &bytes)
-        })
-    }) {
-        Some(Some(Ok(n))) => n as u64,
-        _ => SYSCALL_ERROR,
-    }
+    crate::fs::write_path(path_ptr, buf_ptr, len)
 }
 
 /// Creates a new process running the program at the given path.

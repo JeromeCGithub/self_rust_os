@@ -111,7 +111,7 @@ impl Scheduler {
 static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 
 mod resources;
-pub use resources::{grow_resource, reserve_resource, ResourceLease};
+pub use resources::{grow_resource, reserve_resource, ResourceBuffer, ResourceLease, ResourceString};
 mod scopes;
 pub use scopes::{
     scope_ack_closed, scope_close, scope_create_service, scope_create_session,
@@ -1029,34 +1029,50 @@ pub fn wake_keyboard_waiters() {
 /// Loads a program binary from the FAT32 filesystem.
 ///
 /// Returns the binary bytes, or an error string.
-pub fn load_program_from_disk(path: &str) -> Result<Vec<u8>, &'static str> {
-    // Persistent resources such as socket buffers can fragment the heap. Stage
-    // only the actual file, rather than demanding a contiguous maximum-size
-    // user image on every spawn. Hold the FS lock across metadata and read.
+pub fn load_program_from_disk(path: &str) -> Result<ResourceBuffer, &'static str> {
+    let boot = {
+        let s = SCHEDULER.lock();
+        s.current_pid().is_none()
+            && s.next_pid == s.init_pid.unwrap_or(0)
+            && s.processes.iter().flatten().next().is_none()
+            && s.retired.is_empty()
+            && s.threads.iter().flatten().next().is_none()
+    };
+    // Never acquire SCHEDULER under the filesystem lock. Query size first,
+    // reserve/copy outside it, then recheck and read one consistent FS snapshot.
+    let size = crate::fs::with_fs(|fs| fs.file_size(path))
+        .ok_or("filesystem not initialized")?
+        .map_err(|_| "failed to query program size")?;
+    if size == 0 {
+        return Err("program file is empty");
+    }
+    if size as u64 > rustos_thread_abi::IMAGE_END - userspace::USER_CODE_START {
+        return Err("user binary overlaps stack");
+    }
+    let mut binary = if boot {
+        ResourceBuffer::boot_zeroed(size)
+    } else {
+        ResourceBuffer::zeroed(size)
+    }
+    .map_err(|_| "not enough scoped capacity to stage program")?;
     crate::fs::with_fs(|fs| {
-        let size = fs
+        if fs
             .file_size(path)
-            .map_err(|_| "failed to query program size")?;
-        if size == 0 {
-            return Err("program file is empty");
+            .map_err(|_| "failed to recheck program size")?
+            != size
+        {
+            return Err("program size changed during staging");
         }
-        if size as u64 > rustos_thread_abi::IMAGE_END - userspace::USER_CODE_START {
-            return Err("user binary overlaps stack");
-        }
-        let mut binary = Vec::new();
-        binary
-            .try_reserve_exact(size)
-            .map_err(|_| "not enough memory to stage program")?;
-        binary.resize(size, 0);
         let read = fs
             .read_file(path, &mut binary)
             .map_err(|_| "failed to read program file")?;
         if read != size {
             return Err("short program read");
         }
-        Ok(binary)
+        Ok(())
     })
-    .ok_or("filesystem not initialized")?
+    .ok_or("filesystem not initialized")??;
+    Ok(binary)
 }
 
 /// PID receiving keyboard input; only the compositor can change it.

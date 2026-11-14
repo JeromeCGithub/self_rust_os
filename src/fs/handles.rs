@@ -1,6 +1,7 @@
 //! Process-owned working directories and bounded regular-file descriptors.
 //! Lock order: filesystem service -> open file. Never hold the scheduler lock
 //! during disk I/O or while taking either service lock.
+use crate::scheduler::ResourceString;
 use alloc::{string::String, sync::Arc};
 use rustos_scope_core::Usage;
 use spin::Mutex;
@@ -18,22 +19,19 @@ const CREAT: u64 = 0o100;
 const TRUNC: u64 = 0o1000;
 
 pub(crate) struct OpenFile {
-    path: String,
+    path: ResourceString,
     offset: usize,
     access: u64,
     ready: bool,
-    // Field order releases the path allocation before publishing quota release.
-    // Shared Arc owners retain this lease through concurrent/blocked file I/O.
-    _lease: crate::scheduler::ResourceLease,
 }
 pub(crate) struct Files {
-    pub(crate) cwd: String,
+    pub(crate) cwd: ResourceString,
     slots: alloc::vec::Vec<Option<Arc<Mutex<OpenFile>>>>,
 }
 impl Files {
     pub(crate) fn new(cwd: String) -> Self {
         Self {
-            cwd,
+            cwd: ResourceString::from_accounted(cwd),
             slots: alloc::vec::Vec::new(),
         }
     }
@@ -53,22 +51,44 @@ pub(crate) enum PathKind {
     Listing,
 }
 
-/// Copy and resolve a user path against a snapshot of the calling process cwd.
-/// Each traversed component must be a directory, even before `..` or `.`.
-/// The legacy recursive mkdir alone permits missing intermediate directories.
-pub(crate) fn path(pointer: u64, kind: PathKind) -> Option<String> {
+// Allocate outside SCHEDULER, then copy a coherent cwd under its metadata lock.
+// A concurrent longer cwd fails without growing while that lock is held.
+fn cwd_snapshot(extra: usize) -> Option<ResourceString> {
+    let length = crate::scheduler::with_files(|files| files.cwd.len())?;
+    let capacity = length.checked_add(extra).filter(|&n| n <= 4096)?;
+    let mut snapshot = ResourceString::with_capacity(capacity).ok()?;
+    crate::scheduler::with_files(|files| {
+        if files.cwd.len().checked_add(extra)? > snapshot.capacity() {
+            return None;
+        }
+        snapshot.push_str(files.cwd.as_str()).ok()
+    })??;
+    Some(snapshot)
+}
+/// Copy and resolve a user path; validate every traversed directory, including
+/// those canceled by `..`. Only recursive mkdir permits missing intermediates.
+pub(crate) fn path(pointer: u64, kind: PathKind) -> Option<ResourceString> {
     let bytes = crate::userspace::usercopy::cstring(pointer, 4096)?;
     if bytes.is_empty() && !matches!(kind, PathKind::Listing) {
         return None;
     }
     let input = core::str::from_utf8(&bytes).ok()?;
-    let cwd = crate::scheduler::with_files(|files| files.cwd.clone())?;
+    let cwd = if input.starts_with('/') {
+        None
+    } else {
+        Some(cwd_snapshot(0)?)
+    };
+    let prefix = cwd.as_ref().map_or("/", |cwd| cwd.as_str());
+    let capacity = prefix
+        .len()
+        .checked_add(input.len())?
+        .checked_add(1)?
+        .min(4095);
+    let mut out = ResourceString::with_capacity(capacity).ok()?;
+    out.push_str(prefix).ok()?;
+    // All mutable path storage is allocated and charged before taking FS. The
+    // bounded append operations below cannot allocate or acquire SCHEDULER.
     super::with_fs(|fs| {
-        let mut out = if input.starts_with('/') {
-            String::from("/")
-        } else {
-            cwd
-        };
         let mut components = input.split('/').filter(|p| !p.is_empty()).peekable();
         while let Some(component) = components.next() {
             match component {
@@ -80,18 +100,22 @@ pub(crate) fn path(pointer: u64, kind: PathKind) -> Option<String> {
                     }
                 }
                 _ => {
-                    if out.len() > 1 {
-                        out.push('/');
-                    }
-                    out.push_str(component);
-                    if out.len() >= 4096 {
+                    let separator = usize::from(out.len() > 1);
+                    if out
+                        .len()
+                        .checked_add(separator)?
+                        .checked_add(component.len())?
+                        > 4095
+                    {
                         return None;
                     }
-                    // Keep conventional short-name spelling while preserving
-                    // Unicode/case in long components. FAT lookup is case-insensitive.
+                    if separator != 0 {
+                        out.push_str("/").ok()?;
+                    }
+                    out.push_str(component).ok()?;
                     if crate::fat32::short_component(component) {
                         let start = out.len() - component.len();
-                        out[start..].make_ascii_uppercase();
+                        out.as_mut_str()[start..].make_ascii_uppercase();
                     }
                     if !matches!(kind, PathKind::RecursiveCreate)
                         && (components.peek().is_some() || input.ends_with('/'))
@@ -135,18 +159,19 @@ pub fn syscall(number: u64, first: u64, second: u64, third: u64) -> u64 {
             .unwrap_or(ERROR)
         }
         GETCWD if third == 0 => {
-            let Some(cwd) = crate::scheduler::with_files(|files| files.cwd.clone()) else {
+            if !crate::userspace::usercopy::validate(first, second, true) {
+                return ERROR;
+            }
+            let Some(mut cwd) = cwd_snapshot(1) else {
                 return ERROR;
             };
-            let mut bytes = cwd.into_bytes();
-            bytes.push(0);
-            if second < bytes.len() as u64
-                || !crate::userspace::usercopy::validate(first, second, true)
-                || !crate::userspace::usercopy::to_user(first, &bytes)
+            if cwd.push_str("\0").is_err()
+                || second < cwd.len() as u64
+                || !crate::userspace::usercopy::to_user(first, cwd.as_bytes())
             {
                 return ERROR;
             }
-            bytes.len() as u64
+            cwd.len() as u64
         }
         _ => ERROR,
     }
@@ -162,19 +187,20 @@ fn open(pointer: u64, flags: u64) -> u64 {
     };
     // Reserve the slot before any create/truncate side effects. This also makes
     // concurrent opens in sibling threads observe the process descriptor quota.
-    let Ok(lease) = crate::scheduler::reserve_resource(Usage {
-        descriptors: 1,
-        kernel_bytes: path.capacity() as u64,
-        ..Usage::ZERO
-    }) else {
+    if path
+        .charge(Usage {
+            descriptors: 1,
+            ..Usage::ZERO
+        })
+        .is_err()
+    {
         return ERROR;
-    };
+    }
     let Ok(file) = Arc::try_new(Mutex::new(OpenFile {
         path,
         offset: 0,
         access: flags & 3,
         ready: false,
-        _lease: lease,
     })) else {
         return ERROR;
     };
@@ -240,30 +266,9 @@ pub fn read(fd: u64, pointer: u64, length: u64) -> u64 {
     if !crate::userspace::usercopy::validate(pointer, length, true) {
         return ERROR;
     }
-    // Declare the lease before the buffer: every return drops buffer storage
-    // before the lock-free release is published, including I/O/copy failure.
-    let Ok(lease) = crate::scheduler::reserve_resource(Usage {
-        kernel_bytes: count as u64,
-        ..Usage::ZERO
-    }) else {
+    let Ok(mut bytes) = crate::scheduler::ResourceBuffer::zeroed(count) else {
         return ERROR;
     };
-    let mut bytes = alloc::vec::Vec::new();
-    if bytes.try_reserve_exact(count).is_err() {
-        return ERROR;
-    }
-    if crate::scheduler::grow_resource(
-        &lease,
-        Usage {
-            kernel_bytes: (bytes.capacity() - count) as u64,
-            ..Usage::ZERO
-        },
-    )
-    .is_err()
-    {
-        return ERROR;
-    }
-    bytes.resize(count, 0);
     // Copying to user memory requires the entry gate. Reserve an offset only
     // after disk I/O succeeded; the full destination was validated above.
     let result = super::with_fs(|fs| {
@@ -288,30 +293,9 @@ fn write(fd: u64, pointer: u64, length: u64) -> u64 {
         return ERROR;
     }
     let count = length.min(MAX_IO as u64) as usize;
-    // Declare the lease before the buffer: every return drops buffer storage
-    // before the lock-free release is published, including I/O/copy failure.
-    let Ok(lease) = crate::scheduler::reserve_resource(Usage {
-        kernel_bytes: count as u64,
-        ..Usage::ZERO
-    }) else {
+    let Ok(mut bytes) = crate::scheduler::ResourceBuffer::zeroed(count) else {
         return ERROR;
     };
-    let mut bytes = alloc::vec::Vec::new();
-    if bytes.try_reserve_exact(count).is_err() {
-        return ERROR;
-    }
-    if crate::scheduler::grow_resource(
-        &lease,
-        Usage {
-            kernel_bytes: (bytes.capacity() - count) as u64,
-            ..Usage::ZERO
-        },
-    )
-    .is_err()
-    {
-        return ERROR;
-    }
-    bytes.resize(count, 0);
     if !crate::userspace::usercopy::from_user(pointer, &mut bytes) {
         return ERROR;
     }
@@ -408,5 +392,54 @@ pub(crate) fn readdir(path_pointer: u64, output: u64, capacity: u64) -> u64 {
         size as u64
     } else {
         ERROR
+    }
+}
+
+/// Whole-file path read for the existing native syscall 6. No user reference
+/// survives filesystem work; complete output validation precedes disk access.
+pub fn read_path(path_pointer: u64, output: u64, length: u64) -> u64 {
+    if !crate::userspace::usercopy::validate(output, length, true) {
+        return ERROR;
+    }
+    let Ok(length) = usize::try_from(length) else {
+        return ERROR;
+    };
+    let Ok(mut bytes) = crate::scheduler::ResourceBuffer::zeroed(length) else {
+        return ERROR;
+    };
+    let Some(path) = path(path_pointer, PathKind::Existing) else {
+        return ERROR;
+    };
+    match super::with_fs(|fs| fs.read_file(&path, &mut bytes)) {
+        Some(Ok(n)) if crate::userspace::usercopy::to_user(output, &bytes[..n]) => n as u64,
+        _ => ERROR,
+    }
+}
+/// Whole-file replacement for the existing native syscall 7. Copy before locking
+/// the filesystem and enforce protected-root policy under its service lock.
+pub fn write_path(path_pointer: u64, input: u64, length: u64) -> u64 {
+    if !crate::userspace::usercopy::validate(input, length, false) {
+        return ERROR;
+    }
+    let Ok(length) = usize::try_from(length) else {
+        return ERROR;
+    };
+    let Ok(mut bytes) = crate::scheduler::ResourceBuffer::zeroed(length) else {
+        return ERROR;
+    };
+    if !crate::userspace::usercopy::from_user(input, &mut bytes) {
+        return ERROR;
+    }
+    let Some(path) = path(path_pointer, PathKind::Existing) else {
+        return ERROR;
+    };
+    let system = crate::scheduler::system_write_authority();
+    match super::with_fs(|fs| {
+        super::authorize_write(fs, &path, system)?;
+        let _ = fs.create_file(&path);
+        fs.write_file(&path, &bytes)
+    }) {
+        Some(Ok(n)) => n as u64,
+        _ => ERROR,
     }
 }
