@@ -5,7 +5,8 @@ unmerged, with passing documentation CI at `7f8b750`. Its local runtime evidence
 is in [the M4 record](initator-m4-progress.md). M5 starts from that commit on
 `feat/initator-m5`. M5 is now split into stacked review phases. Phase 1 covers
 principal descriptions, kernel-derived inheritance, capability attenuation and
-protected system-file mutations. Later phases add scoped lifecycle and Nest,
+protected system-file mutations. Phase 2 adds the scope model and transaction
+primitives; later phases integrate kernel scope enforcement, grants and Nest,
 then complete isolation, resource accounting and milestone-wide validation.
 Phase 1 is a foundation, not an untrusted multi-user security boundary.
 

@@ -1537,11 +1537,11 @@ not imply transactional or power-loss durability.
 ### M5 — Enforced identities, service scopes, and a non-graphical user manager
 
 **Review phases:** M5 is split into stacked PRs. Phase 1 delivers kernel
-principals, attenuation and protected system-file mutations. Phase 2 adds scopes,
-explicit grants, scoped supervision and the fixed developer session with Nest.
-Phase 3 completes remaining isolation, resource accounting, failure recovery and
-the full M5 acceptance checks. Earlier phases do not claim the complete M5
-security boundary; M6 and M7 remain in scope.
+principals, attenuation and protected system-file mutations. Phase 2 adds the
+scope model and transaction primitives. Subsequent phases integrate kernel scope
+enforcement and grants, then Nest and the fixed developer session, then remaining
+isolation, resource accounting, recovery and full M5 acceptance checks. Earlier
+phases do not claim the complete M5 security boundary; M6 and M7 remain in scope.
 
 **Objective:** launch a separate manager with a real kernel user/session identity
 and reduced authority; clean up its services even when it dies.
