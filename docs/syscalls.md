@@ -246,6 +246,13 @@ name bytes, u8 attributes, three zero reserved bytes, u64 file size, then UTF-8
 name, NUL and zero padding. It returns total bytes; insufficient capacity fails
 without copying a prefix. Legacy syscall 5 still returns 8.3 aliases. The SDK
 queries size and retries boundedly if the directory grows (16 MiB listing budget).
+Both listing calls stream directory metadata using bounded scratch storage. Native
+output staging is charged to the caller's scope before allocation and retained
+until copying completes. Size queries do not stage a listing. The filesystem lock
+is released between sizing and output admission; a changed required size fails
+without copying a prefix, while equal-sized changes yield the second pass's
+coherent listing. This adds no snapshot or stable-directory-cursor ABI.
+
 
 ## Display-owner message channel
 

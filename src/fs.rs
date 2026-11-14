@@ -77,6 +77,10 @@ pub(crate) mod handles;
 
 /// Validated native descriptor/cwd operations for kernel entry and harnesses.
 pub use handles::syscall as file_syscall;
+/// Copy versioned directory records using the current process and native quotas.
+pub use handles::readdir as read_directory;
+/// Copy legacy short-name records using the current process and native quotas.
+pub use handles::list_short as list_directory;
 /// Validated reads from a descriptor owned by the current process.
 pub use handles::read as file_read;
 /// Validated owned whole-file read through the existing syscall boundary.
