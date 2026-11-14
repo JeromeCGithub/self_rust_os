@@ -10,6 +10,16 @@ primitives; later phases integrate kernel scope enforcement, grants and Nest,
 then complete isolation, resource accounting and milestone-wide validation.
 Phase 1 is a foundation, not an untrusted multi-user security boundary.
 
+Phase 9 pins in-flight filesystem operations through owner stop and makes FAT
+search, I/O and staged namespace work observe cancellation at bounded points.
+Once deletion crosses its commit point it completes instead of abandoning a
+partially deleted entry. Kernel unit, scoped-file, FAT32 and scope QEMU tests
+pass, as do native file and protected-path probes at 1, 8 and 32 configured CPUs.
+The native image reused phase-8 userspace with a fresh phase-9 kernel. These
+checks do not yet prove cancellation of a concurrent Ring 3 file operation.
+The eight-CPU legacy desktop QEMU regression passed; its [capture](screenshots/initator-m5-phase9-desktop.png)
+shows the tested compatibility boot. No manual host GUI check was performed.
+
 Phase 8 adds identity-anchored directory grants, inherited authority reduction,
 and atomic installation of initial filesystem and endpoint grants during scoped
 construction. Kernel unit, scoped-file, FAT32, scope and IPC QEMU tests pass.
@@ -1224,6 +1234,84 @@ desktop compatibility. Source edits after the release builds are documentation
 only. Manual host GUI, physical hardware and the public factory's restricted
 Ring 3 matrix remain unverified. The existing debug heap-stress baseline was not
 rerun or claimed as passing. This remains a local M5 checkpoint, not its PR.
+
+## Filesystem stop and reclamation: implementation boundary
+
+The current [entry gate](../src/arch/x86_64/entry.rs) releases serialization
+around filesystem work while CPU ownership retains the calling kernel stack.
+[Reclamation](../src/scheduler/reclaim.rs) waits for a retired process's threads
+to leave CPUs, and resource leases retain staged buffers and descriptors.
+
+A bounded per-process operation pin is now acquired by `with_fs` before releasing
+the entry gate. Process stop cancels its pins while holding SCHEDULER, and the
+filesystem lock wait checks for cancellation. Reclamation retains the process and
+its scope charge until all pins drain; pin destruction takes neither SCHEDULER nor
+FS. Fixed slot metadata is boot-resident and slots are generation-tagged. PID 1's
+fatal-stop behavior remains separate. A native kernel-context QEMU regression held
+multiple pins through stop and confirmed that scope acknowledgement fails until the
+last pin is dropped; another exercised the real `with_fs` callback. Both failed on
+the preceding implementations and passed after the relevant changes. These tests
+do not yet demonstrate a contended lock waiter or concurrent Ring 3 I/O. The
+regression also checks physical-frame recovery. A kernel unit case checks slot
+retention, cancellation and generation change on reuse.
+
+Validation of this checkpoint: both boot-path builds, 109 kernel cases and the
+`scoped_files`, `fat32`, `scopes`, `threads`, `stdio`, `ipc`, `display_mapping`,
+`keyboard_timer`, `native_supervision` and `process_supervision` QEMU integration
+executables passed. Native two-service supervision and the shared-cursor file probe
+passed at 1, 8 and 32 CPUs. The 8-CPU desktop QEMU suite passed; screenshots from
+that run are archived under `target/initator-m5-evidence/io-pins-screenshots/`.
+Host GUI and physical hardware were not checked. The red scoped tests specifically
+observed premature scope reclamation, once with a held pin and once from the real
+filesystem callback, before their respective fixes.
+
+The operation pin now supplies a generation-checked cancellation token while the
+filesystem lock is held. FAT directory searches and data reads check it at bounded
+sector or cluster boundaries. Replacement and extension writes check before
+publication and clean up staged chains on cancellation. Long-name and directory
+creation check while their entries are staged; existing rollback paths remain able
+to use raw metadata I/O after cancellation. An already-admitted publication write
+may complete, and closure waits for its pin. Existing in-place writes are not
+transactional. A stale token fails closed after slot reuse. A subsequent
+regression found that a newly cancellable directory scan could interrupt deletion
+after its chain had already been freed. Deletion now resolves the directory slots
+and checks cancellation before freeing the chain; once freeing begins, it finishes
+the admitted deletion without another cancellation check. RAM-backed QEMU tests
+cover cancellation on both sides of this commit point and retry after deletion.
+This closes a kernel FAT integrity issue; no userspace deletion syscall exists.
+The scoped kernel-context QEMU test also stops the owner inside a real `with_fs`
+callback, verifies that a subsequent filesystem read sees cancellation, then
+verifies the next owner's read succeeds. It does not reproduce concurrent Ring 3
+I/O. Both boot builds, 119 kernel tests, FAT/scoped QEMU integrations, the native
+file probe at 1/8/32 CPUs and the 8-CPU existing desktop suite passed for this
+checkpoint. Desktop screenshots are archived under
+`target/initator-m5-evidence/fat-delete-screenshots/`; host GUI and physical
+hardware were not checked.
+
+RAM-backed QEMU fault injection confirmed red-to-green cancellation during a
+directory search, a multi-cluster read, replacement, extension, long-name creation,
+and directory initialization. The write cases verify that the original file stays
+intact, unpublished clusters are recovered, and a later retry works. Both boot
+builds, `scoped_files`, `fat32`, native two-service supervision and the native file
+probe at 1, 8 and 32 CPUs passed. The 8-CPU existing desktop suite also passed
+before the final directory-search checkpoint; its screenshots are archived under
+`target/initator-m5-evidence/fat-cancellation-screenshots/`. Host GUI and physical
+hardware were not checked. These tests do not prove a cancelled Ring 3 read preserves its user buffer and descriptor cursor, or that a contended
+filesystem-lock waiter exits on cancellation. Additional RAM-backed fault injection
+now covers cancellation during free-cluster allocation, short-name and name-slot
+searches, and long read/write FAT-chain walks. Each failed before its corresponding
+check was added; the chain test confirms cancellation stops before another FAT
+sector is read. Rollback continues to use uncancelled low-level I/O. Other
+namespace paths and real concurrent stop during slow I/O still need targeted tests,
+as does an actual stop during a throttled filesystem operation. This checkpoint
+passed both boot builds, 117 kernel cases, `scoped_files`, `fat32`, native
+supervision and file probes at 1/8/32 CPUs, and the 8-CPU existing desktop suite.
+Six isolated watchdog tests at 8 MiB/s passed at 1/8/32 CPUs in normal and
+cancelled-dependent scenarios, with zero watchdog delay ticks. They measure
+manager progress; they do not kill a process inside a filesystem operation.
+Desktop evidence is under `target/initator-m5-evidence/scans-chain-screenshots/`.
+Host GUI and physical hardware were not checked. The public Ring 3 scope factory
+remains closed until its prerequisites are satisfied.
 
 ## Scope integration invariants for the next implementation
 

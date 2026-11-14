@@ -115,7 +115,9 @@ pub fn reap_retired() {
     let mut i = 0;
     while i < s.retired.len() {
         let pid = s.retired[i].pid;
-        if s.threads.iter().flatten().any(|t| t.pid == pid) {
+        if s.retired[i].filesystem_io.active()
+            || s.threads.iter().flatten().any(|t| t.pid == pid)
+        {
             i += 1;
             continue;
         }

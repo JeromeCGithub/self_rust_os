@@ -165,6 +165,8 @@ fn native_file_quota_precedes_create_and_truncate() {
     scheduler::reap_retired();
     scheduler::scope_ack_closed(scope).unwrap();
     assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial);
+    stopped_filesystem_operation_retains_scope(&mut context, initial);
+    actual_filesystem_work_retains_scope(&mut context, initial);
     initial_session_grants_publish_with_the_leader(&mut context, initial);
     directory_grants_cover_paths_descriptors_and_children(&mut context, initial);
     directory_output_requires_budget(&mut context, initial);
@@ -175,6 +177,60 @@ fn native_file_quota_precedes_create_and_truncate() {
     path_and_loader_buffers_require_budget(&mut context, initial);
     launch_vectors_require_budget(&mut context, initial);
     image_snapshot_requires_budget(&mut context, initial);
+}
+fn stopped_filesystem_operation_retains_scope(context: &mut u64, initial: Usage) {
+    let frames = scheduler::frame_count();
+    let scope = scheduler::scope_create_service(SYSTEM, limits(0)).unwrap();
+    let child = scheduler::spawn_process_in_scope(
+        &[0xc3], 4096, &[], &[], scope, Capabilities::FILE_READ,
+    ).unwrap();
+    activate(child, context);
+    let operation = scheduler::begin_filesystem_operation().expect("live process admits I/O");
+    let second = scheduler::begin_filesystem_operation().expect("second I/O admitted");
+    assert!(!operation.cancelled());
+    activate(1, context);
+    scheduler::scope_close(scope).unwrap();
+    assert!(operation.cancelled(), "stop must cancel outstanding I/O");
+    assert!(second.cancelled());
+    assert_eq!(scheduler::waitpid(child), 9);
+    scheduler::reap_retired();
+    assert_ne!(scheduler::scope_status(scope).unwrap().used, Usage::ZERO,
+        "scope must retain process resources while I/O remains active");
+    assert!(scheduler::scope_ack_closed(scope).is_err());
+    drop(operation);
+    scheduler::reap_retired();
+    assert!(scheduler::scope_ack_closed(scope).is_err(), "all I/O pins must drain");
+    drop(second);
+    scheduler::reap_retired();
+    scheduler::scope_ack_closed(scope).unwrap();
+    assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial);
+    assert_eq!(scheduler::frame_count(), frames, "all process frames must be recovered");
+}
+fn actual_filesystem_work_retains_scope(context: &mut u64, initial: Usage) {
+    let scope = scheduler::scope_create_service(SYSTEM, limits(0)).unwrap();
+    let child = scheduler::spawn_process_in_scope(
+        &[0xc3], 4096, &[], &[], scope, Capabilities::FILE_READ,
+    ).unwrap();
+    activate(child, context);
+    self_rust_os::fs::with_fs(|fs| {
+        activate(1, context);
+        scheduler::scope_close(scope).unwrap();
+        assert_eq!(scheduler::waitpid(child), 9);
+        scheduler::reap_retired();
+        assert_ne!(scheduler::scope_status(scope).unwrap().used, Usage::ZERO,
+            "filesystem callback must retain the issuing process");
+        assert!(scheduler::scope_ack_closed(scope).is_err());
+        let mut bytes = [0; 9];
+        assert_eq!(fs.read_file("/LIMIT.TXT", &mut bytes), Err(self_rust_os::fat32::FatError::Cancelled));
+    }).unwrap();
+    self_rust_os::fs::with_fs(|fs| {
+        let mut bytes = [0; 9];
+        assert_eq!(fs.read_file("/LIMIT.TXT", &mut bytes), Ok(9));
+        assert_eq!(&bytes, b"untouched");
+    }).unwrap();
+    scheduler::reap_retired();
+    scheduler::scope_ack_closed(scope).unwrap();
+    assert_eq!(scheduler::scope_status(SYSTEM).unwrap().used, initial);
 }
 fn file_success_failure_and_io_budgets(context: &mut u64, initial: Usage) {
     use self_rust_os::fs::{file_read, file_syscall as call};

@@ -66,10 +66,25 @@ where
     // Syscalls copy paths/data into kernel-owned storage before taking this
     // service lock. PIO must not prevent other CPUs scheduling or acknowledging
     // user frames. Release the filesystem guard before reacquiring CPU entry.
-    Some(crate::arch::x86_64::entry::without_gate(|| {
-        let mut filesystem = fs.lock();
-        f(&mut filesystem)
-    }))
+    let operation = crate::scheduler::filesystem_operation_for_current().ok()?;
+    crate::arch::x86_64::entry::without_gate(|| {
+        let mut filesystem = loop {
+            if operation.as_ref().is_some_and(|op| op.cancelled()) {
+                return None;
+            }
+            if let Some(guard) = fs.try_lock() {
+                break guard;
+            }
+            core::hint::spin_loop();
+        };
+        if operation.as_ref().is_some_and(|op| op.cancelled()) {
+            return None;
+        }
+        filesystem.set_cancellation(operation.as_ref().map(|op| op.cancellation()));
+        let result = f(&mut filesystem);
+        filesystem.set_cancellation(None);
+        Some(result)
+    })
 }
 
 /// Process filesystem resources and regular-file syscall mechanisms.

@@ -134,6 +134,8 @@ pub enum FatError {
     BufferTooSmall,
     /// A syscall caller lacks authority for this resolved filesystem object.
     AccessDenied,
+    /// The process owning this operation was stopped.
+    Cancelled,
 }
 
 /// Opaque directory identity for the single boot-mounted volume. No userspace
@@ -208,9 +210,23 @@ pub struct Fat32<B> {
     // under the filesystem service lock; writes invalidate before device I/O.
     fat_cache: Option<(u32, [u8; SECTOR_SIZE])>,
     next_free_cluster: u32,
+    cancellation: Option<crate::process::io::Cancellation>,
 }
 
 impl<B: BlockDevice> Fat32<B> {
+    pub(crate) fn set_cancellation(
+        &mut self,
+        cancellation: Option<crate::process::io::Cancellation>,
+    ) {
+        self.cancellation = cancellation;
+    }
+    fn check_cancelled(&self) -> Result<(), FatError> {
+        if self.cancellation.is_some_and(|token| token.cancelled()) {
+            Err(FatError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
     /// Formats the device as FAT32 and returns the mounted filesystem.
     ///
     /// `total_sectors` is the size of the device in 512-byte sectors and
@@ -246,6 +262,7 @@ impl<B: BlockDevice> Fat32<B> {
             total_sectors,
             fat_cache: None,
             next_free_cluster: 2,
+            cancellation: None,
         };
 
         // --- Boot sector (sector 0) ---
@@ -370,6 +387,7 @@ impl<B: BlockDevice> Fat32<B> {
             total_sectors,
             fat_cache: None,
             next_free_cluster: 2,
+            cancellation: None,
         })
     }
 
@@ -473,12 +491,14 @@ impl<B: BlockDevice> Fat32<B> {
         let cluster = self.allocate_cluster()?;
 
         let result = (|| {
+            self.check_cancelled()?;
             // `.` points at the new directory itself.
             let mut dot = [0_u8; DIR_ENTRY_SIZE];
             dot[0..11].copy_from_slice(b".          ");
             dot[11] = ATTR_DIRECTORY;
             set_entry_cluster(&mut dot, cluster);
             self.write_dir_entry(cluster, 0, &dot)?;
+            self.check_cancelled()?;
 
             // `..` points at the parent.
             let mut dotdot = [0_u8; DIR_ENTRY_SIZE];
@@ -486,6 +506,7 @@ impl<B: BlockDevice> Fat32<B> {
             dotdot[11] = ATTR_DIRECTORY;
             set_entry_cluster(&mut dotdot, parent_cluster);
             self.write_dir_entry(cluster, 1, &dotdot)?;
+            self.check_cancelled()?;
 
             let mut entry = [0; DIR_ENTRY_SIZE];
             entry[11] = ATTR_DIRECTORY;
@@ -526,6 +547,7 @@ impl<B: BlockDevice> Fat32<B> {
         let mut prev_cluster = 0_u32;
         let replacement = (|| {
             for chunk in data.chunks(bytes_per_cluster) {
+                self.check_cancelled()?;
                 let cluster = self.allocate_cluster()?;
                 if first_cluster == 0 {
                     first_cluster = cluster;
@@ -538,8 +560,10 @@ impl<B: BlockDevice> Fat32<B> {
                 // pads a partial last sector; untouched sectors remain zero.
                 self.write_cluster(cluster, chunk)?;
             }
+            self.check_cancelled()?;
             let mut entry = [0_u8; DIR_ENTRY_SIZE];
             self.read_dir_entry(entry_cluster, dir_index, &mut entry)?;
+            self.check_cancelled()?;
             set_entry_cluster(&mut entry, first_cluster);
             entry[28..32].copy_from_slice(&size.to_le_bytes());
             self.write_dir_entry(entry_cluster, dir_index, &entry)
@@ -627,10 +651,6 @@ impl<B: BlockDevice> Fat32<B> {
         self.ensure_not_dir(entry_cluster, dir_index)?;
 
         let start = self.dir_entry_cluster(entry_cluster, dir_index)?;
-        if start != 0 {
-            self.free_chain(start)?;
-        }
-
         let mut linked = [(0u32, 0usize); 20];
         let linked_count = self
             .scan_directory(dir_cluster, |cluster, index, _, _, slots| {
@@ -642,6 +662,13 @@ impl<B: BlockDevice> Fat32<B> {
                 }
             })?
             .unwrap_or_default();
+        // Resolve every cancellable lookup before the first destructive FAT
+        // update. Once chain release begins, complete the directory updates
+        // even if the owner stops; the operation pin keeps its scope alive.
+        self.check_cancelled()?;
+        if start != 0 {
+            self.free_chain(start)?;
+        }
         for (cluster, index) in linked[..linked_count]
             .iter()
             .copied()
@@ -799,6 +826,7 @@ impl<B: BlockDevice> Fat32<B> {
         // Validate the complete old chain before mutation. Keep only its length
         // and tail: per-file cluster vectors would bypass native memory budgets.
         while cluster != 0 && cluster < FAT_EOC_MIN {
+            self.check_cancelled()?;
             if cluster < 2 || cluster >= cluster_count + 2 || old_count >= cluster_count as usize {
                 return Err(FatError::DeviceError);
             }
@@ -813,6 +841,7 @@ impl<B: BlockDevice> Fat32<B> {
         let mut extra_tail = 0;
         let allocation = (|| {
             for _ in old_count..needed {
+                self.check_cancelled()?;
                 let cluster = self.allocate_cluster()?;
                 if extra == 0 {
                     extra = cluster;
@@ -822,6 +851,7 @@ impl<B: BlockDevice> Fat32<B> {
                 }
                 extra_tail = cluster;
             }
+            self.check_cancelled()?;
             Ok(())
         })();
         if let Err(error) = allocation {
@@ -839,12 +869,14 @@ impl<B: BlockDevice> Fat32<B> {
                 (extra, first_block - old_count)
             };
             for _ in 0..skip {
+                self.check_cancelled()?;
                 cluster = self.read_fat_entry(cluster)?;
             }
             let mut sector = [0; SECTOR_SIZE];
             for block in first_block..end.div_ceil(bytes_per_cluster) {
                 let base = block * bytes_per_cluster;
                 for sector_index in 0..usize::from(self.sectors_per_cluster) {
+                    self.check_cancelled()?;
                     let sector_base = base + sector_index * SECTOR_SIZE;
                     let sector_end = sector_base + SECTOR_SIZE;
                     if sector_end <= start || sector_base >= end {
@@ -875,6 +907,7 @@ impl<B: BlockDevice> Fat32<B> {
                     };
                 }
             }
+            self.check_cancelled()?;
             if extra != 0 && old_count != 0 {
                 self.write_fat_entry(old_tail, extra)?;
             }
@@ -920,6 +953,7 @@ impl<B: BlockDevice> Fat32<B> {
         let mut cluster = self.dir_entry_cluster(entry_cluster, index)?;
         let valid = |cluster| cluster >= 2 && cluster < cluster_count + 2;
         for _ in 0..offset / bytes_per_cluster {
+            self.check_cancelled()?;
             if !valid(cluster) {
                 return Err(FatError::DeviceError);
             }
@@ -1075,6 +1109,7 @@ impl<B: BlockDevice> Fat32<B> {
         offset_bytes: usize,
         buf: &mut [u8],
     ) -> Result<(), FatError> {
+        self.check_cancelled()?;
         let cluster_bytes = usize::from(self.sectors_per_cluster) * SECTOR_SIZE;
         if offset_bytes
             .checked_add(buf.len())
@@ -1136,16 +1171,19 @@ impl<B: BlockDevice> Fat32<B> {
             self.read_sector_raw(lba + count as u32, &mut sector)?;
             tail.copy_from_slice(&sector[..tail.len()]);
         }
+        self.check_cancelled()?;
         Ok(())
     }
 
     fn write_cluster(&mut self, cluster: u32, buf: &[u8]) -> Result<(), FatError> {
         let lba = self.cluster_to_lba(cluster);
         for (i, chunk) in buf.chunks(SECTOR_SIZE).enumerate() {
+            self.check_cancelled()?;
             let mut sector = [0_u8; SECTOR_SIZE];
             sector[..chunk.len()].copy_from_slice(chunk);
             self.write_sector_raw(lba + i as u32, &sector)?;
         }
+        self.check_cancelled()?;
         Ok(())
     }
 
@@ -1216,7 +1254,9 @@ impl<B: BlockDevice> Fat32<B> {
             (self.total_sectors - self.first_data_sector) / u32::from(self.sectors_per_cluster);
         let hint = self.next_free_cluster.clamp(2, cluster_count + 1);
         for cluster in (hint..cluster_count + 2).chain(2..hint) {
+            self.check_cancelled()?;
             if self.read_fat_entry(cluster)? == FAT_FREE {
+                self.check_cancelled()?;
                 self.write_fat_entry(cluster, FAT_EOC)?;
                 if let Err(error) = self.zero_cluster(cluster) {
                     let _ = self.write_fat_entry(cluster, FAT_FREE);
@@ -1322,7 +1362,9 @@ impl<B: BlockDevice> Fat32<B> {
             let slots_per_sector = SECTOR_SIZE / DIR_ENTRY_SIZE;
             for index in 0..self.entries_per_cluster() {
                 if index % slots_per_sector == 0 {
+                    self.check_cancelled()?;
                     self.read_sector_raw(self.dir_entry_lba(cluster, index), &mut sector)?;
+                    self.check_cancelled()?;
                 }
                 let offset = (index % slots_per_sector) * DIR_ENTRY_SIZE;
                 let mut entry = [0; DIR_ENTRY_SIZE];
@@ -1466,12 +1508,15 @@ impl<B: BlockDevice> Fat32<B> {
         let limit =
             (self.total_sectors - self.first_data_sector) / u32::from(self.sectors_per_cluster);
         for _ in 0..limit {
+            self.check_cancelled()?;
             if cluster < 2 || cluster >= limit + 2 {
                 return Err(FatError::DeviceError);
             }
             for index in 0..self.entries_per_cluster() {
+                self.check_cancelled()?;
                 let mut entry = [0; 32];
                 self.read_dir_entry(cluster, index, &mut entry)?;
+                self.check_cancelled()?;
                 end |= entry[0] == ENTRY_END;
                 if end || entry[0] == ENTRY_FREE {
                     slots[count] = (cluster, index);
@@ -1489,6 +1534,12 @@ impl<B: BlockDevice> Fat32<B> {
                 let mut head = 0;
                 let mut previous = 0;
                 while count < needed {
+                    if let Err(error) = self.check_cancelled() {
+                        if head != 0 {
+                            let _ = self.free_chain(head);
+                        }
+                        return Err(error);
+                    }
                     let new = match self.allocate_cluster() {
                         Ok(cluster) => cluster,
                         Err(error) => {
@@ -1540,6 +1591,7 @@ impl<B: BlockDevice> Fat32<B> {
         let slots = &slots[..records.len()];
         let result = (|| {
             for (&(cluster, index), record) in slots.iter().zip(records) {
+                self.check_cancelled()?;
                 self.write_dir_entry(cluster, index, record)?;
             }
             if end {
@@ -1592,8 +1644,10 @@ impl<B: BlockDevice> Fat32<B> {
                 return Err(FatError::DeviceError);
             }
             for index in 0..self.entries_per_cluster() {
+                self.check_cancelled()?;
                 let mut entry = [0_u8; DIR_ENTRY_SIZE];
                 self.read_dir_entry(cluster, index, &mut entry)?;
+                self.check_cancelled()?;
                 if entry[0] == ENTRY_END {
                     return Ok(None);
                 }
@@ -1690,6 +1744,8 @@ mod tests {
         fail_write_nth: Option<(u32, usize)>,
         fail_read_lba: Option<u32>,
         heap_ceiling: Option<usize>,
+        cancel_read_lba: Option<(u32, crate::process::io::Cancellation)>,
+        cancel_write_lba: Option<(u32, crate::process::io::Cancellation)>,
     }
 
     impl MemDisk {
@@ -1702,6 +1758,8 @@ mod tests {
                 fail_write_nth: None,
                 fail_read_lba: None,
                 heap_ceiling: None,
+                cancel_read_lba: None,
+                cancel_write_lba: None,
             }
         }
     }
@@ -1723,6 +1781,11 @@ mod tests {
             if self.fail_read_lba == Some(lba) {
                 return Err(());
             }
+            if let Some((target, token)) = self.cancel_read_lba {
+                if lba == target {
+                    token.cancel_for_test();
+                }
+            }
             self.reads[lba as usize] += 1;
             let start = lba as usize * SECTOR_SIZE;
             buf.copy_from_slice(&self.data[start..start + SECTOR_SIZE]);
@@ -1740,6 +1803,11 @@ mod tests {
                 || self.fail_write_nth == Some((lba, self.writes[lba as usize] + 1))
             {
                 return Err(());
+            }
+            if let Some((target, token)) = self.cancel_write_lba {
+                if lba == target {
+                    token.cancel_for_test();
+                }
             }
             self.writes[lba as usize] += 1;
             let start = lba as usize * SECTOR_SIZE;
@@ -2066,6 +2134,322 @@ mod tests {
             "only the subdirectory and maximum-length file remain"
         );
         fs.device.heap_ceiling = None;
+    }
+
+    #[test_case]
+    fn stopped_owner_interrupts_multi_cluster_reads() {
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        fs.create_file("/READ.BIN").unwrap();
+        let contents = alloc::vec![0x5a; 8192];
+        fs.write_file("/READ.BIN", &contents).unwrap();
+        let (directory, name) = fs.resolve_parent("/READ.BIN").unwrap();
+        let (entry, index) = fs.find_entry_in(directory, name).unwrap().unwrap();
+        let first = fs.dir_entry_cluster(entry, index).unwrap();
+        let owner = crate::process::io::Owner::new().unwrap();
+        let operation = owner.begin().unwrap();
+        let token = operation.cancellation();
+        fs.set_cancellation(Some(token));
+        fs.device.cancel_read_lba = Some((fs.cluster_to_lba(first), token));
+        let mut output = alloc::vec![0; contents.len()];
+        assert_eq!(
+            fs.read_file("/READ.BIN", &mut output),
+            Err(FatError::Cancelled)
+        );
+        fs.device.cancel_read_lba = None;
+        fs.set_cancellation(None);
+        assert_eq!(fs.read_file("/READ.BIN", &mut output), Ok(contents.len()));
+        assert_eq!(output, contents);
+        let next_owner = crate::process::io::Owner::new().unwrap();
+        let next_operation = next_owner.begin().unwrap();
+        let token = next_operation.cancellation();
+        fs.set_cancellation(Some(token));
+        fs.device.cancel_read_lba = Some((fs.cluster_to_lba(first), token));
+        assert_eq!(
+            fs.read_at("/READ.BIN", 7, &mut output),
+            Err(FatError::Cancelled)
+        );
+        fs.device.cancel_read_lba = None;
+        fs.set_cancellation(None);
+        assert_eq!(
+            fs.read_at("/READ.BIN", 7, &mut output),
+            Ok(contents.len() - 7)
+        );
+        assert_eq!(&output[..contents.len() - 7], &contents[7..]);
+    }
+
+    #[test_case]
+    fn stopped_owner_discards_unpublished_file_growth() {
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        fs.create_file("/KEEP.BIN").unwrap();
+        let original = alloc::vec![0x5a; 1024];
+        fs.write_file("/KEEP.BIN", &original).unwrap();
+        let limit = (fs.total_sectors - fs.first_data_sector) / u32::from(fs.sectors_per_cluster);
+        for replacement in [true, false] {
+            let free_before = (2..limit + 2)
+                .filter(|&c| fs.read_fat_entry(c) == Ok(0))
+                .count();
+            let free_cluster = (fs.next_free_cluster..limit + 2)
+                .find(|&c| fs.read_fat_entry(c) == Ok(0))
+                .unwrap();
+            let owner = crate::process::io::Owner::new().unwrap();
+            let operation = owner.begin().unwrap();
+            let token = operation.cancellation();
+            fs.set_cancellation(Some(token));
+            fs.device.cancel_write_lba = Some((fs.cluster_to_lba(free_cluster), token));
+            let result = if replacement {
+                fs.write_file("/KEEP.BIN", &[0x44; 4096])
+            } else {
+                fs.write_at("/KEEP.BIN", 6000, b"tail")
+            };
+            assert_eq!(result, Err(FatError::Cancelled));
+            fs.device.cancel_write_lba = None;
+            fs.set_cancellation(None);
+            assert_eq!(fs.file_size("/KEEP.BIN"), Ok(original.len()));
+            let mut output = alloc::vec![0; original.len()];
+            assert_eq!(fs.read_file("/KEEP.BIN", &mut output), Ok(original.len()));
+            assert_eq!(output, original);
+            assert_eq!(
+                (2..limit + 2)
+                    .filter(|&c| fs.read_fat_entry(c) == Ok(0))
+                    .count(),
+                free_before
+            );
+        }
+        assert_eq!(fs.write_at("/KEEP.BIN", 6000, b"tail"), Ok(4));
+    }
+
+    #[test_case]
+    fn stopped_owner_rolls_back_unpublished_names_and_directories() {
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        let limit = (fs.total_sectors - fs.first_data_sector) / u32::from(fs.sectors_per_cluster);
+        for directory in [false, true] {
+            let free_before = (2..limit + 2)
+                .filter(|&c| fs.read_fat_entry(c) == Ok(0))
+                .count();
+            let free_cluster = (fs.next_free_cluster..limit + 2)
+                .find(|&c| fs.read_fat_entry(c) == Ok(0))
+                .unwrap();
+            let owner = crate::process::io::Owner::new().unwrap();
+            let operation = owner.begin().unwrap();
+            let token = operation.cancellation();
+            fs.set_cancellation(Some(token));
+            let lba = if directory {
+                fs.cluster_to_lba(free_cluster)
+            } else {
+                fs.cluster_to_lba(fs.root_cluster)
+            };
+            fs.device.cancel_write_lba = Some((lba, token));
+            let result = if directory {
+                fs.create_dir("/Cancelled directory name")
+            } else {
+                fs.create_file("/Cancelled long filename.txt")
+            };
+            assert_eq!(result, Err(FatError::Cancelled));
+            fs.device.cancel_write_lba = None;
+            fs.set_cancellation(None);
+            assert!(fs
+                .find_entry_in(
+                    fs.root_cluster,
+                    if directory {
+                        "Cancelled directory name"
+                    } else {
+                        "Cancelled long filename.txt"
+                    }
+                )
+                .unwrap()
+                .is_none());
+            assert_eq!(
+                (2..limit + 2)
+                    .filter(|&c| fs.read_fat_entry(c) == Ok(0))
+                    .count(),
+                free_before
+            );
+        }
+        fs.create_file("/Cancelled long filename.txt").unwrap();
+        fs.create_dir("/Cancelled directory name").unwrap();
+    }
+
+    #[test_case]
+    fn stopped_owner_stops_long_chain_walk_at_first_fat_sector() {
+        const SECTORS: u32 = 2048;
+        let mut fs = Fat32::format(MemDisk::new(SECTORS), SECTORS, b"TESTVOLUME ").unwrap();
+        fs.create_file("/CHAIN.BIN").unwrap();
+        let cluster_size = usize::from(fs.sectors_per_cluster) * SECTOR_SIZE;
+        fs.write_file("/CHAIN.BIN", &alloc::vec![0x55; cluster_size * 300])
+            .unwrap();
+        let first_fat = u32::from(fs.reserved_sectors);
+        let second_fat = first_fat + 1;
+        let reads_before = fs.device.reads[second_fat as usize];
+        let owner = crate::process::io::Owner::new().unwrap();
+        let operation = owner.begin().unwrap();
+        let token = operation.cancellation();
+        fs.fat_cache = None;
+        fs.device.cancel_read_lba = Some((first_fat, token));
+        fs.set_cancellation(Some(token));
+        let mut output = [0; 1];
+        assert_eq!(
+            fs.read_at("/CHAIN.BIN", cluster_size * 290, &mut output),
+            Err(FatError::Cancelled)
+        );
+        assert_eq!(
+            fs.device.reads[second_fat as usize], reads_before,
+            "a cancelled chain walk must stop before another FAT sector"
+        );
+        fs.device.cancel_read_lba = None;
+        fs.set_cancellation(None);
+        assert_eq!(
+            fs.read_at("/CHAIN.BIN", cluster_size * 290, &mut output),
+            Ok(1)
+        );
+        assert_eq!(output, [0x55]);
+        let reads_before_write = fs.device.reads[second_fat as usize];
+        let next_owner = crate::process::io::Owner::new().unwrap();
+        let next_operation = next_owner.begin().unwrap();
+        let token = next_operation.cancellation();
+        fs.fat_cache = None;
+        fs.device.cancel_read_lba = Some((first_fat, token));
+        fs.set_cancellation(Some(token));
+        assert_eq!(fs.write_at("/CHAIN.BIN", 0, b"x"), Err(FatError::Cancelled));
+        assert_eq!(
+            fs.device.reads[second_fat as usize], reads_before_write,
+            "cancelled write validation must stop before another FAT sector"
+        );
+    }
+
+    #[test_case]
+    fn deletion_cancelled_before_commit_keeps_file_and_storage() {
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        let name = "/Before commit.txt";
+        fs.create_file(name).unwrap();
+        fs.write_file(name, b"kept intact").unwrap();
+        let limit = (fs.total_sectors - fs.first_data_sector) / u32::from(fs.sectors_per_cluster);
+        let free_before = (2..limit + 2)
+            .filter(|&c| fs.read_fat_entry(c) == Ok(super::FAT_FREE))
+            .count();
+        let owner = crate::process::io::Owner::new().unwrap();
+        let operation = owner.begin().unwrap();
+        let token = operation.cancellation();
+        fs.device.cancel_read_lba = Some((fs.cluster_to_lba(fs.root_cluster), token));
+        fs.set_cancellation(Some(token));
+        assert_eq!(fs.delete_file(name), Err(FatError::Cancelled));
+        fs.device.cancel_read_lba = None;
+        fs.set_cancellation(None);
+        let mut data = [0; 11];
+        assert_eq!(fs.read_file(name, &mut data), Ok(data.len()));
+        assert_eq!(&data, b"kept intact");
+        assert_eq!(
+            (2..limit + 2)
+                .filter(|&c| fs.read_fat_entry(c) == Ok(super::FAT_FREE))
+                .count(),
+            free_before
+        );
+    }
+
+    #[test_case]
+    fn deletion_finishes_if_cancelled_after_chain_release_begins() {
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        let name = "/Deletion with a long name.txt";
+        fs.create_file(name).unwrap();
+        fs.write_file(name, &[0x42; 4096]).unwrap();
+        let owner = crate::process::io::Owner::new().unwrap();
+        let operation = owner.begin().unwrap();
+        let token = operation.cancellation();
+        fs.device.cancel_write_lba = Some((u32::from(fs.reserved_sectors), token));
+        fs.set_cancellation(Some(token));
+        assert_eq!(
+            fs.delete_file(name),
+            Ok(()),
+            "an admitted deletion must finish once chain release starts"
+        );
+        assert!(token.cancelled());
+        fs.device.cancel_write_lba = None;
+        fs.set_cancellation(None);
+        assert_eq!(fs.file_size(name), Err(FatError::FileNotFound));
+        fs.create_file(name).unwrap();
+        fs.write_file(name, b"reused").unwrap();
+        let mut bytes = [0; 6];
+        assert_eq!(fs.read_file(name, &mut bytes), Ok(6));
+        assert_eq!(&bytes, b"reused");
+    }
+
+    #[test_case]
+    fn stopped_owner_aborts_free_cluster_scan_before_allocation() {
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        let first_free = fs.next_free_cluster.max(3);
+        fs.next_free_cluster = first_free;
+        let owner = crate::process::io::Owner::new().unwrap();
+        let operation = owner.begin().unwrap();
+        let token = operation.cancellation();
+        fs.fat_cache = None;
+        fs.device.cancel_read_lba = Some((u32::from(fs.reserved_sectors), token));
+        fs.set_cancellation(Some(token));
+        assert_eq!(fs.allocate_cluster(), Err(FatError::Cancelled));
+        fs.device.cancel_read_lba = None;
+        fs.set_cancellation(None);
+        assert_eq!(fs.read_fat_entry(first_free), Ok(super::FAT_FREE));
+        assert_eq!(fs.allocate_cluster(), Ok(first_free));
+    }
+
+    #[test_case]
+    fn stopped_owner_aborts_short_alias_scan() {
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        fs.create_file("/SEARCH.BIN").unwrap();
+        let owner = crate::process::io::Owner::new().unwrap();
+        let operation = owner.begin().unwrap();
+        let token = operation.cancellation();
+        fs.device.cancel_read_lba = Some((fs.cluster_to_lba(fs.root_cluster), token));
+        fs.set_cancellation(Some(token));
+        assert_eq!(
+            fs.find_short_entry_in(fs.root_cluster, &super::to_83("SEARCH.BIN").unwrap()),
+            Err(FatError::Cancelled)
+        );
+        fs.device.cancel_read_lba = None;
+        fs.set_cancellation(None);
+        assert!(fs
+            .find_short_entry_in(fs.root_cluster, &super::to_83("SEARCH.BIN").unwrap())
+            .unwrap()
+            .is_some());
+    }
+
+    #[test_case]
+    fn stopped_owner_aborts_name_slot_search() {
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        let owner = crate::process::io::Owner::new().unwrap();
+        let operation = owner.begin().unwrap();
+        let token = operation.cancellation();
+        fs.device.cancel_read_lba = Some((fs.cluster_to_lba(fs.root_cluster), token));
+        fs.set_cancellation(Some(token));
+        assert_eq!(
+            fs.reserve_name_slots(fs.root_cluster, 1),
+            Err(FatError::Cancelled)
+        );
+        fs.device.cancel_read_lba = None;
+        fs.set_cancellation(None);
+        fs.create_file("/AFTER.TXT").unwrap();
+    }
+
+    #[test_case]
+    fn stopped_owner_aborts_directory_search() {
+        let mut fs =
+            Fat32::format(MemDisk::new(TEST_SECTORS), TEST_SECTORS, b"TESTVOLUME ").unwrap();
+        fs.create_file("/SEARCH.BIN").unwrap();
+        let owner = crate::process::io::Owner::new().unwrap();
+        let operation = owner.begin().unwrap();
+        let token = operation.cancellation();
+        fs.set_cancellation(Some(token));
+        fs.device.cancel_read_lba = Some((fs.cluster_to_lba(fs.root_cluster), token));
+        assert_eq!(fs.file_size("/SEARCH.BIN"), Err(FatError::Cancelled));
+        fs.device.cancel_read_lba = None;
+        fs.set_cancellation(None);
+        assert_eq!(fs.file_size("/SEARCH.BIN"), Ok(0));
     }
 
     #[test_case]
