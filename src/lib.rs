@@ -9,6 +9,7 @@
 #![cfg_attr(test, no_main)]
 #![feature(abi_x86_interrupt)]
 #![feature(naked_functions)]
+#![feature(allocator_api)]
 #![feature(custom_test_frameworks)]
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]

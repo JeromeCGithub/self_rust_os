@@ -75,6 +75,11 @@ where
 /// Process filesystem resources and regular-file syscall mechanisms.
 pub(crate) mod handles;
 
+/// Validated native descriptor/cwd operations for kernel entry and harnesses.
+pub use handles::syscall as file_syscall;
+/// Validated reads from a descriptor owned by the current process.
+pub use handles::read as file_read;
+
 /// Authorize a mutation while holding the same filesystem lock as its effects.
 /// These boot-system root labels cannot be created or changed by an ordinary
 /// native writer. FAT entry identity covers both VFAT and short aliases. This

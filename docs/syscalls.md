@@ -191,7 +191,19 @@ rejects negative results/overflow/unknown origins, and permits positions through
 `u32::MAX`. Writing beyond EOF zero-fills the gap. Descriptor writes operate on
 affected clusters without staging or rewriting the complete file; file sizes can
 reach FAT32's `u32::MAX`, subject to disk space and allocation resources. Tables
-grow to 1024 regular descriptors (3–1026) per process; no configurable rlimit exists.
+grow to 1024 regular descriptors (3–1026) per process; no POSIX rlimit API exists.
+
+The native-init profile additionally charges live descriptor objects, their path
+storage and descriptor I/O buffers to the process's immutable scope. Global
+admission permits 4096 descriptors, with 32 reserved for the system root. Quota
+failure returns the existing generic error before create/truncate or I/O/cursor
+effects. Close removes the number immediately; another thread's retained object
+keeps its reservation until its last reference drops and scheduler collection
+returns quota. The next syscall/resource reservation collects queued releases.
+Kernel-only scope factories can set tighter limits; there is no public Ring 3
+scope configuration API yet. The trusted legacy desktop retains its existing
+unscoped limits. This is partial resource accounting: path syscall/listing/internal
+FAT allocations and session filesystem grants remain unfinished. See [M5 evidence](initator-m5-progress.md).
 
 Offset writes reserve any extension chain before modifying existing data. Disk-full
 allocation failure preserves old bytes and frees the partial extension. Hardware

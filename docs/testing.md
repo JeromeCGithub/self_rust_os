@@ -316,6 +316,28 @@ engine/UI tests, QEMU pixel and navigation assertions, and an optional real CERN
 website check. Use a fresh disposable disk. The ordinary desktop suite resolves
 launchers by the same FAT order as DE, so new user applications remain testable.
 
+## Native scoped filesystem prerequisites
+
+`cargo test --test scoped_files` formats the explicit disposable 16 MiB
+`tests/fixtures/disk-fat32.img` secondary-master fixture and verifies native file
+quota failure ordering, cleanup and retained resource leases. Run it serially
+with the ATA/FAT32 fixture tests. It uses kernel contexts, not Ring 3 scope grants.
+
+After a fresh native-init image build, run the existing real Ring 3 filesystem
+probe under Initator, including eight concurrent shared-cursor workers:
+
+```bash
+RUSTOS_BOOT_PROFILE=native-init ./tools/build-grub-disk.sh target/native-files.img
+RUSTOS_TEST_DISK=target/native-files.img RUSTOS_CPUS=1 python3 -B e2e/init_file_io.py
+RUSTOS_TEST_DISK=target/native-files.img RUSTOS_CPUS=8 python3 -B e2e/init_file_io.py
+RUSTOS_TEST_DISK=target/native-files.img RUSTOS_CPUS=32 python3 -B e2e/init_file_io.py
+```
+
+Each run boots its own writable copy and requires the finite file service's exact
+successful completion plus independent sibling progress. This exercises native
+system-scope resource leases; it does not establish untrusted session filesystem
+grants or cancellation. See [current evidence and remaining gates](initator-m5-progress.md).
+
 ## Initator M1
 
 `tests/process_supervision.rs` covers owned readiness, consume-after-usercopy,
