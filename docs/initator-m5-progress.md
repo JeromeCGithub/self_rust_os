@@ -3,7 +3,92 @@
 M4 is [PR #57](https://github.com/JeromeCGithub/self_rust_os/pull/57), open and
 unmerged, with passing documentation CI at `7f8b750`. Its local runtime evidence
 is in [the M4 record](initator-m4-progress.md). M5 starts from that commit on
-`feat/initator-m5`; no M5 PR exists yet.
+`feat/initator-m5`. M5 is now split into stacked review phases. Phase 1 covers
+principal descriptions, kernel-derived inheritance, capability attenuation and
+protected system-file mutations. Phase 2 adds the scope model and transaction
+primitives; later phases integrate kernel scope enforcement, grants and Nest,
+then complete isolation, resource accounting and milestone-wide validation.
+Phase 1 is a foundation, not an untrusted multi-user security boundary.
+
+Phase 9 pins in-flight filesystem operations through owner stop and makes FAT
+search, I/O and staged namespace work observe cancellation at bounded points.
+Once deletion crosses its commit point it completes instead of abandoning a
+partially deleted entry. Kernel unit, scoped-file, FAT32 and scope QEMU tests
+pass, as do native file and protected-path probes at 1, 8 and 32 configured CPUs.
+The native image reused phase-8 userspace with a fresh phase-9 kernel. These
+checks do not yet prove cancellation of a concurrent Ring 3 file operation.
+The eight-CPU legacy desktop QEMU regression passed; its [capture](screenshots/initator-m5-phase9-desktop.png)
+shows the tested compatibility boot. No manual host GUI check was performed.
+
+Phase 8 adds identity-anchored directory grants, inherited authority reduction,
+and atomic installation of initial filesystem and endpoint grants during scoped
+construction. Kernel unit, scoped-file, FAT32, scope and IPC QEMU tests pass.
+The rebuilt native capability/protected-file probes, two-service supervision and
+the eight-worker file probe pass at 1, 8 and 32 configured CPUs. The test image
+reused phase-7 userspace except for the rebuilt probe, with a fresh phase-8 kernel.
+Grant installation remains kernel-only in this phase; the user-session ABI and
+in-flight filesystem cancellation remain later work.
+The eight-CPU legacy desktop QEMU regression passed; its [capture](screenshots/initator-m5-phase8-desktop.png)
+shows the tested compatibility boot. No manual host GUI check was performed.
+
+Phase 7 streams directory output through admitted storage, bounds FAT file and
+namespace scratch, and rolls back failed directory initialization. Kernel unit,
+FAT32, scoped-file and scope tests pass; native file and protected-system-path
+probes pass at 1, 8 and 32 configured CPUs. The native image reused unchanged
+phase-6 userspace with a fresh phase-7 kernel. In-flight cancellation and
+per-session filesystem grants are still later work.
+The eight-CPU legacy desktop QEMU regression passed; its [capture](screenshots/initator-m5-phase7-desktop.png)
+shows the tested compatibility boot. No manual host GUI check was performed.
+
+Phase 6 reserves native path, working-directory and executable/argument snapshot
+storage before allocation and keeps its charge through the allocation lifetime.
+The kernel unit, scoped-file, scope and stdio tests pass; the supervised file
+probe passes at 1, 8 and 32 configured CPUs. The native test image reused
+unchanged phase-5 userspace with a freshly built phase-6 kernel. Cancellation,
+directory traversal allocation and other resource domains remain later work.
+The eight-CPU legacy desktop QEMU regression passed; its [capture](screenshots/initator-m5-phase6-desktop.png)
+shows the tested compatibility boot. No manual host GUI check was performed.
+
+Phase 5 introduces queued resource leases for native descriptors and temporary
+file I/O. The kernel unit, scoped-file, scope, IPC and stdio QEMU tests pass;
+the supervised eight-worker Ring 3 file probe passes at 1, 8 and 32 configured
+CPUs. Its image reused unchanged phase-4 userspace with a freshly built phase-5
+kernel. Path storage, executable snapshots, cancellation, and remaining allocation
+accounting still require the subsequent M5 phases.
+The eight-CPU legacy desktop QEMU regression passed; its [capture](screenshots/initator-m5-phase5-desktop.png)
+shows the tested compatibility boot. No manual host GUI check was performed.
+
+Phase 4 bounds per-session scope records through closure acknowledgement and
+accounts native IPC handles and inbox storage to scopes, including atomic
+cross-scope endpoint transfers. The scope-core and IPC-core host suites, kernel
+unit, scope, IPC and native-supervision tests pass. Native Ring 3 IPC lifecycle
+and two-service supervision pass at 1, 8 and 32 configured CPUs with a freshly
+built phase-4 kernel and unchanged phase-3 userspace. This does not yet expose
+the complete scope/session ABI or establish filesystem or session isolation.
+The eight-CPU legacy desktop QEMU regression passed; its [capture](screenshots/initator-m5-phase4-desktop.png)
+shows the tested compatibility boot. No manual host GUI check was performed.
+
+Phase 3 connects the scope registry to native process, frame and thread
+construction and reclamation. Its host scope-core, kernel unit, scope, thread
+and IPC tests pass. Native principal, capability, protected-file and two-service
+probes pass at 1, 8 and 32 configured CPUs; the separate legacy SMP stress
+probe also passes at those counts. The native image reused unchanged phase-2
+userspace with a freshly built phase-3 kernel; the SMP probe was rebuilt for
+this phase. This phase does not expose scoped service creation to Ring 3, install
+per-session filesystem grants, or establish a complete isolation boundary.
+The eight-CPU legacy desktop QEMU regression passed; its [capture](screenshots/initator-m5-phase3-desktop.png)
+shows the tested compatibility boot. No manual host GUI check was performed.
+
+Phase 2 adds host-tested scope bookkeeping and rollback transactions plus a
+bounded frame-allocation transaction. These are kernel prerequisites only: this
+phase does not wire scopes into native process admission or expose a scope ABI.
+The scope-core host suite and the bounded-frame QEMU unit cases pass. A native
+Initator image with the phase-2 kernel also passed two-service supervision at
+1, 8 and 32 configured CPUs. Thread, IPC, userspace and process-supervision
+kernel integration suites passed. The native image reused phase-1 userspace,
+which is unchanged in this phase, with a freshly built phase-2 kernel.
+The eight-CPU legacy desktop QEMU regression also passed; its [capture](screenshots/initator-m5-phase2-desktop.png)
+shows the tested compatibility boot. No manual host GUI check was performed.
 
 **M5 is incomplete.** The first addition is a host-tested principal description and
 attenuation policy in [process-abi](../crates/process-abi/src/principal.rs). The
@@ -68,6 +153,16 @@ Existing irreversible worker restrictions must remain a stricter intersection.
   Non-PID-0 graphical authority/discovery and compositor lifecycle remain M6.
 
 ## Tests run so far
+
+Phase 1 was revalidated in its own worktree: the process ABI host tests, kernel
+unit tests, userspace, process-supervision, thread, IPC and FAT32 integration
+tests passed, as did the default and GRUB builds. Native principal, capabilities
+and protected-system-file probes passed at 1, 8 and 32 configured CPUs. The
+single-CPU Initator integration checkpoint also passed two-service supervision,
+process lifecycle and exhaustion, IPC lifecycle, cooperative stop, halt ABI and
+fatal-init cases. These checks do not establish session or resource isolation.
+The eight-CPU legacy desktop QEMU regression passed; its [captured desktop](screenshots/initator-m5-phase1-desktop.png)
+shows the tested compatibility boot. No manual host GUI check was performed.
 
 `target/initator-m5-evidence/principal-red.log` records three expected failures:
 missing codec, inherited init authority and unavailable valid attenuation.
@@ -1257,7 +1352,7 @@ Test independent sessions, failures, cleanup and resource pressure in QEMU at
 1/8/32 CPUs; preserve the stricter worker profile and default desktop compatibility.
 
 [The roadmap](init-system-plan.md#m5--enforced-identities-service-scopes-and-a-non-graphical-user-manager)
-contains the full planned scope. This milestone must deliver one PR based on
-`feat/initator-m4` after its complete checks pass. No login/password verification,
+contains the full planned scope. Phase 1 is based on `feat/initator-m4`; later
+phase PRs will be stacked on their predecessors. No login/password verification,
 POSIX credential API, physical terminal or graphical session is claimed by the
 initial principal types.
