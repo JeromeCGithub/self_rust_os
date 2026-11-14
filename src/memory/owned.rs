@@ -25,6 +25,14 @@ impl<'a> FrameTransaction<'a> {
             maximum,
         }
     }
+    /// Number of owned frames, available before commit for atomic budget charging.
+    pub fn allocated_frames(&self) -> usize {
+        self.frames.len()
+    }
+    /// Selected persistent heap storage used by this frame ownership ledger.
+    pub fn metadata_bytes(&self) -> usize {
+        self.frames.capacity() * core::mem::size_of::<PhysFrame>()
+    }
     /// Transfer frame ownership to the completed address space.
     pub fn commit(mut self) -> Vec<PhysFrame> {
         core::mem::take(&mut self.frames)

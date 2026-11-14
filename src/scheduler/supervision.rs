@@ -70,6 +70,13 @@ pub fn configure_native_init() -> Result<(), &'static str> {
     if s.next_pid != 0 || s.init_pid.is_some() || s.frame_allocator.is_none() {
         return Err("native init must be selected once before process publication");
     }
+    let pages=s.frame_allocator.as_ref().ok_or("frame pool unavailable")?.total_frames();
+    let heap=crate::allocator::HEAP_SIZE as u64;
+    s.scopes.bootstrap(ProcessKey{pid:1,generation:1},rustos_scope_core::Usage {
+        processes:128,threads:super::MAX_THREADS as u64,pages,kernel_bytes:heap/2,
+        descriptors:u64::MAX,ipc_handles:u64::MAX,sockets:u64::MAX,audio_streams:u64::MAX,
+    },rustos_scope_core::Usage {processes:4,threads:8,pages:(pages/4).min(8192),
+        kernel_bytes:heap/16,..rustos_scope_core::Usage::ZERO}).map_err(|_|"scope bootstrap failed")?;
     s.next_pid = 1;
     s.init_pid = Some(1);
     Ok(())
@@ -91,9 +98,18 @@ pub(super) fn adopt_orphans_locked(s: &mut super::Scheduler) {
         dead[count] = p.pid;
         count += 1;
     }
+    let mut owners=[(0u32,init);128];
+    let mut owner_count=0;
+    for p in s.processes.iter().flatten() {
+        let owner=s.scopes.controller(p.principal.scope).filter(|key| key.pid!=p.pid)
+            .filter(|key|s.processes.get(key.pid as usize).and_then(Option::as_ref)
+                .is_some_and(|controller|controller.state==ProcessState::Live))
+            .map_or(init,|key|key.pid);
+        owners[owner_count]=(p.pid,owner);owner_count+=1;
+    }
     for p in s.processes.iter_mut().flatten() {
         if p.parent.is_some_and(|pid| dead[..count].contains(&pid)) {
-            p.parent = Some(init);
+            p.parent = Some(owners[..owner_count].iter().find(|(pid,_)|*pid==p.pid).map_or(init,|(_,owner)|*owner));
             p.adoption_pending = p.state == ProcessState::Live;
         }
     }

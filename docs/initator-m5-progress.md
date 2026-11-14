@@ -10,6 +10,17 @@ primitives; later phases integrate kernel scope enforcement, grants and Nest,
 then complete isolation, resource accounting and milestone-wide validation.
 Phase 1 is a foundation, not an untrusted multi-user security boundary.
 
+Phase 3 connects the scope registry to native process, frame and thread
+construction and reclamation. Its host scope-core, kernel unit, scope, thread
+and IPC tests pass. Native principal, capability, protected-file and two-service
+probes pass at 1, 8 and 32 configured CPUs; the separate legacy SMP stress
+probe also passes at those counts. The native image reused unchanged phase-2
+userspace with a freshly built phase-3 kernel; the SMP probe was rebuilt for
+this phase. This phase does not expose scoped service creation to Ring 3, install
+per-session filesystem grants, or establish a complete isolation boundary.
+The eight-CPU legacy desktop QEMU regression passed; its [capture](screenshots/initator-m5-phase3-desktop.png)
+shows the tested compatibility boot. No manual host GUI check was performed.
+
 Phase 2 adds host-tested scope bookkeeping and rollback transactions plus a
 bounded frame-allocation transaction. These are kernel prerequisites only: this
 phase does not wire scopes into native process admission or expose a scope ABI.
@@ -25,10 +36,11 @@ shows the tested compatibility boot. No manual host GUI check was performed.
 attenuation policy in [process-abi](../crates/process-abi/src/principal.rs). The
 kernel now attaches native principals, enforces mechanism capability domains and
 supports one-way process rights reduction and protects system-file mutations.
-It does not yet create resource scopes, enforce session home/tmp grants or run
-Nest. Syscalls 129–130 and their SDK wrappers
-are wired; the remaining authority/resource enforcement must be implemented in
-this same milestone before delivery. Do not interpret a decoded description as a
+Kernel-only scoped construction, page/thread accounting and descendant cleanup
+are now wired. The Ring 3 scope grant/event ABI, session home/tmp grants and
+filesystem/IPC/socket/audio accounting remain incomplete; Nest does not yet run.
+Syscalls 129–130 and their SDK wrappers are wired. The remaining authority/resource
+enforcement must be implemented in this same milestone before delivery. Do not interpret a decoded description as a
 grant.
 
 ## Initial interface
@@ -119,12 +131,11 @@ children/grandchildren, per-process thread identity, environment spoofing, reado
 unmapped/noncanonical/wrapping buffers, exact sizes/reserved words, crossing two
 writable pages, preserved guard bytes and overwriting fake input metadata.
 
-These identities currently describe the system context: user 0/session 0/reserved
-system scope 1. Actual user/session creation, scope objects/accounting and
-per-session filesystem
-grants are not implemented yet. Mechanism-domain filtering is now implemented,
-but a capability description is not proof that the remaining resource/path
-boundaries exist.
+Normal boot still launches system contexts: user 0/session 0/reserved system
+scope 1. The kernel-only scope adapter below can now construct distinct identities,
+but the Ring 3 scope/session factory, per-session filesystem grants and other
+resource domains remain incomplete. A capability description is not proof that
+all remaining resource/path boundaries exist.
 
 Initial integration checks also pass: 92 kernel unit cases, the four directly
 affected integration executables (`native_supervision`, `process_supervision`,
@@ -209,12 +220,13 @@ from this exact build are retained under the M5 evidence directory. Per-session
 read/write roots, object delegation, disk quotas and scope quiescence are still
 missing. No untrusted user session is launched by this increment.
 
-## Scope ledger (host-tested, not yet native enforcement)
+## Scope ledger and host model
 
 [scope-core](../crates/scope-core/src/lib.rs) follows the existing IPC-core split:
 an allocation-free `no_std` object registry shared with host tests, with all
 kernel context, locking, syscall usercopy and actual destruction left to adapters.
-It is not linked into the kernel yet and exposes no syscall. Its 64 fixed records
+Its initial standalone increment exposed no syscall; the kernel adapter below now
+links it into the scheduler. Its 64 fixed records
 include system root 1, session roots and service leaves. Fresh nonwrapping IDs
 never alias a released slot. Four slots and a configurable vector of resource
 reserves remain available to system recovery. The system root cannot be closed.
@@ -251,11 +263,10 @@ rollback, init recovery reserves, cross-session denial, pending cleanup owner de
 leader exit, stale identities, 128 create/close/ack cycles, sequence exhaustion,
 bootstrap failure and durable child-before-parent closure.
 
-The bare-metal target also compiles this crate (`scopes-native-check.log`); that
-is compilation evidence only. No new native scope or user-session acceptance
-criterion is claimed until the kernel/resource/syscall adapters are implemented
-and tested in QEMU. Previously recorded native principal/file checks remain
-separate from these host model results.
+The standalone bare-metal check (`scopes-native-check.log`) is compilation evidence
+only. The later kernel integration test below adds actual mapped-resource checks;
+full Ring 3 scope/session acceptance still requires the remaining resource and
+syscall adapters. Keep host model results separate from native execution results.
 
 ## Reservation guards and frame-budget prerequisite
 
@@ -297,15 +308,100 @@ eight-CPU desktop passes. Default/GRUB builds, native GRUB release and kernel te
 compilation pass. Transcripts and screenshots are retained in
 `target/initator-m5-evidence/frame-ceiling-*`.
 
-**Integration is still pending:** the new registry is not linked into the kernel,
-and existing spawn/heap/thread paths still use the default frame transaction.
-These results establish bookkeeping and bounded-allocation prerequisites, not
-already enforced native scope budgets. Next wire the scheduler's registry and
-resource ownership through constructor rollback, heap growth, thread creation and
-post-quiescence reclamation; then add the native scope ABI/events and other resource
-charges. Do not expose untrusted sessions before those paths and filesystem/IPC
-scope boundaries are tested. Service stop/restart jobs must wait for the durable
-scope cleanup acknowledgement, rather than treating foreground exit as full cleanup.
+At this earlier checkpoint the registry was still standalone. The scheduler
+adapter below now wires these reservations and bounded transactions into native
+allocation/reclamation. The Ring 3 scope ABI/events and remaining resource domains
+are still pending. Service stop/restart jobs must wait for durable scope cleanup
+rather than treating foreground exit as full cleanup.
+
+## Native kernel scope binding
+
+[The scheduler adapter](../src/scheduler/scopes.rs) now derives all caller identity
+and authority from live kernel process metadata. It exposes kernel Rust entry
+points for scope creation, status, close/peek/ack and scoped image construction;
+there are no new Ring 3 syscalls. Only init creates sessions. A session leader
+with SCOPE_CREATE can create its own service leaves. Scoped spawn checks ownership,
+once-only leader binding, parent capability attenuation and role restrictions:
+user sessions cannot receive SYSTEM_WRITE, service leaves cannot mint factories,
+and Init/Legacy flags are not granted through scoped construction.
+
+[Common process construction](../src/scheduler.rs) reserves process/base-thread and
+initial metadata capacity before fallible construction. All five existing launch
+paths inherit their parent's scope. Native frame transactions use the remaining
+ancestor page budget and include images, BSS, main stacks, private surfaces, TLS
+and private page tables. Final page/metadata charging and leader/grant publication
+share SCHEDULER; any failure destroys allocations and restores the reservation.
+The legacy profile keeps its explicit unscoped/trusted behavior.
+
+[Heap growth](../src/scheduler/heap.rs) caps actual leaves and new parent tables;
+failed mapping rolls both back before returning quota. Shrink releases only unmapped
+leaf charges after shootdown; empty parent tables remain process-owned. Replacing
+the frame ledger adjusts its persistent allocation charge. [Thread construction](../src/scheduler/threads.rs)
+reserves a thread, kernel stack and TLS ledger, then charges actual stack/TLS frames.
+The TLS ledger allocation is fallible before mapping, replacing an infallible
+`split_off` after allocation. The base-thread reservation is retained with process
+resources; extra-thread charges persist through zombie/join until actual reaping.
+
+[Reclamation](../src/scheduler/reclaim.rs) releases quota after off-CPU checks,
+unmapping, TLB acknowledgement, frame recycling and owned metadata/kernel-stack
+release. A process's charge travels with its retired PCB. Consuming a child status
+does not complete scope cleanup. [Supervision](../src/scheduler/supervision.rs)
+reparents orphans to a live scope controller before init, preserving a live parent
+first. Leader/controller death marks scopes closing; a bounded, allocation-free
+victim drain stops remaining members without recursive scope traversal. Connected
+child termination also notifies the scope registry.
+
+Native boot configures limits from real frame-pool capacity and the existing heap:
+128 process reservations, 1024 thread reservations and half the heap for selected
+persistent allocations. Recovery floors reserve four processes, eight threads,
+up to 8192 pages (at most a quarter of the pool), and a sixteenth of the heap.
+Other resource fields are not instrumented yet. These limits are not a complete
+kernel-heap/temporary-I/O quota. Normal Initator still launches trusted services in
+the system root until its scope-aware native adapter is implemented.
+
+[The kernel integration test](../tests/scopes.rs) first failed because the native
+registry was absent (`scopes-kernel-red.log`), then exposed unaccounted heap and
+thread allocation (`scopes-kernel-construction.log`, `scopes-kernel-heap.log`). Its
+green assertions use real private mappings and resource reclamation: zero/late
+metadata and page-budget spawn failure rollback; inherited process limits;
+partial-heap parent rollback; thread quota retained through join; 8 KiB and 1 MiB
+ELF TLS templates, exact stack/TLS frame deltas, independent template initialization
+and TLS-aware quota denial; delayed closure until physical cleanup; immutable user/
+session identity; live-manager orphan ownership; two same-user sessions rejecting
+each other's factory/control requests; manager death killing its services while
+the other session survives. Global frame/selected-allocation counts return to the
+initial baseline. This bootloader harness drives kernel contexts on one CPU; it
+is not yet a Ring 3 scope-protocol or SMP scoped-grant acceptance test.
+
+The kernel unit suite (95 cases), eight integration executables, default/GRUB builds,
+native/default GRUB release images, all rebuilt apps and test compilation pass.
+The 66 existing native cases pass on 1/8/32 CPUs, exercising root-scope accounting
+through real Ring 3 spawn/heap/thread/exit paths. This compatibility matrix does
+not substitute for full scoped-grant syscall tests. All 33 selected unit/control
+and shutdown cases also pass across 1/8/32 CPUs, as do SMP stress and the six
+FPU/compiler-TLS runs. The fresh default-profile eight-CPU desktop passes its
+complete automated interaction assertions; its screenshots are retained under
+`target/initator-m5-evidence/scopes-desktop-screenshots/`. Manual host GUI input
+and physical hardware remain unverified.
+
+Two existing test defects were reproduced and repaired without extending timeouts.
+The shutdown runner sometimes inspected a serial halt record before its final
+bytes arrived. A host regression failed on 58 partial prefixes; a newline-aware
+parser now waits for a complete record and still rejects complete failure records.
+All 79 Python tooling tests pass. The failing 32-CPU pending-launch case and the
+remaining shutdown cases pass after the fix. Evidence: `scopes-control-shutdown.log`,
+`scopes-halt-parser-red.log`, `scopes-halt-parser-green.log`,
+`scopes-pending-launch-rerun.log` and `scopes-control-shutdown-resume.log`.
+
+The SMP probe still treated event bit 32 as invalid, although the existing ABI
+assigns it to child readiness. Its zero-timeout wait therefore correctly parked
+forever. The same failure was reproduced on the previous, unlinked-scope image
+(`scopes-smp-baseline.log`). The probe now tests child/port readiness with finite
+waits and derives the unknown bit from EVENT_ALL; the invalid-bit assertion is
+preserved. Rebuilding the probe and disk makes the unchanged stress runner pass
+on 1/8/32 CPUs (`scopes-smp-stress-green.log`). This is a stale ABI-test migration,
+not evidence that the previous image passed. The generated probe binary is
+regenerated with its source. No kernel behavior changed for either test repair.
 
 ## Scope integration invariants for the next implementation
 
@@ -333,10 +429,12 @@ scope cleanup acknowledgement, rather than treating foreground exit as full clea
 
 ## Remaining milestone acceptance
 
-Finish authorized user/session credential creation and atomic scoped/delegated spawn,
-bounded scopes and all selected resource accounting, owner-death/descendant cleanup,
-per-session filesystem grants beyond the protected system roots, remaining
-old-syscall/session-boundary bypass denial and least-authority IPC.
+Finish the Ring 3 authenticated scope/session factory, scoped spawn/status/events,
+and filesystem/IPC/socket/audio accounting and permissions. Add per-session scope
+record admission limits, temporary-I/O reservations/cancellation and quiescence
+checks, home/tmp grants, old-syscall bypass denial and least-authority IPC.
+Bind Initator's launches to service scopes and wait for scope cleanup in stop/restart
+jobs. Kernel-only identity and frame/thread tests do not complete these gates.
 Only then launch Nest as an explicitly unauthenticated fixed developer session
 under a distinct kernel user/session identity, with two supervised user services.
 Test independent sessions, failures, cleanup and resource pressure in QEMU at

@@ -36,6 +36,8 @@ pub use crate::arch::x86_64::context::SavedContext;
 struct Scheduler {
     processes: ProcessTable,
     ipc: rustos_ipc_core::Registry,
+    scopes: rustos_scope_core::Registry,
+    draining_scopes: bool,
     threads: Vec<Option<Thread>>,
     retired: Vec<Process>,
     ready_queue: VecDeque<Tid>,
@@ -51,6 +53,8 @@ impl Scheduler {
         Self {
             processes: ProcessTable::new(),
             ipc: rustos_ipc_core::Registry::new(),
+            scopes: rustos_scope_core::Registry::new(),
+            draining_scopes: false,
             threads: Vec::new(),
             retired: Vec::new(),
             ready_queue: VecDeque::new(),
@@ -104,6 +108,8 @@ impl Scheduler {
 }
 static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 
+mod scopes;
+pub use scopes::{scope_create_session, scope_create_service, scope_status, scope_close, scope_next_closed, scope_ack_closed, spawn_process_in_scope};
 mod principal;
 pub use principal::{attenuate_principal, principal_user};
 pub(crate) use principal::system_write_authority;
@@ -215,7 +221,7 @@ pub fn spawn_process_with_environment(
 ) -> Result<Pid, &'static str> {
     rustos_process_abi::startup_size(argv, envp).map_err(|_| "invalid startup vectors")?;
     x86_64::instructions::interrupts::without_interrupts(|| {
-        spawn_process_inner(binary, readonly_size, argv, envp, &[])
+        spawn_process_inner(binary, readonly_size, argv, envp, &[], None)
     })
 }
 /// Deep-copies the page-table subtree under `new_p3[0]` (the first GB).
@@ -306,6 +312,7 @@ fn spawn_process_inner(
     argv: &[&str],
     envp: &[&str],
     bindings: &[rustos_ipc_abi::Binding],
+    grant: Option<(u64, rustos_process_abi::principal::Capabilities)>,
 ) -> Result<Pid, &'static str> {
     if binary.len() as u64 > rustos_thread_abi::IMAGE_END - userspace::USER_CODE_START {
         return Err("user binary overlaps stack");
@@ -316,20 +323,6 @@ fn spawn_process_inner(
         rustos_thread_abi::IMAGE_END,
     )
     .map_err(|_| "invalid or unsupported executable image")?;
-    let tls_image = if let Some(template) = image.tls() {
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(template.bytes.len())
-            .map_err(|_| "TLS prototype allocation failed")?;
-        bytes.extend_from_slice(template.bytes);
-        Some(crate::process::TlsImage {
-            bytes,
-            memory_size: template.memory_size as usize,
-            alignment: template.alignment as usize,
-        })
-    } else {
-        None
-    };
     let mut guard = SCHEDULER.lock();
     let sched: &mut Scheduler = &mut guard;
     if sched.processes.iter().flatten().count() + sched.retired.len() >= 128
@@ -339,7 +332,9 @@ fn spawn_process_inner(
     }
     let pid = sched.next_pid;
     let parent = sched.current_pid();
-    let principal = if let Some(owner) = parent {
+    let principal = if let Some((scope,caps)) = grant {
+        scopes::launch_principal(sched,scope,caps)?
+    } else if let Some(owner) = parent {
         sched.processes.get(owner as usize).and_then(Option::as_ref)
             .filter(|process| process.state == ProcessState::Live)
             .ok_or("principal owner exited")?.principal.ordinary_child()
@@ -366,23 +361,48 @@ fn spawn_process_inner(
             .map_err(|_| "invalid endpoint bindings")?;
         Some(key)
     };
-    // Complete the last fallible process-metadata allocation before moving
-    // grants or committing frames. The scheduler lock stabilizes the parent cwd.
-    let source_cwd = parent.and_then(|owner| sched.processes.get(owner as usize))
+    let tid = sched.reserve_tid()?;
+    let phys_offset = VirtAddr::new(sched.phys_offset);
+    let is_first_process = sched.next_pid == 0;
+    let native = sched.init_pid.is_some();
+    let Scheduler { scopes, processes, ipc, frame_allocator, .. } = sched;
+    let source_cwd = parent.and_then(|owner| processes.get(owner as usize))
         .and_then(Option::as_ref).map(|p| p.files.cwd.as_str()).unwrap_or("/");
+    let base_bytes = 16384u64.checked_add(source_cwd.len() as u64)
+        .and_then(|n|n.checked_add(image.tls().map_or(0,|t|t.bytes.len() as u64)))
+        .ok_or("scope metadata overflow")?;
+    let mut budget = if native {
+        Some(scopes.transaction(principal.scope, rustos_scope_core::Usage {
+            processes:1, threads:1, kernel_bytes:base_bytes, ..rustos_scope_core::Usage::ZERO
+        }).map_err(|_|"scope process budget exhausted")?)
+    } else {None};
     let mut cwd = alloc::string::String::new();
     cwd.try_reserve_exact(source_cwd.len()).map_err(|_| "cwd allocation failed")?;
     cwd.push_str(source_cwd);
+    let tls_image = if let Some(template) = image.tls() {
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(template.bytes.len())
+            .map_err(|_| "TLS prototype allocation failed")?;
+        bytes.extend_from_slice(template.bytes);
+        Some(crate::process::TlsImage {
+            bytes,
+            memory_size: template.memory_size as usize,
+            alignment: template.alignment as usize,
+        })
+    } else {
+        None
+    };
     let kernel_stack = allocate_kernel_stack()?;
-    let tid = sched.reserve_tid()?;
-    let phys_offset = VirtAddr::new(sched.phys_offset);
-    // Read next_pid before the mutable borrow of allocator.
-    let is_first_process = sched.next_pid == 0;
-    let pool = sched
-        .frame_allocator
-        .as_mut()
-        .ok_or("scheduler not initialized")?;
-    let mut transaction = crate::memory::owned::FrameTransaction::new(pool);
+    let maximum = match budget.as_ref() {
+        Some(budget) => usize::try_from(budget.available().map_err(|_|"scope closing")?.pages)
+            .map_err(|_|"scope page budget overflow")?,
+        None => usize::MAX,
+    };
+    let pool = frame_allocator.as_mut().ok_or("scheduler not initialized")?;
+    // Frame rollback runs before budget rollback: this transaction is declared
+    // after the guard, and no live mappings are published by construction.
+    let mut transaction = crate::memory::owned::FrameTransaction::bounded(pool,maximum);
     let allocator = &mut transaction;
 
     // 1. Allocate and set up a new P4 page table.
@@ -519,18 +539,35 @@ fn spawn_process_inner(
         Ok::<_, &'static str>((surface, startup, fs_base))
     })();
     let (surface, startup, fs_base) = map_result?;
+    if let Some(budget) = budget.as_mut() {
+        let bytes=[16384,cwd.capacity() as u64,
+            tls_image.as_ref().map_or(0,|t|t.bytes.capacity() as u64),
+            transaction.metadata_bytes() as u64,
+            (surface.capacity()*core::mem::size_of::<PhysFrame>()) as u64]
+            .into_iter().try_fold(0u64,|sum,n|sum.checked_add(n)).ok_or("scope metadata overflow")?;
+        budget.grow(rustos_scope_core::Usage {pages:transaction.allocated_frames() as u64,
+            kernel_bytes:bytes.checked_sub(base_bytes).ok_or("scope metadata accounting")?,
+            ..rustos_scope_core::Usage::ZERO}).map_err(|_|"scope allocation budget exhausted")?;
+        if grant.is_some() {
+            budget.appoint_leader(rustos_scope_core::ProcessKey{pid:parent.ok_or("scope owner missing")?,generation:1},
+                rustos_scope_core::ProcessKey{pid,generation:1}).map_err(|_|"scope leader commit denied")?;
+        }
+    }
+
 
     // Frame construction and grant publication share this scheduler lock. On a
     // failed revalidation, the frame transaction rolls back and no PCB is visible.
     // After a successful move, all remaining insertions use pre-reserved storage.
     if let Some(owner) = binding_owner {
-        sched.ipc.bindings(owner, rustos_ipc_abi::ProcessKey { pid, generation: 1 }, bindings)
+        ipc.bindings(owner, rustos_ipc_abi::ProcessKey { pid, generation: 1 }, bindings)
             .map_err(|_| "endpoint binding commit failed")?;
     }
     let owned_frames = transaction.commit();
+    let scope_charge = budget.map(rustos_scope_core::Reservation::commit);
     let process = Process {
         pid,
         principal,
+        scope_charge,
         parent,
         adoption_pending: false,
         state: ProcessState::Live,
@@ -778,6 +815,7 @@ fn stop_process_with_cause_locked(s: &mut Scheduler, pid: Pid, code: u64, cause:
     p.files.clear();
     p.exit_code = code;
     p.exit_cause = cause;
+    scopes::death_locked(s,pid);
     stop_threads_locked(s, pid);
     smp::reschedule_all();
     crate::net::cleanup(pid);
@@ -786,6 +824,7 @@ fn stop_process_with_cause_locked(s: &mut Scheduler, pid: Pid, code: u64, cause:
     supervision::adopt_orphans_locked(s);
     events::wake_locked(s);
     wake_waiters_locked(s, pid);
+    scopes::drain_locked(s);
 }
 /// Process exit stops every sibling before allowing shared resource reclamation.
 pub fn exit_current(code: u64) {
@@ -1395,6 +1434,6 @@ pub fn spawn_process_with_bindings(
 ) -> Result<Pid, &'static str> {
     rustos_process_abi::startup_size(argv, envp).map_err(|_| "invalid startup vectors")?;
     x86_64::instructions::interrupts::without_interrupts(|| {
-        spawn_process_inner(binary, readonly_size, argv, envp, bindings)
+        spawn_process_inner(binary, readonly_size, argv, envp, bindings, None)
     })
 }

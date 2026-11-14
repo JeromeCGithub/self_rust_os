@@ -40,18 +40,13 @@ pub fn create_thread(request: abi::Create) -> u64 {
     let Ok(tid) = s.reserve_tid() else {
         return ERROR;
     };
-    let Ok(stack) = allocate_kernel_stack() else {
-        return ERROR;
-    };
     let offset = s.phys_offset;
     let size = (request.stack_size + 4095) & !4095;
     let base = abi::STACK_ARENA + slot as u64 * abi::STACK_STRIDE + 4096;
-    // SAFETY: Root belongs to this process, entry gate excludes other mappers
-    // and copies. Every stack slot has preallocated private P1 tables and an
-    // unmapped guard. No Rust page-table reference survives this function.
-    let table = unsafe { &mut *((offset + root.start_address().as_u64()) as *mut PageTable) };
-    let mut mapper = unsafe { OffsetPageTable::new(table, VirtAddr::new(offset)) };
+    let scope = p.principal.scope;
+    let native = p.scope_charge.is_some();
     let Scheduler {
+        scopes,
         processes,
         frame_allocator,
         ..
@@ -61,8 +56,69 @@ pub fn create_thread(request: abi::Create) -> u64 {
         .expect("TLS owner")
         .tls
         .as_ref();
+    let tls_pages = template.map_or(0, |template| {
+        crate::userspace::tls::region(template, slot + 1).2
+    });
+    let mut budget = if native {
+        match scopes.transaction(
+            scope,
+            rustos_scope_core::Usage {
+                threads: 1,
+                kernel_bytes: 16384
+                    + (tls_pages * core::mem::size_of::<x86_64::structures::paging::PhysFrame>())
+                        as u64,
+                ..rustos_scope_core::Usage::ZERO
+            },
+        ) {
+            Ok(budget) => Some(budget),
+            Err(_) => return ERROR,
+        }
+    } else {
+        None
+    };
+    let maximum = match budget.as_ref() {
+        Some(budget) => match budget
+            .available()
+            .ok()
+            .and_then(|room| usize::try_from(room.pages).ok())
+        {
+            Some(n) => n,
+            None => return ERROR,
+        },
+        None => usize::MAX,
+    };
+    if maximum < (size / 4096) as usize + tls_pages {
+        return ERROR;
+    }
+    let Ok(stack) = allocate_kernel_stack() else {
+        return ERROR;
+    };
+    let mut tls_frames = alloc::vec::Vec::new();
+    if tls_frames.try_reserve_exact(tls_pages).is_err() {
+        return ERROR;
+    }
+    if let Some(budget) = budget.as_mut() {
+        if budget
+            .grow(rustos_scope_core::Usage {
+                kernel_bytes: ((tls_frames.capacity() - tls_pages)
+                    * core::mem::size_of::<x86_64::structures::paging::PhysFrame>())
+                    as u64,
+                ..rustos_scope_core::Usage::ZERO
+            })
+            .is_err()
+        {
+            return ERROR;
+        }
+    }
+    // SAFETY: Root belongs to this process, entry gate excludes other mappers
+    // and copies. Every stack slot has preallocated private P1 tables and an
+    // unmapped guard. No Rust page-table reference survives this function.
+    let table = unsafe { &mut *((offset + root.start_address().as_u64()) as *mut PageTable) };
+    let mut mapper = unsafe { OffsetPageTable::new(table, VirtAddr::new(offset)) };
     let pool = frame_allocator.as_mut().expect("frame pool");
-    let mut transaction = crate::memory::owned::FrameTransaction::new(pool);
+    // Mappings are detached and shot down on failure before this transaction
+    // returns frames; its destructor runs before the resource budget guard.
+    let mut transaction = crate::memory::owned::FrameTransaction::bounded(pool, maximum);
     let mut mapped = 0;
     let mut mapped_tls = 0;
     let mut tls_base = 0;
@@ -109,6 +165,15 @@ pub fn create_thread(request: abi::Create) -> u64 {
             fs_base = pointer;
             tls_base = base;
         }
+        if let Some(budget) = budget.as_mut() {
+            budget
+                .grow(rustos_scope_core::Usage {
+                    pages: transaction.allocated_frames() as u64,
+                    kernel_bytes: transaction.metadata_bytes() as u64,
+                    ..rustos_scope_core::Usage::ZERO
+                })
+                .map_err(|_| ())?;
+        }
         Ok::<(), ()>(())
     })();
     if result.is_err() {
@@ -139,7 +204,16 @@ pub fn create_thread(request: abi::Create) -> u64 {
     }
     drop(mapper);
     let mut frames = transaction.commit();
-    let tls_frames = frames.split_off((size / 4096) as usize);
+    // Parent tables were preallocated by process construction. Only stack/TLS
+    // leaves may be owned here; the TLS ledger was fallibly allocated above.
+    assert_eq!(
+        frames.len(),
+        (size / 4096) as usize + tls_pages,
+        "preallocated thread parents"
+    );
+    tls_frames.extend_from_slice(&frames[(size / 4096) as usize..]);
+    frames.truncate((size / 4096) as usize);
+    let scope_charge = budget.map(rustos_scope_core::Reservation::commit);
     smp::shootdown();
     let mask = if request.affinity == 0 {
         (1u64 << smp::online_count()) - 1
@@ -162,6 +236,7 @@ pub fn create_thread(request: abi::Create) -> u64 {
         frames,
         tls_base,
         tls_frames,
+        scope_charge,
     });
     s.processes[pid as usize]
         .as_mut()

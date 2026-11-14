@@ -20,8 +20,10 @@
 //! Closure is durable until explicitly acknowledged. Child scope records are
 //! acknowledged before their parent becomes closed. A dead manager's outstanding
 //! scope controls pass to init. These events never consume process completion.
-//! This crate is not a userspace ABI and is not yet wired into native allocation
-//! paths; host tests alone do not prove kernel containment.
+//! This crate is not a userspace ABI. The native scheduler adapter currently
+//! accounts process/thread reservations, private frames and selected persistent
+//! allocations; filesystem, IPC, socket and audio accounting remain separate
+//! work. Host tests alone do not prove kernel containment.
 #![no_std]
 pub use rustos_process_abi::supervision::ProcessKey;
 /// Fixed scope table, including the reserved system root.
@@ -527,6 +529,9 @@ impl Registry {
         self.pump();
         Ok(())
     }
+    /// Trusted kernel reaper lookup for a process's kernel-owned scope identity.
+    /// This is not an authorization API or a userspace PID selector.
+    pub fn controller(&self, scope:u64)->Option<ProcessKey> {self.view(scope).ok().map(|node|node.owner)}
     /// Kernel-side victim selection; not an authorization or process lookup API.
     pub fn is_closing(&self, scope: u64) -> bool {
         self.view(scope).is_ok_and(|node| node.state != State::Open)

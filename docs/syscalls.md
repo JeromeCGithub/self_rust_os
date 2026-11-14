@@ -669,9 +669,11 @@ there is no foreign-process selector or identity-setting operation. The SDK
 Kernel boot selects native-init identity. Ordinary spawn preserves user/session/
 scope and drops the Init flag, protected-system-write and scope-factory bits;
 threads share process metadata. The existing restricted-worker allowlist remains
-stricter and denies this newly added syscall. All source records currently describe
-system contexts; user/session factories, scoped resources and alias-safe filesystem
-grants remain incomplete in M5. These bytes describe metadata and never confer
+stricter and denies this newly added syscall. Normal boot still launches system
+contexts. Kernel-only scoped constructors can now attach other identities and
+account private pages/threads, but no Ring 3 session/scope factory is exposed yet;
+filesystem/IPC/socket/audio accounting and per-session filesystem grants remain
+incomplete in M5. These bytes describe metadata and never confer
 authority. See [M5 progress](initator-m5-progress.md).
 
 `userlib::principal::attenuate()` performs one-way process-wide reduction to a
@@ -692,8 +694,8 @@ owned IPC operations, child control, private waits, descriptor/socket/audio clos
 and progress retain their existing validation without requiring factory rights.
 System action 128 still reaches its independent init gate and returns typed Denied
 for ordinary callers. Unknown syscall numbers fail closed. Display operations keep
-their current legacy ownership gates pending M6; `SCOPE_CREATE` remains reserved
-for upcoming scope enforcement. The trusted legacy desktop retains its inherited
+their current legacy ownership gates pending M6. `SCOPE_CREATE` gates the current
+kernel-only factory adapters; its Ring 3 grant interface remains pending. The trusted legacy desktop retains its inherited
 mechanism rights and its earlier ownership exceptions.
 
 Native mutation of `/BIN`, `/ETC` and `/kernel.elf` requires `SYSTEM_WRITE` in
