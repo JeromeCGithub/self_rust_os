@@ -10,6 +10,17 @@ primitives; later phases integrate kernel scope enforcement, grants and Nest,
 then complete isolation, resource accounting and milestone-wide validation.
 Phase 1 is a foundation, not an untrusted multi-user security boundary.
 
+Phase 2 adds host-tested scope bookkeeping and rollback transactions plus a
+bounded frame-allocation transaction. These are kernel prerequisites only: this
+phase does not wire scopes into native process admission or expose a scope ABI.
+The scope-core host suite and the bounded-frame QEMU unit cases pass. A native
+Initator image with the phase-2 kernel also passed two-service supervision at
+1, 8 and 32 configured CPUs. Thread, IPC, userspace and process-supervision
+kernel integration suites passed. The native image reused phase-1 userspace,
+which is unchanged in this phase, with a freshly built phase-2 kernel.
+The eight-CPU legacy desktop QEMU regression also passed; its [capture](screenshots/initator-m5-phase2-desktop.png)
+shows the tested compatibility boot. No manual host GUI check was performed.
+
 **M5 is incomplete.** The first addition is a host-tested principal description and
 attenuation policy in [process-abi](../crates/process-abi/src/principal.rs). The
 kernel now attaches native principals, enforces mechanism capability domains and
@@ -197,6 +208,104 @@ passes, preserving its explicit legacy exception. Generic desktop screenshots
 from this exact build are retained under the M5 evidence directory. Per-session
 read/write roots, object delegation, disk quotas and scope quiescence are still
 missing. No untrusted user session is launched by this increment.
+
+## Scope ledger (host-tested, not yet native enforcement)
+
+[scope-core](../crates/scope-core/src/lib.rs) follows the existing IPC-core split:
+an allocation-free `no_std` object registry shared with host tests, with all
+kernel context, locking, syscall usercopy and actual destruction left to adapters.
+It is not linked into the kernel yet and exposes no syscall. Its 64 fixed records
+include system root 1, session roots and service leaves. Fresh nonwrapping IDs
+never alias a released slot. Four slots and a configurable vector of resource
+reserves remain available to system recovery. The system root cannot be closed.
+
+Only the kernel-selected init key creates sessions. User 0 and reserved identities
+are refused for session creation; same-user sessions still get distinct IDs.
+A once-appointed leader can create service scopes under its own session, but
+cannot close the session grant owned by init, create arbitrary recursive scopes,
+or become the factory for a second independent session. Native construction must
+bind the actual newly created process and check capabilities; no caller-provided
+key or decoded principal may substitute for kernel context.
+
+Linear opaque charges account processes, threads, private physical pages, selected
+kernel heap bytes, descriptors, IPC handles, sockets and audio streams. Every delta
+checks all components and ancestors before any change. Failure/overflow preserves
+all counts. Closing prevents new reservations/growth. Release is permitted during
+closure and must occur only after real resource release, including frame/TLB,
+thread-stack and filesystem-call quiescence. The ledger does not perform those
+operations or assert that the currently unwired counters already contain them.
+
+Leader exit closes its scope and descendants; dead controller ownership passes
+to init. Scope closure waits for all charges and child records. Notifications are
+peeked durably, then acknowledged explicitly, without consuming a process status.
+Children are acknowledged before the parent becomes closed. The native adapter
+must expose readiness for these events, kill closing members, and keep service
+stop/restart jobs pending until scope cleanup is acknowledged.
+
+`scopes-host-red.log` records seven missing-feature failures. The first seven
+scenarios then passed. `scopes-factory-red.log` caught duplicate session factory
+appointment; after rejecting duplicate leader keys, `scopes-factory-green.log`
+passes 11 runtime tests and two compile-fail tests for opaque/non-cloneable charges.
+Coverage includes ancestor pressure, all eight resource bounds/overflow, atomic
+rollback, init recovery reserves, cross-session denial, pending cleanup owner death,
+leader exit, stale identities, 128 create/close/ack cycles, sequence exhaustion,
+bootstrap failure and durable child-before-parent closure.
+
+The bare-metal target also compiles this crate (`scopes-native-check.log`); that
+is compilation evidence only. No new native scope or user-session acceptance
+criterion is claimed until the kernel/resource/syscall adapters are implemented
+and tested in QEMU. Previously recorded native principal/file checks remain
+separate from these host model results.
+
+## Reservation guards and frame-budget prerequisite
+
+The scope model now reports per-resource remaining allocator room across all
+ancestors, including the system recovery reserve. `scopes-room-red.log` first
+failed on the missing room calculation; its green suite covers parent pressure,
+recovery consumption and closed/stale scopes. A later mixed-resource regression
+(`scopes-mixed-pressure-red.log`) caught thread recovery pressure incorrectly
+blocking page-only allocation. The fix checks only resource components that grow,
+while preserving all overflow, ancestor and atomicity checks. The final
+`scopes-mixed-pressure-green.log` passes 16 runtime cases and both compile-fail
+checks.
+
+[Reservation/growth guards](../crates/scope-core/src/transaction.rs) hold an
+exclusive registry borrow across fallible construction. Dropping a new reservation
+returns its counts and restores an unpublished leader binding; committing transfers
+the unique charge to its resource owner. Growth rollback releases only its new
+delta, preserving the owner's earlier charge. The native adapter must destroy
+actual allocations before dropping these guards. `scopes-transaction-red.log`
+first failed all three transaction cases; green output includes 128 repeated
+publication failures, leader-binding failures, quota failures, growth rollback,
+and successful charge/appointment retention. Native-target compilation passes,
+which is not a native runtime containment result.
+
+[Frame transactions](../src/memory/owned.rs) now accept an explicit maximum frame
+count. Every allocation through the transaction counts, including page-table
+parents. Ceiling zero rejects before pool/ledger allocation; partial failure drops
+all owned frames; commit preserves ownership for later teardown. The existing
+constructor keeps its previous unlimited behavior. The QEMU kernel red test
+(`frame-ceiling-red.log`) reproduced allocation past a two-frame ceiling. The green
+suite passes 95 kernel unit cases, including zero/exact/over-pool ceilings, repeated
+rollback, commit/recycle ownership and the default constructor.
+
+The frame increment's four kernel integration executables (`threads`,
+`native_supervision`, `process_supervision`, `display_mapping`) pass. Fresh native
+images pass exhaustion, 64-cycle process lifecycle, 64-cycle IPC lifecycle and
+two-service supervision on each of 1/8/32 CPUs (12 cases). A fresh default-profile
+eight-CPU desktop passes. Default/GRUB builds, native GRUB release and kernel test
+compilation pass. Transcripts and screenshots are retained in
+`target/initator-m5-evidence/frame-ceiling-*`.
+
+**Integration is still pending:** the new registry is not linked into the kernel,
+and existing spawn/heap/thread paths still use the default frame transaction.
+These results establish bookkeeping and bounded-allocation prerequisites, not
+already enforced native scope budgets. Next wire the scheduler's registry and
+resource ownership through constructor rollback, heap growth, thread creation and
+post-quiescence reclamation; then add the native scope ABI/events and other resource
+charges. Do not expose untrusted sessions before those paths and filesystem/IPC
+scope boundaries are tested. Service stop/restart jobs must wait for the durable
+scope cleanup acknowledgement, rather than treating foreground exit as full cleanup.
 
 ## Scope integration invariants for the next implementation
 

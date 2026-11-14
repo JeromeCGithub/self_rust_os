@@ -1,0 +1,9 @@
+[package]
+name = "rustos-scope-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Bounded native scope ownership, resource charges and cleanup acknowledgements"
+
+[dependencies]
+rustos-process-abi = { path = "../process-abi" }
