@@ -10,6 +10,14 @@ primitives; later phases integrate kernel scope enforcement, grants and Nest,
 then complete isolation, resource accounting and milestone-wide validation.
 Phase 1 is a foundation, not an untrusted multi-user security boundary.
 
+Phase 10 keeps service transactions and retries pending until their exact scope
+drains, including scopes observed before process publication. The service-core
+and real host-backend suites pass, as do kernel unit, native-supervision and scope tests. Native
+restart, cooperative-stop and closed-stop probes pass at 1, 8 and 32 configured
+CPUs with rebuilt Initator and probe binaries. Native service scope creation is
+not yet connected in this phase. A screenshot cannot show these headless lifecycle
+transitions; the host assertions and QEMU serial records are the evidence.
+
 Phase 9 pins in-flight filesystem operations through owner stop and makes FAT
 search, I/O and staged namespace work observe cancellation at bounded points.
 Once deletion crosses its commit point it completes instead of abandoning a
@@ -1312,6 +1320,49 @@ manager progress; they do not kill a process inside a filesystem operation.
 Desktop evidence is under `target/initator-m5-evidence/scans-chain-screenshots/`.
 Host GUI and physical hardware were not checked. The public Ring 3 scope factory
 remains closed until its prerequisites are satisfied.
+
+## Host transaction scope cleanup barrier
+
+The host-testable transaction engine can now associate a service resource with a
+specific native scope ID. Once its foreground process exits, stop, failure and
+retry retain that resource until the matching scope-drained notification arrives.
+A scope-close notification may arrive before or after process completion; both
+are required. Duplicate, mismatched, unowned and invalid scope identifiers are
+rejected, and a replacement cannot start or be restored while cleanup is pending.
+The scope registry issues nonrepeating IDs. Unscoped services retain their existing
+behavior.
+
+Host regressions first demonstrated restart after foreground exit, early stop
+completion after unexpected exit, automatic retry before cleanup, an unaccepted
+early scope event, and a restore bypass. The service-core and real host-backend
+suites now pass. Both kernel boot builds and native unscoped two-service and stop
+protocol QEMU cases passed at 1, 8 and 32 CPUs after rebuilding userspace.
+
+The host manager now binds a scope only to the exact live process/run and accepts
+matching scope-drained events. It suppresses automatic retry admission and retry
+deadlines while a scope drains, so an expired backoff cannot cause an event-loop
+spin; unrelated services can still start. Host tests cover both completion/event
+orders, stop jobs, retries, stale identities and independent services. The retry
+test first failed on the expired deadline, before filtering was added. Existing
+unscoped host and native supervision tests continue to pass.
+
+This is **not yet wired into the native runtime**. The kernel must expose
+authenticated scope creation and durable closure events, and the adapter must
+handle creation/publication failures and early events, before Initator can bind or
+acknowledge real scopes. These host interfaces do not establish scope-aware
+supervision in the OS.
+
+The host manager can now bind a nonrepeating scope ID to the exact unpublished
+launch token, before a process identity exists. Failed launches, scope closure
+before publication, cancellation during shutdown, and late successful process
+publication retain that scope through the cleanup barrier. The scope may be bound
+even after cancellation has been requested, because an already-created scope must
+still be accounted for. Stale tokens and duplicate bindings are rejected. Host
+regressions showed both a stale token being accepted and shutdown becoming ready
+before the scope drained when binding was omitted. The full service-core and host
+backend suites pass; rebuilt userspace, both kernel builds, and existing native
+unscoped boot/stop tests pass at 1/8/32 CPUs. No new native scope ABI or native
+scope publication has been implemented by this checkpoint.
 
 ## Scope integration invariants for the next implementation
 

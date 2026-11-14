@@ -48,6 +48,9 @@ pub struct Engine {
     owners: [u64; 64],
     active: u64,
     resources: u64,
+    scopes: [Option<u64>; 64],
+    draining: u64,
+    closed_scopes: u64,
     sequence: u64,
     order: [usize; 64],
     order_len: usize,
@@ -60,11 +63,17 @@ impl Engine {
             owners: [0; 64],
             active: 0,
             resources: 0,
+            scopes: [None; 64],
+            draining: 0,
+            closed_scopes: 0,
             sequence: 0,
             order: [0; 64],
             order_len: 0,
             transaction: None,
         }
+    }
+    pub(crate) fn draining_scopes(&self) -> u64 {
+        self.draining
     }
     /// Bind runtime callbacks to the currently admitted transaction.
     pub fn job_id(&self) -> Option<u64> {
@@ -212,6 +221,10 @@ impl Engine {
                     return None;
                 }
                 let stopping = self.resources & !(desired | retain);
+                if stopping & self.draining != 0 {
+                    self.transaction = Some(tx);
+                    return None;
+                }
                 let groups = (0..self.catalog.len())
                     .filter(|&unit| {
                         self.catalog
@@ -303,6 +316,9 @@ impl Engine {
                     self.active |= 1u64 << id;
                     progress = true;
                 } else {
+                    if self.draining & (1u64 << id) != 0 {
+                        continue;
+                    }
                     tx.phases[id] = Phase::Starting;
                     self.transaction = Some(tx);
                     return Some(Command::Start(id));
@@ -375,15 +391,68 @@ impl Engine {
         }
         Ok(())
     }
+    /// Associate an admitted service with its kernel-owned cleanup scope.
+    pub fn bind_scope(&mut self, unit: usize, scope: u64) -> Result<(), Error> {
+        let bit = 1u64
+            .checked_shl(u32::try_from(unit).map_err(|_| Error::InvalidResult)?)
+            .ok_or(Error::InvalidResult)?;
+        if scope == 0
+            || self.resources & bit == 0
+            || self.scopes[unit].is_some()
+            || self.scopes.contains(&Some(scope))
+        {
+            return Err(Error::InvalidResult);
+        }
+        self.scopes[unit] = Some(scope);
+        Ok(())
+    }
+    /// Acknowledge physical destruction of an exact service scope.
+    pub fn scope_drained(&mut self, unit: usize, scope: u64) -> Result<(), Error> {
+        let bit = 1u64
+            .checked_shl(u32::try_from(unit).map_err(|_| Error::InvalidResult)?)
+            .ok_or(Error::InvalidResult)?;
+        if self.scopes[unit] != Some(scope) || self.closed_scopes & bit != 0 {
+            return Err(Error::InvalidResult);
+        }
+        self.closed_scopes |= bit;
+        if self.draining & bit != 0 {
+            self.release_scoped_resource(unit);
+        }
+        Ok(())
+    }
+    fn release_scoped_resource(&mut self, unit: usize) {
+        let bit = 1u64 << unit;
+        self.scopes[unit] = None;
+        self.draining &= !bit;
+        self.closed_scopes &= !bit;
+        self.resources &= !bit;
+        if let Some(tx) = self.transaction.as_mut() {
+            if tx.pending_stop == Some(unit) {
+                tx.pending_stop = None;
+            }
+        }
+        self.remove_order(unit);
+    }
     pub fn stopped(&mut self, job: u64, unit: usize) -> Result<(), Error> {
         let tx = self.transaction.as_mut().ok_or(Error::InvalidResult)?;
         if tx.id != job || tx.pending_stop != Some(unit) {
             return Err(Error::InvalidResult);
         }
-        tx.pending_stop = None;
-        self.active &= !(1u64 << unit);
-        self.resources &= !(1u64 << unit);
-        self.remove_order(unit);
+        let bit = 1u64 << unit;
+        if self.draining & bit != 0 {
+            return Err(Error::InvalidResult);
+        }
+        self.active &= !bit;
+        if self.scopes[unit].is_some() {
+            self.draining |= bit;
+            if self.closed_scopes & bit != 0 {
+                self.release_scoped_resource(unit);
+            }
+        } else {
+            tx.pending_stop = None;
+            self.resources &= !bit;
+            self.remove_order(unit);
+        }
         Ok(())
     }
     fn remove_order(&mut self, unit: usize) {
@@ -404,18 +473,30 @@ impl Engine {
         {
             return Err(Error::InvalidResult);
         }
-        self.active &= !(1u64 << unit);
-        self.resources &= !(1u64 << unit);
-        self.remove_order(unit);
+        let bit = 1u64 << unit;
+        if self.draining & bit != 0 {
+            return Err(Error::InvalidResult);
+        }
+        self.active &= !bit;
+        let scoped = self.scopes[unit].is_some();
+        if scoped {
+            self.draining |= bit;
+        } else {
+            self.resources &= !bit;
+            self.remove_order(unit);
+        }
         if let Some(tx) = self.transaction.as_mut() {
             if tx.outcome == Outcome::Running {
-                if tx.pending_stop == Some(unit) {
+                if tx.pending_stop == Some(unit) && !scoped {
                     tx.pending_stop = None;
                 }
                 if tx.cleanup.is_none() && tx.phases[unit] == Phase::Done {
                     tx.phases[unit] = Phase::Failed;
                 }
             }
+        }
+        if scoped && self.closed_scopes & bit != 0 {
+            self.release_scoped_resource(unit);
         }
         Ok(())
     }
@@ -482,13 +563,27 @@ impl Engine {
     }
     /// Actual retryable completion releases resources but keeps activation pending.
     pub fn retrying(&mut self, unit: usize) -> Result<Option<u64>, Error> {
+        let bit = 1u64
+            .checked_shl(u32::try_from(unit).map_err(|_| Error::InvalidResult)?)
+            .ok_or(Error::InvalidResult)?;
+        if self.draining & bit != 0 {
+            return Err(Error::InvalidResult);
+        }
         let pending = self.hold_for_restart(unit)?;
-        self.resources &= !(1u64 << unit);
-        self.remove_order(unit);
+        let scoped = self.scopes[unit].is_some();
+        if scoped {
+            self.draining |= bit;
+        } else {
+            self.resources &= !bit;
+            self.remove_order(unit);
+        }
         if let Some(tx) = self.transaction.as_mut() {
-            if tx.pending_stop == Some(unit) {
+            if tx.pending_stop == Some(unit) && !scoped {
                 tx.pending_stop = None;
             }
+        }
+        if scoped && self.closed_scopes & bit != 0 {
+            self.release_scoped_resource(unit);
         }
         Ok(pending)
     }
@@ -496,6 +591,8 @@ impl Engine {
     /// validates its launch token and process identity before calling this.
     pub fn restored(&mut self, unit: usize) -> Result<(), Error> {
         if !self.wanted(unit)
+            || unit >= 64
+            || self.draining & (1u64 << unit) != 0
             || self.active(unit)
             || !self
                 .catalog
